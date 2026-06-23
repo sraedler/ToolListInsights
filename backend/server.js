@@ -231,6 +231,8 @@ async function cacheSetupData() {
       p.ID as StepId,
       p.PSP_BEZEICHNUNG as StepDesc,
       p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
+      p.PSP_IDMS as MachineId,
+      p.PSP_IDMP as MachinePoolId,
       CASE
         WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
         ELSE au.BK_BKBE_AU_LI_DATUM
@@ -283,6 +285,7 @@ async function cacheSetupData() {
     const progs = extractNCPrograms(step.StepDesc);
     if (progs.length > 0) {
       const prog = progs[0];
+      step.NCProgram = prog;
       if (matchCache[prog] === undefined) {
         const matches = findMatches(prog, cachedToolLists, 0.6);
         if (matches.length > 0) {
@@ -325,14 +328,57 @@ async function cacheSetupData() {
   console.log('Setup reduction base data cached.');
 }
 
+function getMagazineSize(number, name) {
+  const code = ((number || '') + ' ' + (name || '')).toUpperCase();
+  if (code.includes('C400')) return 37;
+  if (code.includes('C42')) return 258;
+  if (code.includes('C40')) return 121;
+  if (code.includes('RS1')) return 121;
+  if (code.includes('RS2')) return 121;
+  if (code.includes('CHIRON')) return 48;
+  return null;
+}
+
 async function cacheMachines() {
-  const poolWT = await getPoolWT();
-  console.log('Loading Machines from WinTool database into cache...');
-  const result = await poolWT.request().query(
-    'SELECT Nr, Name, Rem FROM [WTDATA].[dbo].[Machines] ORDER BY Name'
+  const poolD4 = await getPoolD4();
+  console.log('Loading Machine Pools from D4 database into cache...');
+  const poolResult = await poolD4.request().query(
+    'SELECT ID, MP_NUMMER, MP_BEZEICHNUNG FROM [D4].[dbo].[tPPS_MASCHPOOL] ORDER BY MP_BEZEICHNUNG'
   );
-  cachedMachines = result.recordset;
-  console.log(`Successfully cached ${cachedMachines.length} Machines.`);
+  console.log('Loading Machines from D4 database into cache...');
+  const mastaResult = await poolD4.request().query(
+    'SELECT ID, MS_NUMMER, MS_BEZEICHNUNG FROM [D4].[dbo].[tPPS_MASTA] ORDER BY MS_BEZEICHNUNG'
+  );
+
+  const combined = [];
+  poolResult.recordset.forEach(p => {
+    const num = p.MP_NUMMER ? p.MP_NUMMER.trim() : `Pool #${p.ID}`;
+    const name = p.MP_BEZEICHNUNG ? p.MP_BEZEICHNUNG.trim() : '';
+    combined.push({
+      id: `pool_${p.ID}`,
+      type: 'pool',
+      dbId: parseInt(p.ID),
+      number: num,
+      name: name,
+      magazineSize: getMagazineSize(num, name)
+    });
+  });
+
+  mastaResult.recordset.forEach(m => {
+    const num = m.MS_NUMMER ? m.MS_NUMMER.trim() : `Machine #${m.ID}`;
+    const name = m.MS_BEZEICHNUNG ? m.MS_BEZEICHNUNG.trim() : '';
+    combined.push({
+      id: `machine_${m.ID}`,
+      type: 'machine',
+      dbId: parseInt(m.ID),
+      number: num,
+      name: name,
+      magazineSize: getMagazineSize(num, name)
+    });
+  });
+
+  cachedMachines = combined;
+  console.log(`Successfully cached ${cachedMachines.length} D4 machines & pools.`);
 }
 
 // Background startup cache warm-up worker
@@ -675,42 +721,62 @@ app.get('/api/demand', (req, res) => {
 });
 
 // 8. Setup Time Optimization Simulation (Runs instantly in memory from cached base data)
-app.get('/api/setup-reduction', (req, res) => {
+app.get('/api/setup-reduction', async (req, res) => {
   try {
     if (!cachedSetupData) {
       return res.status(503).json({ error: 'Rüstdaten werden noch geladen' });
     }
     const baseSetSize = parseInt(req.query.baseSetSize) || 20;
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, machineId } = req.query;
     
-    let { steps, listToToolsMap, toolUsageCounts, toolsDetails } = cachedSetupData;
+    let { steps, listToToolsMap, toolsDetails } = cachedSetupData;
     let filteredSteps = steps;
 
+    // Resolve selected machine and its magazineSize
+    const machine = cachedMachines.find(m => m.id === machineId);
+    const magazineSize = machine ? machine.magazineSize : null;
+
+    // Filter by machine/pool if provided
+    if (machineId) {
+      const parts = machineId.split('_');
+      const type = parts[0]; // 'pool' or 'machine'
+      const dbId = parseInt(parts[1]); // ID as integer
+      if (!isNaN(dbId)) {
+        filteredSteps = filteredSteps.filter(step => {
+          if (type === 'pool') {
+            return step.MachinePoolId === dbId;
+          } else {
+            return step.MachineId === dbId;
+          }
+        });
+      }
+    }
+
     if (startDate || endDate) {
-      filteredSteps = steps.filter(step => {
+      filteredSteps = filteredSteps.filter(step => {
         if (!step.DeliveryDate) return false;
         const dStr = new Date(step.DeliveryDate).toISOString().substring(0, 10);
         if (startDate && dStr < startDate) return false;
         if (endDate && dStr > endDate) return false;
         return true;
       });
-
-      // Recalculate tool frequencies based on unique lists matching the timeframe
-      const timeUsageCounts = {};
-      const uniqueMatchedLists = new Set();
-      filteredSteps.forEach(step => {
-        if (step.MatchedListNr) {
-          uniqueMatchedLists.add(step.MatchedListNr);
-        }
-      });
-      uniqueMatchedLists.forEach(listNr => {
-        const tools = listToToolsMap[listNr] || [];
-        tools.forEach(tNr => {
-          timeUsageCounts[tNr] = (timeUsageCounts[tNr] || 0) + 1;
-        });
-      });
-      toolUsageCounts = timeUsageCounts;
     }
+
+    // Always recalculate tool frequencies based on unique lists matching the timeframe and machine/pool
+    const activeUsageCounts = {};
+    const uniqueMatchedLists = new Set();
+    filteredSteps.forEach(step => {
+      if (step.MatchedListNr) {
+        uniqueMatchedLists.add(step.MatchedListNr);
+      }
+    });
+    uniqueMatchedLists.forEach(listNr => {
+      const tools = listToToolsMap[listNr] || [];
+      tools.forEach(tNr => {
+        activeUsageCounts[tNr] = (activeUsageCounts[tNr] || 0) + 1;
+      });
+    });
+    const toolUsageCounts = activeUsageCounts;
 
     const sortedTools = Object.keys(toolUsageCounts)
       .map(nr => ({ nr: parseInt(nr), count: toolUsageCounts[nr] }))
@@ -720,12 +786,46 @@ app.get('/api/setup-reduction', (req, res) => {
 
     const baseToolsDetails = [];
     const baseToolIds = sortedTools.slice(0, baseSetSize).map(t => t.nr);
+
+    // Fetch parts for base tools dynamically
+    let baseToolsPartsMap = {};
+    if (baseToolIds.length > 0) {
+      try {
+        const poolWT = await getPoolWT();
+        const partsResult = await poolWT.request().query(`
+          SELECT
+            tp.ToolNr, tp.Pos as PartPos, tp.Nbr as PartQty,
+            p.Nr as PartNr, p.Descript as PartDesc, p.KeyWord as PartKeyWord
+          FROM [WTDATA].[dbo].[ToolParts] tp
+          INNER JOIN [WTDATA].[dbo].[Parts] p ON p.ID = tp.PartID
+          WHERE tp.ToolNr IN (${baseToolIds.join(',')})
+          ORDER BY tp.ToolNr, tp.Pos
+        `);
+        partsResult.recordset.forEach(row => {
+          const tNr = row.ToolNr;
+          if (!baseToolsPartsMap[tNr]) {
+            baseToolsPartsMap[tNr] = [];
+          }
+          baseToolsPartsMap[tNr].push({
+            partPos: row.PartPos,
+            partQty: row.PartQty,
+            partNr: row.PartNr ? row.PartNr.toString().trim() : '',
+            partDesc: row.PartDesc ? row.PartDesc.toString().trim() : '',
+            partKeyWord: row.PartKeyWord ? row.PartKeyWord.toString().trim() : ''
+          });
+        });
+      } catch (err) {
+        console.error('Error fetching base tools parts:', err);
+      }
+    }
+
     baseToolIds.forEach(nr => {
       const details = toolsDetails[nr];
       if (details) {
         baseToolsDetails.push({
           ...details,
-          usesCount: toolUsageCounts[nr]
+          usesCount: toolUsageCounts[nr],
+          parts: baseToolsPartsMap[nr] || []
         });
       }
     });
@@ -734,6 +834,7 @@ app.get('/api/setup-reduction', (req, res) => {
     let totalSimulatedSetup = 0;
     let analyzedStepsCount = 0;
     let matchedStepsCount = 0;
+    let feasibleStepsCount = 0;
 
     const simulatedSteps = filteredSteps.map(step => {
       totalOriginalSetup += step.SetupTime;
@@ -767,6 +868,19 @@ app.get('/api/setup-reduction', (req, res) => {
 
       totalSimulatedSetup += simulatedTime;
 
+      // Magazine slot utilization calculation
+      let isFeasible = true;
+      let occupiedSlots = 0;
+      if (magazineSize) {
+        occupiedSlots = baseSetSize + missingToolsCount;
+        isFeasible = occupiedSlots <= magazineSize;
+        if (isFeasible) {
+          feasibleStepsCount++;
+        }
+      } else {
+        feasibleStepsCount++; // always feasible if no magazine constraint
+      }
+
       return {
         stepId: step.StepId,
         desc: step.StepDesc.trim().replace(/\s+/g, ' '),
@@ -776,17 +890,92 @@ app.get('/api/setup-reduction', (req, res) => {
         toolsCount: tools.length,
         baseToolsCount: baseToolsInJobCount,
         missingToolsCount,
-        matchedListName: step.MatchedListIdent || null
+        matchedListName: step.MatchedListIdent || null,
+        occupiedSlots: magazineSize ? occupiedSlots : null,
+        isFeasible: magazineSize ? isFeasible : true,
+        programName: step.NCProgram || null
       };
     });
 
     const totalSavings = totalOriginalSetup - totalSimulatedSetup;
     const savingsPercent = totalOriginalSetup > 0 ? (totalSavings / totalOriginalSetup) * 100 : 0;
 
+    // Calculate recommended optimal base set size if magazineSize is known
+    let recommendedBaseSetSize = null;
+    let recommendationText = '';
+
+    if (magazineSize && sortedTools.length > 0) {
+      let bestB = null;
+      let maxSavings = -1;
+      let bestFeasibility = -1;
+
+      // Sweep from 5 to magazineSize in steps of 5
+      for (let b = 5; b <= magazineSize; b += 5) {
+        const bTools = new Set(sortedTools.slice(0, b).map(t => t.nr));
+        
+        let originalSetup = 0;
+        let simulatedSetup = 0;
+        let feasibleCount = 0;
+
+        filteredSteps.forEach(step => {
+          originalSetup += step.SetupTime;
+          
+          let tools = [];
+          if (step.MatchedListNr) {
+            tools = listToToolsMap[step.MatchedListNr] || [];
+          }
+
+          let baseToolsInJob = 0;
+          if (tools.length > 0) {
+            tools.forEach(tNr => {
+              if (bTools.has(tNr)) {
+                baseToolsInJob++;
+              }
+            });
+            const missing = tools.length - baseToolsInJob;
+            const ratio = missing / tools.length;
+            const minFactor = 0.3;
+            const reductionFactor = minFactor + (1.0 - minFactor) * ratio;
+            const simulatedTime = Math.round(step.SetupTime * reductionFactor);
+            simulatedSetup += simulatedTime;
+
+            const occupied = b + missing;
+            if (occupied <= magazineSize) {
+              feasibleCount++;
+            }
+          } else {
+            simulatedSetup += step.SetupTime;
+            if (b <= magazineSize) {
+              feasibleCount++;
+            }
+          }
+        });
+
+        const rate = filteredSteps.length > 0 ? (feasibleCount / filteredSteps.length) * 100 : 100;
+        const savings = originalSetup - simulatedSetup;
+
+        // Prioritize highest feasibility rate first, then maximum savings
+        if (rate > bestFeasibility) {
+          bestFeasibility = rate;
+          maxSavings = savings;
+          bestB = b;
+        } else if (rate === bestFeasibility && savings > maxSavings) {
+          maxSavings = savings;
+          bestB = b;
+        }
+      }
+
+      if (bestB !== null) {
+        recommendedBaseSetSize = bestB;
+        recommendationText = `Ein Stamm von ${bestB} Werkzeugen spart ca. ${Math.round(maxSavings / 60)} Std. und sichert ${bestFeasibility.toFixed(1)}% Machbarkeit.`;
+      }
+    }
+
     res.json({
       config: {
         baseSetSize,
-        baseSetTools: Array.from(baseSetTools)
+        baseSetTools: Array.from(baseSetTools),
+        magazineSize
       },
       baseTools: baseToolsDetails,
       summary: {
@@ -795,7 +984,11 @@ app.get('/api/setup-reduction', (req, res) => {
         originalSetupHours: Math.round(totalOriginalSetup / 60),
         simulatedSetupHours: Math.round(totalSimulatedSetup / 60),
         savingsHours: Math.round(totalSavings / 60),
-        savingsPercent: parseFloat(savingsPercent.toFixed(1))
+        savingsPercent: parseFloat(savingsPercent.toFixed(1)),
+        feasibleStepsCount,
+        feasibilityRate: analyzedStepsCount > 0 ? parseFloat(((feasibleStepsCount / analyzedStepsCount) * 100).toFixed(1)) : 100,
+        optimalBaseSetSize: recommendedBaseSetSize,
+        recommendation: recommendationText
       },
       sampleSteps: simulatedSteps.filter(s => s.savings > 0).slice(0, 50)
     });
@@ -805,24 +998,59 @@ app.get('/api/setup-reduction', (req, res) => {
   }
 });
 
-// 9. Tools for a specific machine in a period (accumulated by tool list)
-app.get('/api/machines/:nr/tools', (req, res) => {
+// 9. Tools for a specific machine or pool in a period (accumulated by tool list)
+app.get('/api/machines/:id/tools', async (req, res) => {
   try {
     if (!cachedSetupData) {
       return res.status(503).json({ error: 'Systemdaten werden noch geladen' });
     }
-    const machineNr = parseInt(req.params.nr);
+    const paramId = req.params.id;
+    const parts = paramId.split('_');
+    const type = parts[0]; // 'pool' or 'machine'
+    const dbId = parseInt(parts[1]); // e.g. 9 or 21
+
+    if (isNaN(dbId)) {
+      return res.status(400).json({ error: 'Ungültige Maschinen- oder Pool-ID' });
+    }
+
     const { startDate, endDate } = req.query;
+    const { listToToolsMap, toolsDetails } = cachedSetupData;
 
-    const { steps, listToToolsMap, toolsDetails, listToMachineMap } = cachedSetupData;
+    // Fetch steps dynamically for this machine/pool from the D4 database
+    const poolD4 = await getPoolD4();
+    const request = poolD4.request();
+    request.input('dbId', sql.Int, dbId);
 
-    // Filter steps by date range and verify they have a matched tool list and are assigned to the selected machine
-    const filteredSteps = steps.filter(step => {
-      if (!step.MatchedListNr) return false;
-      
-      const machNr = listToMachineMap[step.MatchedListNr];
-      if (machNr !== machineNr) return false;
+    let whereClause = `p.PSP_TYP_POSITION = 0`;
+    if (type === 'pool') {
+      whereClause += ` AND p.PSP_IDMP = @dbId`;
+    } else {
+      whereClause += ` AND p.PSP_IDMS = @dbId`;
+    }
 
+    const query = `
+      SELECT
+        b.ID as OrderId,
+        p.ID as StepId,
+        p.PSP_BEZEICHNUNG as StepDesc,
+        p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
+        bk.BK_BKBE_NUMMER as ContractNumber,
+        CASE
+          WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
+          ELSE au.BK_BKBE_AU_LI_DATUM
+        END as DeliveryDate
+      FROM [D4].[dbo].[tbe_Belp] b
+      INNER JOIN [D4].[dbo].[tPPS_SKKALK] k ON k.PSK_IDBEBP = b.ID
+      INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.PSP_IDPSKKK = k.ID
+      LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
+      LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
+      WHERE ${whereClause}
+    `;
+    const result = await request.query(query);
+    const dbSteps = result.recordset;
+
+    // Filter steps by date range in Node.js to avoid conversion errors
+    const filteredSteps = dbSteps.filter(step => {
       if (!step.DeliveryDate) return false;
       const dStr = new Date(step.DeliveryDate).toISOString().substring(0, 10);
       if (startDate && dStr < startDate) return false;
@@ -830,8 +1058,35 @@ app.get('/api/machines/:nr/tools', (req, res) => {
       return true;
     });
 
+    // Match NC programs to cached tool lists
+    const matchCache = {};
+    filteredSteps.forEach(step => {
+      const progs = extractNCPrograms(step.StepDesc);
+      if (progs.length > 0) {
+        const prog = progs[0];
+        if (matchCache[prog] === undefined) {
+          const matches = findMatches(prog, cachedToolLists, 0.6);
+          if (matches.length > 0) {
+            matchCache[prog] = {
+              Nr: matches[0].Nr,
+              Ident: matches[0].Ident
+            };
+          } else {
+            matchCache[prog] = null;
+          }
+        }
+
+        const match = matchCache[prog];
+        if (match) {
+          step.MatchedListNr = match.Nr;
+          step.MatchedListIdent = match.Ident;
+        }
+      }
+    });
+
     const activeLists = {};
     filteredSteps.forEach(step => {
+      if (!step.MatchedListNr) return;
       const listNr = step.MatchedListNr;
       if (!activeLists[listNr]) {
         activeLists[listNr] = {
@@ -881,10 +1136,56 @@ app.get('/api/machines/:nr/tools', (req, res) => {
     const sortedAccumulatedTools = Object.values(accumulatedTools)
       .sort((a, b) => b.totalUsesCount - a.totalUsesCount);
 
+    const activeToolIds = Object.keys(accumulatedTools).map(Number);
+    let accumulatedParts = [];
+    if (activeToolIds.length > 0) {
+      try {
+        const poolWT = await getPoolWT();
+        const partsResult = await poolWT.request().query(`
+          SELECT
+            tp.ToolNr, tp.Pos as PartPos, tp.Nbr as PartQty,
+            p.Nr as PartNr, p.Descript as PartDesc, p.KeyWord as PartKeyWord
+          FROM [WTDATA].[dbo].[ToolParts] tp
+          INNER JOIN [WTDATA].[dbo].[Parts] p ON p.ID = tp.PartID
+          WHERE tp.ToolNr IN (${activeToolIds.join(',')})
+          ORDER BY p.Nr, tp.Pos
+        `);
+
+        const partsMap = {};
+        partsResult.recordset.forEach(row => {
+          const partNr = row.PartNr ? row.PartNr.toString().trim() : 'Unbekannt';
+          if (!partsMap[partNr]) {
+            partsMap[partNr] = {
+              partNr,
+              desc: row.PartDesc ? row.PartDesc.toString().trim() : '',
+              keyword: row.PartKeyWord ? row.PartKeyWord.toString().trim() : '',
+              totalQty: 0,
+              tools: []
+            };
+          }
+          const tDetail = accumulatedTools[row.ToolNr];
+          if (tDetail) {
+            partsMap[partNr].totalQty += (row.PartQty || 1);
+            partsMap[partNr].tools.push({
+              toolNr: row.ToolNr,
+              desc: tDetail.desc,
+              partQty: row.PartQty || 1,
+              totalUsesCount: tDetail.totalUsesCount
+            });
+          }
+        });
+
+        accumulatedParts = Object.values(partsMap).sort((a, b) => b.totalQty - a.totalQty);
+      } catch (err) {
+        console.error('Error fetching accumulated parts:', err);
+      }
+    }
+
     res.json({
-      machineNr,
+      machineId: paramId,
       activeToolLists: Object.values(activeLists).sort((a, b) => b.stepsCount - a.stepsCount),
-      accumulatedTools: sortedAccumulatedTools
+      accumulatedTools: sortedAccumulatedTools,
+      accumulatedParts: accumulatedParts
     });
   } catch (err) {
     console.error(err);

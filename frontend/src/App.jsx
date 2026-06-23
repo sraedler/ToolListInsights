@@ -31,7 +31,7 @@ import {
   ResponsiveContainer 
 } from 'recharts';
 
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
 
 export default function App() {
   const [systemStatus, setSystemStatus] = useState({
@@ -1398,45 +1398,165 @@ function DemandTab({ startDate, endDate }) {
 // 5. Simulation Tab
 function SimulationTab({ startDate, endDate }) {
   const [baseSetSize, setBaseSetSize] = useState(20);
+  const [machines, setMachines] = useState([]);
+  const [selectedMachineId, setSelectedMachineId] = useState('');
+  const [machineSearch, setMachineSearch] = useState('');
+  const [loadingMachines, setLoadingMachines] = useState(true);
   const [simData, setSimData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [viewDetails, setViewDetails] = useState(false);
+  const [componentFilter, setComponentFilter] = useState('');
+  const [expandedToolNrs, setExpandedToolNrs] = useState(new Set());
 
-  useEffect(() => {
-    fetchSimulation();
-  }, [baseSetSize, startDate, endDate]);
-
-  const fetchSimulation = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch(`${API_BASE}/setup-reduction?baseSetSize=${baseSetSize}&startDate=${startDate}&endDate=${endDate}`);
-      const data = await res.json();
-      setSimData(data);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
+  // Filter base tools by component description, keyword, ID, or part properties
+  const filteredBaseTools = simData?.baseTools.filter(tool => {
+    if (!componentFilter) return true;
+    const search = componentFilter.toLowerCase();
+    const toolMatch = 
+      tool.desc.toLowerCase().includes(search) || 
+      (tool.keyword || '').toLowerCase().includes(search) || 
+      tool.nr.toString().includes(search);
+    if (toolMatch) return true;
+    if (tool.parts && Array.isArray(tool.parts)) {
+      return tool.parts.some(p => 
+        (p.partNr || '').toLowerCase().includes(search) ||
+        (p.partDesc || '').toLowerCase().includes(search) ||
+        (p.partKeyWord || '').toLowerCase().includes(search)
+      );
     }
-  };
+    return false;
+  }) || [];
+
+  // Fetch machines/pools catalog on mount
+  useEffect(() => {
+    const fetchMachines = async () => {
+      try {
+        setLoadingMachines(true);
+        const res = await fetch(`${API_BASE}/machines`);
+        const mData = await res.json();
+        setMachines(mData);
+        if (mData.length > 0) {
+          // Default to Hermle BAZ2-1 or C400 if present, else first machine
+          const defaultMach = mData.find(m => m.number === 'BAZ2-1') || mData.find(m => m.number === 'C400') || mData[0];
+          setSelectedMachineId(defaultMach.id);
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoadingMachines(false);
+      }
+    };
+    fetchMachines();
+  }, []);
+
+  // Fetch simulation data when configuration changes
+  useEffect(() => {
+    if (!selectedMachineId) return;
+    const fetchSimulation = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(`${API_BASE}/setup-reduction?baseSetSize=${baseSetSize}&machineId=${selectedMachineId}&startDate=${startDate}&endDate=${endDate}`);
+        const data = await res.json();
+        setSimData(data);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchSimulation();
+  }, [baseSetSize, selectedMachineId, startDate, endDate]);
+
+  const selectedMachine = machines.find(m => m.id === selectedMachineId);
+
+  // Adjust baseSetSize if it exceeds the selected machine's magazine capacity
+  useEffect(() => {
+    if (selectedMachine && selectedMachine.magazineSize) {
+      if (baseSetSize > selectedMachine.magazineSize) {
+        setBaseSetSize(selectedMachine.magazineSize);
+      }
+    }
+  }, [selectedMachineId, selectedMachine, baseSetSize]);
+
+  if (loadingMachines || !selectedMachineId) {
+    return <div style={{ color: '#64748b' }}>Lade Maschinenkatalog...</div>;
+  }
+
+  const filteredMachines = machines.filter(m => {
+    const term = machineSearch.toLowerCase();
+    const typeLabel = m.type === 'pool' ? 'pool maschinenpool' : 'maschine machine';
+    return (
+      m.number.toLowerCase().includes(term) ||
+      m.name.toLowerCase().includes(term) ||
+      typeLabel.includes(term)
+    );
+  });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'calc(100vh - 120px)', overflowY: 'auto' }}>
-      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '2rem', alignItems: 'center' }}>
+      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: '2rem', alignItems: 'center', padding: '1.5rem' }}>
         <div>
           <span style={{ fontSize: '0.75rem', color: '#3b82f6', fontWeight: 600, textTransform: 'uppercase' }}>Simulationseinstellungen</span>
-          <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.5rem' }}>Werkzeugstamm definieren</h3>
-          <p style={{ color: '#94a3b8', fontSize: '0.85rem', lineHeight: '1.5' }}>
-            Legen Sie fest, wie viele Standardwerkzeuge permanent im Magazin der Maschine verbaut sein sollen.
+          <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '0.25rem' }}>Werkzeugstamm</h3>
+          <p style={{ color: '#94a3b8', fontSize: '0.8rem', lineHeight: '1.4' }}>
+            Simulieren Sie Rüstzeiteinsparungen durch permanent verbaute Standardwerkzeuge.
           </p>
         </div>
 
-        <div className="slider-container" style={{ margin: 0 }}>
-          <div className="slider-label">
-            <span style={{ color: '#cbd5e1' }}>Größe des Werkzeugstamms (Stamm)</span>
-            <span className="slider-val">{baseSetSize} Werkzeuge</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ color: '#94a3b8', fontSize: '0.8rem', fontWeight: 600, minWidth: '55px' }}>Suchen:</span>
+            <input
+              type="text"
+              placeholder="Pool oder Maschine..."
+              value={machineSearch}
+              onChange={(e) => setMachineSearch(e.target.value)}
+              style={{
+                background: 'rgba(30, 41, 59, 0.4)',
+                border: '1px solid var(--border-dim)',
+                borderRadius: '8px',
+                color: '#fff',
+                fontSize: '0.8rem',
+                padding: '0.3rem 0.6rem',
+                outline: 'none',
+                flexGrow: 1
+              }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ color: '#94a3b8', fontSize: '0.8rem', fontWeight: 600, minWidth: '55px' }}>Auswahl:</span>
+            <select
+              value={selectedMachineId}
+              onChange={(e) => setSelectedMachineId(e.target.value)}
+              style={{
+                background: 'rgba(13, 20, 35, 0.6)',
+                border: '1px solid var(--border-glow)',
+                borderRadius: '10px',
+                color: '#fff',
+                fontSize: '0.85rem',
+                padding: '0.35rem 0.75rem',
+                outline: 'none',
+                cursor: 'pointer',
+                flexGrow: 1
+              }}
+            >
+              {filteredMachines.map(m => (
+                <option key={m.id} value={m.id}>
+                  {m.type === 'pool' ? 'Pool: ' : 'Maschine: '} {m.number} ({m.name})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="slider-container" style={{ margin: 0, paddingLeft: '1rem', borderLeft: '1px solid var(--border-dim)' }}>
+          <div className="slider-label" style={{ marginBottom: '0.5rem' }}>
+            <span style={{ color: '#cbd5e1', fontSize: '0.8rem' }}>Stammgröße:</span>
+            <span className="slider-val" style={{ fontSize: '0.85rem', fontWeight: 700 }}>{baseSetSize} Tools</span>
           </div>
           <input 
-            type="range" min="5" max="100" step="5" 
+            type="range" min="5" max={selectedMachine?.magazineSize || 100} step="5" 
             value={baseSetSize} 
             onChange={(e) => setBaseSetSize(parseInt(e.target.value))}
             className="custom-range"
@@ -1448,7 +1568,28 @@ function SimulationTab({ startDate, endDate }) {
         <div style={{ color: '#64748b' }}>Simuliere Rüstzeiteinsparung...</div>
       ) : (
         <div>
-          <div className="grid-3" style={{ marginBottom: '1.5rem' }}>
+          {/* Optimal Recommendation Tip */}
+          {simData?.summary.recommendation && (
+            <div style={{
+              background: 'rgba(59, 130, 246, 0.08)',
+              border: '1px solid rgba(59, 130, 246, 0.25)',
+              borderRadius: '12px',
+              padding: '0.75rem 1.25rem',
+              marginBottom: '1.25rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              fontSize: '0.85rem',
+              color: '#93c5fd'
+            }}>
+              <span style={{ fontSize: '1.1rem' }}>💡</span>
+              <div>
+                <strong>Kapazitäts-Empfehlung für {selectedMachine?.number}:</strong> {simData.summary.recommendation}
+              </div>
+            </div>
+          )}
+
+          <div className={simData?.config.magazineSize ? "grid-4" : "grid-3"} style={{ marginBottom: '1.5rem' }}>
             <div className="glass-card metric-card" style={{ borderLeft: '4px solid #f59e0b' }}>
               <div className="metric-header">
                 <span>Original Rüstaufwand</span>
@@ -1479,6 +1620,21 @@ function SimulationTab({ startDate, endDate }) {
                 Entspricht {simData?.summary.savingsPercent}% Rüstzeit-Reduzierung!
               </div>
             </div>
+
+            {simData?.config.magazineSize && (
+              <div className="glass-card metric-card" style={{ borderLeft: `4px solid ${simData.summary.feasibilityRate >= 95 ? '#10b981' : simData.summary.feasibilityRate >= 80 ? '#f59e0b' : '#ef4444'}`, background: 'rgba(255, 255, 255, 0.01)' }}>
+                <div className="metric-header">
+                  <span>Machbarkeit</span>
+                  <Layers size={16} />
+                </div>
+                <div className="metric-value" style={{ color: simData.summary.feasibilityRate >= 95 ? '#10b981' : simData.summary.feasibilityRate >= 80 ? '#f59e0b' : '#ef4444' }}>
+                  {simData.summary.feasibilityRate}%
+                </div>
+                <div className="metric-desc">
+                  {simData.summary.feasibleStepsCount} von {simData.summary.totalSteps} Aufträgen passen ({simData.config.magazineSize} Plätze)
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid-main-2">
@@ -1499,24 +1655,35 @@ function SimulationTab({ startDate, endDate }) {
                     <thead>
                       <tr>
                         <th>Arbeitsgang</th>
+                        <th>NC-Programm</th>
                         <th>Original</th>
                         <th>Simuliert</th>
                         <th>Einsparung</th>
                         <th>Werkzeuge (Stamm/Gesamt)</th>
+                        {simData?.config.magazineSize && <th>Magazinbelegung</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {simData?.sampleSteps.map((step, idx) => (
-                        <tr key={idx}>
+                        <tr key={idx} style={{ background: step.isFeasible ? 'transparent' : 'rgba(239, 68, 68, 0.07)' }}>
                           <td style={{ fontSize: '0.8rem', fontWeight: 500 }}>
-                            <div style={{ maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <div style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {step.desc}
                             </div>
+                          </td>
+                          <td style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                            {step.programName || '-'}
                           </td>
                           <td style={{ color: '#f59e0b' }}>{step.originalSetup} Min</td>
                           <td style={{ color: '#3b82f6' }}>{step.simulatedSetup} Min</td>
                           <td style={{ color: '#10b981', fontWeight: 600 }}>-{step.savings} Min</td>
                           <td>{step.baseToolsCount} / {step.toolsCount}</td>
+                          {simData?.config.magazineSize && (
+                            <td style={{ color: step.isFeasible ? '#cbd5e1' : '#ef4444', fontWeight: step.isFeasible ? 400 : 600 }}>
+                              {step.occupiedSlots} / {simData.config.magazineSize}
+                              {!step.isFeasible && <span style={{ marginLeft: '0.35rem', fontSize: '0.8rem' }} title="Magazin-Kapazität überschritten">⚠️</span>}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -1536,27 +1703,112 @@ function SimulationTab({ startDate, endDate }) {
 
             <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: '500px', overflow: 'hidden' }}>
               <h3 style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Top Stamm-Werkzeuge ({baseSetSize})</h3>
+              
+              <div style={{ marginBottom: '0.75rem' }}>
+                <input
+                  type="text"
+                  placeholder="Komponenten filtern (z.B. HSK63, Weldon)..."
+                  value={componentFilter}
+                  onChange={(e) => setComponentFilter(e.target.value)}
+                  style={{
+                    background: 'rgba(30, 41, 59, 0.4)',
+                    border: '1px solid var(--border-dim)',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '0.8rem',
+                    padding: '0.35rem 0.75rem',
+                    outline: 'none',
+                    width: '100%'
+                  }}
+                />
+              </div>
+
               <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {simData?.baseTools.map((tool, idx) => (
-                  <div 
-                    key={tool.nr} 
-                    style={{
-                      padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.015)',
-                      border: '1px solid var(--border-dim)', borderRadius: '8px',
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>
-                        {idx + 1}. {tool.desc}
+                {filteredBaseTools.map((tool, idx) => {
+                  const isExpanded = expandedToolNrs.has(tool.nr);
+                  return (
+                    <div 
+                      key={tool.nr} 
+                      onClick={() => {
+                        const newExpanded = new Set(expandedToolNrs);
+                        if (newExpanded.has(tool.nr)) {
+                          newExpanded.delete(tool.nr);
+                        } else {
+                          newExpanded.add(tool.nr);
+                        }
+                        setExpandedToolNrs(newExpanded);
+                      }}
+                      style={{
+                        padding: '0.65rem 0.75rem', background: 'rgba(255,255,255,0.015)',
+                        border: '1px solid var(--border-dim)', borderRadius: '8px',
+                        display: 'flex', flexDirection: 'column', gap: '0.5rem',
+                        cursor: 'pointer', transition: 'border-color 0.2s',
+                        userSelect: 'none'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                        <div>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span>{idx + 1}. {tool.desc}</span>
+                            <span style={{ fontSize: '0.6rem', color: '#64748b' }}>{isExpanded ? '▲' : '▼'}</span>
+                          </div>
+                          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                            Ø {tool.dia || 0}mm | ID: {tool.nr}
+                          </div>
+                        </div>
+                        <span className="badge badge-blue" style={{ flexShrink: 0 }}>{tool.usesCount} Listen</span>
                       </div>
-                      <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                        Ø {tool.dia || 0}mm | ID: {tool.nr}
-                      </div>
+                      
+                      {isExpanded && (
+                        <div 
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            borderTop: '1px dashed var(--border-dim)',
+                            paddingTop: '0.5rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.35rem',
+                            width: '100%'
+                          }}
+                        >
+                          <div style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>
+                            Werkzeug-Bestandteile (Aufnahme etc.):
+                          </div>
+                          {(!tool.parts || tool.parts.length === 0) ? (
+                            <div style={{ fontSize: '0.7rem', color: '#64748b', fontStyle: 'italic' }}>
+                              Keine Bestandteile in WinTool gepflegt.
+                            </div>
+                          ) : (
+                            tool.parts.map((part, pIdx) => (
+                              <div 
+                                key={pIdx}
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  background: 'rgba(13, 20, 35, 0.3)',
+                                  padding: '0.35rem 0.5rem',
+                                  borderRadius: '6px',
+                                  fontSize: '0.75rem'
+                                }}
+                              >
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                  <span style={{ color: '#fff', fontWeight: 500 }}>{part.partDesc}</span>
+                                  <span style={{ color: '#64748b', fontSize: '0.65rem' }}>
+                                    Nr: {part.partNr} | Typ: {part.partKeyWord || '-'}
+                                  </span>
+                                </div>
+                                <span className="badge badge-purple" style={{ fontSize: '0.7rem' }}>
+                                  Menge: {part.partQty}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <span className="badge badge-blue">{tool.usesCount} Listen</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1570,10 +1822,13 @@ function SimulationTab({ startDate, endDate }) {
 function MachinesTab({ startDate, endDate }) {
   const [machines, setMachines] = useState([]);
   const [selectedMachineNr, setSelectedMachineNr] = useState('');
+  const [machineSearch, setMachineSearch] = useState('');
   const [loadingMachines, setLoadingMachines] = useState(true);
   const [data, setData] = useState(null);
   const [loadingTools, setLoadingTools] = useState(false);
   const [expandedListNr, setExpandedListNr] = useState(null);
+  const [rightSubTab, setRightSubTab] = useState('tools'); // 'tools' or 'components'
+  const [expandedPartNrs, setExpandedPartNrs] = useState(new Set());
 
   // Fetch machines list on mount
   useEffect(() => {
@@ -1584,10 +1839,9 @@ function MachinesTab({ startDate, endDate }) {
         const mData = await res.json();
         setMachines(mData);
         if (mData.length > 0) {
-          // Find first machine with lists or just first one
-          // We can default to Hermle C40-HSK63 (Nr: 18) or Hermle C40-SK40 (Nr: 17) if present, else first machine
-          const defaultMach = mData.find(m => m.Nr === '18') || mData.find(m => m.Nr === '17') || mData[0];
-          setSelectedMachineNr(defaultMach.Nr);
+          // Default to Hermle BAZ2-1 or C400 if present, else first machine
+          const defaultMach = mData.find(m => m.number === 'BAZ2-1') || mData.find(m => m.number === 'C400') || mData[0];
+          setSelectedMachineNr(defaultMach.id);
         }
       } catch (e) {
         console.error(e);
@@ -1621,41 +1875,74 @@ function MachinesTab({ startDate, endDate }) {
     return <div style={{ color: '#64748b' }}>Lade Maschinenkatalog...</div>;
   }
 
-  const selectedMachine = machines.find(m => m.Nr === selectedMachineNr.toString());
+  const filteredMachines = machines.filter(m => {
+    const term = machineSearch.toLowerCase();
+    const typeLabel = m.type === 'pool' ? 'pool maschinenpool' : 'maschine machine';
+    return (
+      m.number.toLowerCase().includes(term) ||
+      m.name.toLowerCase().includes(term) ||
+      typeLabel.includes(term)
+    );
+  });
+
+  const selectedMachine = machines.find(m => m.id === selectedMachineNr);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'calc(100vh - 120px)', overflow: 'hidden' }}>
       {/* Top Selector Panel */}
       <div className="glass-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.5rem' }}>
-        <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
-          <h3 style={{ fontWeight: 600 }}>Maschine auswählen:</h3>
-          <select
-            value={selectedMachineNr}
-            onChange={(e) => setSelectedMachineNr(e.target.value)}
-            style={{
-              background: 'rgba(13, 20, 35, 0.6)',
-              border: '1px solid var(--border-glow)',
-              borderRadius: '12px',
-              color: '#fff',
-              fontSize: '0.95rem',
-              padding: '0.5rem 1rem',
-              outline: 'none',
-              cursor: 'pointer',
-              minWidth: '250px'
-            }}
-          >
-            {machines.map(m => (
-              <option key={m.Nr} value={m.Nr}>
-                {m.Name} {m.Rem ? `(${m.Rem})` : ''}
-              </option>
-            ))}
-          </select>
+        <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: 600 }}>Suchen:</span>
+            <input
+              type="text"
+              placeholder="Pool oder Maschine..."
+              value={machineSearch}
+              onChange={(e) => setMachineSearch(e.target.value)}
+              style={{
+                background: 'rgba(30, 41, 59, 0.4)',
+                border: '1px solid var(--border-dim)',
+                borderRadius: '8px',
+                color: '#fff',
+                fontSize: '0.85rem',
+                padding: '0.35rem 0.75rem',
+                outline: 'none',
+                width: '180px'
+              }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: 600 }}>Auswahl:</span>
+            <select
+              value={selectedMachineNr}
+              onChange={(e) => setSelectedMachineNr(e.target.value)}
+              style={{
+                background: 'rgba(13, 20, 35, 0.6)',
+                border: '1px solid var(--border-glow)',
+                borderRadius: '12px',
+                color: '#fff',
+                fontSize: '0.95rem',
+                padding: '0.4rem 1rem',
+                outline: 'none',
+                cursor: 'pointer',
+                minWidth: '250px'
+              }}
+            >
+              {filteredMachines.map(m => (
+                <option key={m.id} value={m.id}>
+                  {m.type === 'pool' ? 'Pool: ' : 'Maschine: '} {m.number} ({m.name})
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {selectedMachine && (
           <div style={{ display: 'flex', gap: '1.5rem', fontSize: '0.85rem', color: '#94a3b8' }}>
-            <span>Maschinen-Nr: <strong style={{ color: '#fff' }}>{selectedMachine.Nr}</strong></span>
-            {selectedMachine.Rem && <span>Spezifikation: <strong style={{ color: '#fff' }}>{selectedMachine.Rem}</strong></span>}
+            <span>Typ: <strong style={{ color: '#fff' }}>{selectedMachine.type === 'pool' ? 'Maschinenpool' : 'Maschine'}</strong></span>
+            <span>Nummer: <strong style={{ color: '#fff' }}>{selectedMachine.number}</strong></span>
+            {selectedMachine.name && <span>Bezeichnung: <strong style={{ color: '#fff' }}>{selectedMachine.name}</strong></span>}
           </div>
         )}
       </div>
@@ -1736,67 +2023,207 @@ function MachinesTab({ startDate, endDate }) {
             </div>
           </div>
 
-          {/* Right Panel: Accumulated Tools List */}
+          {/* Right Panel: Accumulated Tools/Components List */}
           <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
             <div>
               <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600, textTransform: 'uppercase' }}>Teilebedarfs-Zusammenfassung</span>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-                Akkumulierter Werkzeugbedarf ({data.accumulatedTools.length})
+                Bedarfsanalyse ({rightSubTab === 'tools' ? data.accumulatedTools.length : (data.accumulatedParts || []).length})
               </h3>
               <p style={{ color: '#64748b', fontSize: '0.8rem', marginBottom: '1rem' }}>
-                Konsolidierter Gesamtbestand aller Werkzeuge, die im gewählten Zeitraum für die Maschine benötigt werden, absteigend sortiert nach Verwendungshäufigkeit.
+                {rightSubTab === 'tools'
+                  ? 'Konsolidierter Gesamtbestand aller Werkzeuge, die im gewählten Zeitraum für die Maschine benötigt werden, absteigend sortiert nach Verwendungshäufigkeit.'
+                  : 'Akkumulierte WinTool-Komponenten (Aufnahmen, Spannzangen, Wendeschneidplatten etc.) für alle Werkzeuge, die im gewählten Zeitraum auf dieser Maschine benötigt werden.'}
               </p>
+
+              {/* Sub-tab Toggle buttons */}
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.5rem' }}>
+                <button 
+                  onClick={() => setRightSubTab('tools')}
+                  style={{
+                    background: rightSubTab === 'tools' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                    border: 'none',
+                    color: rightSubTab === 'tools' ? '#fff' : '#64748b',
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    outline: 'none'
+                  }}
+                >
+                  Werkzeugbedarf ({data.accumulatedTools.length})
+                </button>
+                <button 
+                  onClick={() => setRightSubTab('components')}
+                  style={{
+                    background: rightSubTab === 'components' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                    border: 'none',
+                    color: rightSubTab === 'components' ? '#fff' : '#64748b',
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    outline: 'none'
+                  }}
+                >
+                  Komponentenbedarf ({(data.accumulatedParts || []).length})
+                </button>
+              </div>
             </div>
 
             <div className="smooth-scroll" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: '0.25rem' }}>
-              {data.accumulatedTools.length === 0 ? (
-                <div style={{ color: '#475569', textAlign: 'center', padding: '3rem' }}>
-                  Keine akkumulierten Werkzeugkomponenten gefunden.
-                </div>
-              ) : (
-                data.accumulatedTools.map((t, idx) => (
-                  <div 
-                    key={t.nr}
-                    style={{
-                      background: 'rgba(255, 255, 255, 0.015)',
-                      border: '1px solid var(--border-dim)',
-                      borderRadius: '12px',
-                      padding: '1rem',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center'
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>#{idx + 1}</span>
-                        <h4 style={{ fontWeight: 600, fontSize: '0.9rem', color: '#fff' }}>{t.desc}</h4>
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>
-                        ID: {t.nr} | Typ: {t.keyword || 'N/A'} | Ø {t.dia || 0}mm | L {t.len || 0}mm
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.5rem' }}>
-                        {t.toolLists.map((tl, i) => (
-                          <span 
-                            key={i} 
-                            className="badge badge-blue" 
-                            style={{ fontSize: '0.6rem', padding: '0.1rem 0.35rem' }}
-                            title={`Verwendet in Rüstliste ${tl.ident} (für ${tl.stepsCount} Arbeitsgänge)`}
-                          >
-                            {tl.ident} ({tl.stepsCount}x)
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ color: '#64748b', fontSize: '0.7rem' }}>Bedarfe (AG)</div>
-                      <span className="badge badge-purple" style={{ fontSize: '0.95rem', fontWeight: 700, marginTop: '0.25rem' }}>
-                        {t.totalUsesCount}x
-                      </span>
-                    </div>
+              {rightSubTab === 'tools' ? (
+                data.accumulatedTools.length === 0 ? (
+                  <div style={{ color: '#475569', textAlign: 'center', padding: '3rem' }}>
+                    Keine akkumulierten Werkzeuge gefunden.
                   </div>
-                ))
+                ) : (
+                  data.accumulatedTools.map((t, idx) => (
+                    <div 
+                      key={t.nr}
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.015)',
+                        border: '1px solid var(--border-dim)',
+                        borderRadius: '12px',
+                        padding: '1rem',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>#{idx + 1}</span>
+                          <h4 style={{ fontWeight: 600, fontSize: '0.9rem', color: '#fff' }}>{t.desc}</h4>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>
+                          ID: {t.nr} | Typ: {t.keyword || 'N/A'} | Ø {t.dia || 0}mm | L {t.len || 0}mm
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.5rem' }}>
+                          {t.toolLists.map((tl, i) => (
+                            <span 
+                              key={i} 
+                              className="badge badge-blue" 
+                              style={{ fontSize: '0.6rem', padding: '0.1rem 0.35rem' }}
+                              title={`Verwendet in Rüstliste ${tl.ident} (für ${tl.stepsCount} Arbeitsgänge)`}
+                            >
+                              {tl.ident} ({tl.stepsCount}x)
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ color: '#64748b', fontSize: '0.7rem' }}>Bedarfe (AG)</div>
+                        <span className="badge badge-purple" style={{ fontSize: '0.95rem', fontWeight: 700, marginTop: '0.25rem' }}>
+                          {t.totalUsesCount}x
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )
+              ) : (
+                !(data.accumulatedParts) || data.accumulatedParts.length === 0 ? (
+                  <div style={{ color: '#475569', textAlign: 'center', padding: '3rem' }}>
+                    Keine akkumulierten Werkzeugkomponenten gefunden.
+                  </div>
+                ) : (
+                  data.accumulatedParts.map((p, idx) => {
+                    const isPartExpanded = expandedPartNrs.has(p.partNr);
+                    return (
+                      <div 
+                        key={p.partNr}
+                        onClick={() => {
+                          const newExpanded = new Set(expandedPartNrs);
+                          if (newExpanded.has(p.partNr)) {
+                            newExpanded.delete(p.partNr);
+                          } else {
+                            newExpanded.add(p.partNr);
+                          }
+                          setExpandedPartNrs(newExpanded);
+                        }}
+                        style={{
+                          background: 'rgba(255, 255, 255, 0.015)',
+                          border: '1px solid var(--border-dim)',
+                          borderRadius: '12px',
+                          padding: '1rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.5rem',
+                          cursor: 'pointer',
+                          transition: 'border-color 0.2s',
+                          userSelect: 'none'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>#{idx + 1}</span>
+                              <h4 style={{ fontWeight: 600, fontSize: '0.9rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span>{p.desc || 'Komponente'}</span>
+                                <span style={{ fontSize: '0.6rem', color: '#64748b' }}>{isPartExpanded ? '▲' : '▼'}</span>
+                              </h4>
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>
+                              Teile-Nr: {p.partNr} | Typ: {p.keyword || 'N/A'}
+                            </div>
+                          </div>
+
+                          <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                            <div style={{ color: '#64748b', fontSize: '0.7rem' }}>Gesamtmenge</div>
+                            <span className="badge badge-green" style={{ fontSize: '0.95rem', fontWeight: 700, marginTop: '0.25rem' }}>
+                              {p.totalQty}x
+                            </span>
+                          </div>
+                        </div>
+
+                        {isPartExpanded && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              borderTop: '1px dashed var(--border-dim)',
+                              paddingTop: '0.5rem',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.35rem',
+                              width: '100%'
+                            }}
+                          >
+                            <div style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.15rem' }}>
+                              Benötigt in folgenden Werkzeugen:
+                            </div>
+                            {p.tools.map((t, tIdx) => (
+                              <div 
+                                key={tIdx}
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  background: 'rgba(13, 20, 35, 0.3)',
+                                  padding: '0.35rem 0.5rem',
+                                  borderRadius: '6px',
+                                  fontSize: '0.75rem'
+                                }}
+                              >
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                  <span style={{ color: '#fff', fontWeight: 500 }}>{t.desc}</span>
+                                  <span style={{ color: '#64748b', fontSize: '0.65rem' }}>
+                                    Werkzeug-ID: {t.toolNr} | Arbeitsgänge: {t.totalUsesCount}
+                                  </span>
+                                </div>
+                                <span className="badge badge-blue" style={{ fontSize: '0.7rem' }}>
+                                  Menge: {t.partQty}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )
               )}
             </div>
           </div>
