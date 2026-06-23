@@ -66,7 +66,8 @@ let poolWT = null;
 async function getPoolD4() {
   if (!poolD4) {
     console.log('Initializing D4 database pool...');
-    poolD4 = await sql.connect(configD4);
+    poolD4 = new sql.ConnectionPool(configD4);
+    await poolD4.connect();
     console.log('D4 database pool initialized.');
   }
   return poolD4;
@@ -75,7 +76,8 @@ async function getPoolD4() {
 async function getPoolWT() {
   if (!poolWT) {
     console.log('Initializing WTDATA database pool...');
-    poolWT = await sql.connect(configWT);
+    poolWT = new sql.ConnectionPool(configWT);
+    await poolWT.connect();
     console.log('WTDATA database pool initialized.');
   }
   return poolWT;
