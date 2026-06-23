@@ -14,14 +14,14 @@ services:
       # Environment parameters for TCP connection to MS SQL Server
       - DB_D4_SERVER=srvdms\D4
       - DB_D4_DATABASE=D4
-      - DB_D4_USER=werkstatt
-      - DB_D4_PASSWORD=werkstatt
+      - DB_D4_USER=werkzeug
+      - DB_D4_PASSWORD=werkzeug
       - DB_D4_ENCRYPT=false
 
       - DB_WT_SERVER=srvdaten\cim4net
       - DB_WT_DATABASE=WTData
-      - DB_WT_USER=werkstatt
-      - DB_WT_PASSWORD=werkstatt
+      - DB_WT_USER=werkzeug
+      - DB_WT_PASSWORD=werkzeug
       - DB_WT_ENCRYPT=false
     extra_hosts:
       - "host.docker.internal:host-gateway"
