@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
-const { getPoolD4, getPoolWT, sql } = require('./db');
+const { getPoolD4, getPoolWT, getPoolTL, sql } = require('./db');
 const { extractNCPrograms, findMatches } = require('./matching');
 
 const app = express();
@@ -28,6 +28,8 @@ let cachedToolLists = [];
 let cachedDashboard = null;
 let cachedStandardization = null;
 let cachedDemand = null;
+let cachedDemandSteps = null;
+let cachedToolDetails = {};
 let cachedSetupData = null;
 let cachedMachines = [];
 
@@ -127,16 +129,21 @@ async function cacheDemand() {
   const result = await poolD4.request().query(`
     SELECT
       b.ID as OrderId,
-      b.BP_PP_DATUM_START as StartDate,
-      b.BP_PP_DATUM_TERMIN as EndDate,
+      CASE
+        WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
+        ELSE au.BK_BKBE_AU_LI_DATUM
+      END as DeliveryDate,
       p.PSP_BEZEICHNUNG as StepDesc,
-      p.PSP_MENGE_SOLL as Quantity
+      p.PSP_MENGE_SOLL as Quantity,
+      p.PSP_IDMS as MachineId,
+      p.PSP_IDMP as MachinePoolId
     FROM [D4].[dbo].[tbe_Belp] b
     INNER JOIN [D4].[dbo].[tPPS_SKKALK] k ON k.PSK_IDBEBP = b.ID
     INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.PSP_IDPSKKK = k.ID
+    LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
+    LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
     WHERE p.PSP_TYP_POSITION = 0
-      AND b.BP_PP_DATUM_START IS NOT NULL
-    ORDER BY b.BP_PP_DATUM_START ASC
+      AND (b.BP_LI_DATUM IS NOT NULL OR au.BK_BKBE_AU_LI_DATUM IS NOT NULL)
   `);
 
   const steps = result.recordset;
@@ -174,47 +181,51 @@ async function cacheDemand() {
     };
   });
 
-  const demandByDate = {};
+  const matchCache = {};
+  const tempSteps = [];
   steps.forEach(step => {
-    const dateStr = new Date(step.StartDate).toISOString().substring(0, 10);
+    if (!step.DeliveryDate) return;
+    const dateStr = new Date(step.DeliveryDate).toISOString().substring(0, 10);
     const progs = extractNCPrograms(step.StepDesc);
+    const stepTools = [];
 
     progs.forEach(prog => {
-      const matches = findMatches(prog, cachedToolLists, 0.7);
-      if (matches.length > 0) {
-        const matchedList = matches[0];
-        const listTools = listToToolsMap[matchedList.Nr] || [];
+      if (matchCache[prog] === undefined) {
+        const matches = findMatches(prog, cachedToolLists, 0.7);
+        if (matches.length > 0) {
+          matchCache[prog] = {
+            Nr: matches[0].Nr
+          };
+        } else {
+          matchCache[prog] = null;
+        }
+      }
 
+      const match = matchCache[prog];
+      if (match) {
+        const listTools = listToToolsMap[match.Nr] || [];
         listTools.forEach(lt => {
-          const requiredQty = lt.qty * (step.Quantity || 1);
-          if (!demandByDate[dateStr]) {
-            demandByDate[dateStr] = {};
-          }
-          if (!demandByDate[dateStr][lt.toolNr]) {
-            demandByDate[dateStr][lt.toolNr] = 0;
-          }
-          demandByDate[dateStr][lt.toolNr] += requiredQty;
+          stepTools.push({
+            toolNr: lt.toolNr,
+            qty: lt.qty * (step.Quantity || 1)
+          });
         });
       }
     });
+
+    if (stepTools.length > 0) {
+      tempSteps.push({
+        date: dateStr,
+        machineId: step.MachineId,
+        machinePoolId: step.MachinePoolId,
+        tools: stepTools
+      });
+    }
   });
 
-  cachedDemand = Object.keys(demandByDate).sort().map(date => {
-    const toolsReq = demandByDate[date];
-    const items = Object.keys(toolsReq).map(tNr => ({
-      toolNr: parseInt(tNr),
-      quantity: toolsReq[tNr],
-      details: toolDetails[tNr] || { nr: tNr, desc: 'Unbekannt' }
-    }));
-    
-    const totalTools = items.reduce((acc, curr) => acc + curr.quantity, 0);
-
-    return {
-      date,
-      totalTools,
-      tools: items
-    };
-  });
+  cachedDemandSteps = tempSteps;
+  cachedToolDetails = toolDetails;
+  cachedDemand = true; // Flag compatibility for UI startup dashboard checks
   console.log('Tool demand timeline cached.');
 }
 
@@ -233,6 +244,7 @@ async function cacheSetupData() {
       p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
       p.PSP_IDMS as MachineId,
       p.PSP_IDMP as MachinePoolId,
+      p.PSP_PP_STATUS_PRODUKTION as StatusProduction,
       CASE
         WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
         ELSE au.BK_BKBE_AU_LI_DATUM
@@ -705,19 +717,68 @@ app.get('/api/standardization', (req, res) => {
 
 // 7. Phased Tool Demand Timeline (Served from Cache)
 app.get('/api/demand', (req, res) => {
-  if (!cachedDemand) {
+  if (!cachedDemandSteps) {
     return res.status(503).json({ error: 'Bedarfstimeline wird noch geladen' });
   }
   
-  const { startDate, endDate } = req.query;
-  if (startDate || endDate) {
-    let filtered = cachedDemand;
-    if (startDate) filtered = filtered.filter(item => item.date >= startDate);
-    if (endDate) filtered = filtered.filter(item => item.date <= endDate);
-    return res.json(filtered);
+  const { startDate, endDate, machineId } = req.query;
+  let filteredSteps = cachedDemandSteps;
+
+  if (startDate) {
+    filteredSteps = filteredSteps.filter(s => s.date >= startDate);
   }
-  
-  res.json(cachedDemand);
+  if (endDate) {
+    filteredSteps = filteredSteps.filter(s => s.date <= endDate);
+  }
+
+  if (machineId) {
+    const parts = machineId.split('_');
+    const type = parts[0]; // 'pool' or 'machine'
+    const dbId = parseInt(parts[1]); // ID as integer
+    if (!isNaN(dbId)) {
+      filteredSteps = filteredSteps.filter(s => {
+        if (type === 'pool') {
+          return s.machinePoolId === dbId;
+        } else {
+          return s.machineId === dbId;
+        }
+      });
+    }
+  }
+
+  // Aggregate tools by date
+  const demandByDate = {};
+  filteredSteps.forEach(s => {
+    const dateStr = s.date;
+    if (!demandByDate[dateStr]) {
+      demandByDate[dateStr] = {};
+    }
+    s.tools.forEach(t => {
+      if (!demandByDate[dateStr][t.toolNr]) {
+        demandByDate[dateStr][t.toolNr] = 0;
+      }
+      demandByDate[dateStr][t.toolNr] += t.qty;
+    });
+  });
+
+  const result = Object.keys(demandByDate).sort().map(date => {
+    const toolsReq = demandByDate[date];
+    const items = Object.keys(toolsReq).map(tNr => ({
+      toolNr: parseInt(tNr),
+      quantity: toolsReq[tNr],
+      details: cachedToolDetails[tNr] || { nr: tNr, desc: 'Unbekannt' }
+    }));
+    
+    const totalTools = items.reduce((acc, curr) => acc + curr.quantity, 0);
+
+    return {
+      date,
+      totalTools,
+      tools: items
+    };
+  });
+
+  res.json(result);
 });
 
 // 8. Setup Time Optimization Simulation (Runs instantly in memory from cached base data)
@@ -1189,6 +1250,376 @@ app.get('/api/machines/:id/tools', async (req, res) => {
     });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// === INVENTORY & MAGAZINE SIMULATION ENDPOINTS ===
+
+// 1. Get Machines catalog from Toollist
+app.get('/api/inventory/machines', async (req, res) => {
+  try {
+    const poolTL = await getPoolTL();
+    const result = await poolTL.request().query('SELECT Id, Name, MagazineSize, Path FROM Machines ORDER BY Name');
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Error fetching inventory machines:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Get current tools in a machine
+app.get('/api/inventory/machine/:name/current-tools', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const poolTL = await getPoolTL();
+    
+    // Find machine first
+    const machineResult = await poolTL.request()
+      .input('name', sql.VarChar, name)
+      .query('SELECT Id, Name, MagazineSize FROM Machines WHERE Name = @name');
+      
+    if (machineResult.recordset.length === 0) {
+      return res.status(404).json({ error: 'Maschine nicht gefunden' });
+    }
+    
+    const machineId = machineResult.recordset[0].Id;
+    
+    // Resolve the geparkt/Parkplatz program for this machine
+    const programResult = await poolTL.request()
+      .input('machineId', sql.Int, machineId)
+      .query(`
+        SELECT TOP 1 Id, ProgramName
+        FROM MachineToProgram
+        WHERE Machine = @machineId
+        ORDER BY 
+          CASE 
+            WHEN ProgramName LIKE '%geparkt%' THEN 1
+            WHEN ProgramName LIKE '%Parkplatz%' THEN 2
+            WHEN ProgramName LIKE '%Geparkt%' THEN 3
+            ELSE 4
+          END ASC
+      `);
+      
+    if (programResult.recordset.length === 0) {
+      return res.json([]);
+    }
+    
+    const programId = programResult.recordset[0].Id;
+    
+    // Get tools inside this program
+    const toolsResult = await poolTL.request()
+      .input('programId', sql.Int, programId)
+      .query('SELECT T, ToolName, Comment FROM ProgramToTool WHERE MachineToProgramId = @programId ORDER BY T');
+      
+    const toolsList = toolsResult.recordset;
+    
+    // Parse WinTool Nr from suffix and resolve detailed data
+    const resolvedTools = [];
+    const wtToolIds = [];
+    
+    toolsList.forEach(t => {
+      const nameStr = t.ToolName || '';
+      const idx = nameStr.lastIndexOf('-');
+      if (idx !== -1) {
+        const suffix = nameStr.substring(idx + 1);
+        const nr = parseInt(suffix, 10);
+        if (!isNaN(nr)) {
+          t.wtNr = nr;
+          wtToolIds.push(nr);
+        }
+      }
+    });
+    
+    // Fetch WT Details
+    let wtDetailsMap = {};
+    if (wtToolIds.length > 0) {
+      try {
+        const poolWT = await getPoolWT();
+        const detailsResult = await poolWT.request().query(`
+          SELECT Nr, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools] WHERE Nr IN (${wtToolIds.join(',')})
+        `);
+        detailsResult.recordset.forEach(row => {
+          wtDetailsMap[row.Nr] = {
+            desc: row.Descript ? row.Descript.toString().trim() : '',
+            keyword: row.KeyWord ? row.KeyWord.toString().trim() : '',
+            dia: row.Ds,
+            len: row.CLength
+          };
+        });
+      } catch (err) {
+        console.error('Error loading WT details for current tools:', err);
+      }
+    }
+    
+    toolsList.forEach(t => {
+      const wtDetails = t.wtNr ? wtDetailsMap[t.wtNr] : null;
+      resolvedTools.push({
+        pocket: t.T,
+        toolName: t.ToolName,
+        comment: t.Comment || '',
+        wtNr: t.wtNr || null,
+        desc: wtDetails ? wtDetails.desc : 'Unbekannt',
+        keyword: wtDetails ? wtDetails.keyword : 'N/A',
+        dia: wtDetails ? wtDetails.dia : 0,
+        len: wtDetails ? wtDetails.len : 0
+      });
+    });
+    
+    res.json(resolvedTools);
+  } catch (err) {
+    console.error('Error fetching current machine tools:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Helper function to map Toollist machine names to D4 identifiers
+function mapToollistMachineToD4(machineName) {
+  const nameUpper = machineName.toUpperCase().trim();
+  const matched = cachedMachines.filter(m => {
+    const numUpper = m.number.toUpperCase();
+    const nmUpper = m.name.toUpperCase();
+    if (nameUpper === 'C40') {
+      return (numUpper.includes('C40') && !numUpper.includes('C400')) || 
+             (nmUpper.includes('C40') && !nmUpper.includes('C400'));
+    }
+    return numUpper.includes(nameUpper) || nmUpper.includes(nameUpper);
+  });
+  return {
+    machineIds: matched.filter(m => m.type === 'machine').map(m => m.dbId),
+    poolIds: matched.filter(m => m.type === 'pool').map(m => m.dbId)
+  };
+}
+
+// 3. Simulate future magazine tools and consolidated setup demand
+app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const { targetDate } = req.query;
+    
+    if (!cachedSetupData) {
+      return res.status(503).json({ error: 'Rüstdaten werden noch geladen' });
+    }
+    
+    const poolTL = await getPoolTL();
+    
+    // Find machine definition
+    const machineResult = await poolTL.request()
+      .input('name', sql.VarChar, name)
+      .query('SELECT Id, Name, MagazineSize FROM Machines WHERE Name = @name');
+      
+    if (machineResult.recordset.length === 0) {
+      return res.status(404).json({ error: 'Maschine nicht gefunden' });
+    }
+    
+    const machine = machineResult.recordset[0];
+    const magazineSize = machine.MagazineSize || 40;
+    
+    // Get initial tools in machine from ProgramToTool
+    const programResult = await poolTL.request()
+      .input('machineId', sql.Int, machine.Id)
+      .query(`
+        SELECT TOP 1 Id FROM MachineToProgram WHERE Machine = @machineId
+        ORDER BY 
+          CASE 
+            WHEN ProgramName LIKE '%geparkt%' THEN 1
+            WHEN ProgramName LIKE '%Parkplatz%' THEN 2
+            WHEN ProgramName LIKE '%Geparkt%' THEN 3
+            ELSE 4
+          END ASC
+      `);
+      
+    let initialToolNrs = [];
+    if (programResult.recordset.length > 0) {
+      const toolsResult = await poolTL.request()
+        .input('programId', sql.Int, programResult.recordset[0].Id)
+        .query('SELECT ToolName FROM ProgramToTool WHERE MachineToProgramId = @programId');
+        
+      toolsResult.recordset.forEach(t => {
+        const nameStr = t.ToolName || '';
+        const idx = nameStr.lastIndexOf('-');
+        if (idx !== -1) {
+          const suffix = nameStr.substring(idx + 1);
+          const nr = parseInt(suffix, 10);
+          if (!isNaN(nr)) {
+            initialToolNrs.push(nr);
+          }
+        }
+      });
+    }
+    
+    // Map machine to D4 machine/pool IDs
+    const mapping = mapToollistMachineToD4(name);
+    
+    // Filter and sort upcoming orders chronologically
+    let { steps, listToToolsMap, toolsDetails } = cachedSetupData;
+    
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const todayStr = `${year}-${month}-${day}`;
+
+    let machineSteps = steps.filter(step => {
+      if (!step.DeliveryDate) return false;
+      const stepDateStr = new Date(step.DeliveryDate).toISOString().substring(0, 10);
+      // Include past steps only if they are not finished (StatusProduction !== 1)
+      if (stepDateStr < todayStr && step.StatusProduction === 1) return false;
+      return mapping.machineIds.includes(step.MachineId) || mapping.poolIds.includes(step.MachinePoolId);
+    });
+    
+    machineSteps.sort((a, b) => new Date(a.DeliveryDate) - new Date(b.DeliveryDate));
+    
+    // Run simulation step-by-step
+    let virtualMagazine = [...initialToolNrs].slice(0, magazineSize);
+    let lastUsedIndex = {}; // toolNr -> step index when last used
+    
+    // Initialize last used indexes for tools in magazine
+    virtualMagazine.forEach(tNr => {
+      lastUsedIndex[tNr] = -1;
+    });
+    
+    const simulatedTimeline = [];
+    const loadedToolsSet = new Set(); // holds all tool Nrs that had to be loaded/setup
+    
+    machineSteps.forEach((step, idx) => {
+      const stepDateStr = step.DeliveryDate ? new Date(step.DeliveryDate).toISOString().substring(0, 10) : '';
+      
+      // Stop condition: if targetDate is provided and this step is after targetDate, we don't apply it to the magazine
+      const isPastTarget = targetDate && stepDateStr > targetDate;
+      
+      const stepToolNrs = listToToolsMap[step.MatchedListNr] || [];
+      const hits = [];
+      const misses = [];
+      
+      if (!isPastTarget) {
+        stepToolNrs.forEach(tNr => {
+          if (virtualMagazine.includes(tNr)) {
+            hits.push(tNr);
+          } else {
+            misses.push(tNr);
+          }
+        });
+        
+        // Eviction / Insert loop for misses
+        misses.forEach(tNr => {
+          loadedToolsSet.add(tNr);
+          
+          // Evict candidates until we have room under magazineSize, if possible
+          while (virtualMagazine.length >= magazineSize) {
+            const candidates = virtualMagazine.filter(mNr => !stepToolNrs.includes(mNr));
+            if (candidates.length === 0) {
+              break; // No more tools can be evicted because they are all required in the current step
+            }
+            
+            // Find the LRU candidate
+            let victim = candidates[0];
+            let oldestIndex = lastUsedIndex[victim] !== undefined ? lastUsedIndex[victim] : -2;
+            
+            candidates.forEach(cand => {
+              const candIndex = lastUsedIndex[cand] !== undefined ? lastUsedIndex[cand] : -2;
+              if (candIndex < oldestIndex) {
+                oldestIndex = candIndex;
+                victim = cand;
+              }
+            });
+            
+            // Remove victim
+            virtualMagazine = virtualMagazine.filter(mNr => mNr !== victim);
+          }
+          
+          // Now add the new tool
+          virtualMagazine.push(tNr);
+        });
+        
+        // Update last used indexes for all tools active in this step
+        stepToolNrs.forEach(tNr => {
+          lastUsedIndex[tNr] = idx;
+        });
+      }
+      
+      simulatedTimeline.push({
+        stepId: step.StepId,
+        desc: step.StepDesc.trim().replace(/\s+/g, ' '),
+        date: stepDateStr,
+        setupTime: step.SetupTime,
+        programName: step.NCProgram || null,
+        toolsCount: stepToolNrs.length,
+        hitsCount: hits.length,
+        missesCount: misses.length,
+        misses: misses.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt' }),
+        magazineTools: virtualMagazine.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' }),
+        occupiedSlots: virtualMagazine.length,
+        isFeasible: virtualMagazine.length <= magazineSize,
+        isPastTarget
+      });
+    });
+    
+    // Resolve final magazine tools details
+    const finalMagazineResolved = virtualMagazine.map(tNr => {
+      return toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' };
+    });
+    
+    // Resolve aggregated setup tools (that had to be loaded)
+    const setupToolsResolved = Array.from(loadedToolsSet).map(tNr => {
+      return toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' };
+    });
+    
+    // Resolve parts for setup tools
+    let setupParts = [];
+    if (setupToolsResolved.length > 0) {
+      try {
+        const poolWT = await getPoolWT();
+        const setupToolIds = setupToolsResolved.map(t => t.nr);
+        const partsResult = await poolWT.request().query(`
+          SELECT
+            tp.ToolNr, tp.Pos as PartPos, tp.Nbr as PartQty,
+            p.Nr as PartNr, p.Descript as PartDesc, p.KeyWord as PartKeyWord
+          FROM [WTDATA].[dbo].[ToolParts] tp
+          INNER JOIN [WTDATA].[dbo].[Parts] p ON p.ID = tp.PartID
+          WHERE tp.ToolNr IN (${setupToolIds.join(',')})
+          ORDER BY p.Nr, tp.Pos
+        `);
+        
+        const partsMap = {};
+        partsResult.recordset.forEach(row => {
+          const partNr = row.PartNr ? row.PartNr.toString().trim() : 'Unbekannt';
+          if (!partsMap[partNr]) {
+            partsMap[partNr] = {
+              partNr,
+              desc: row.PartDesc ? row.PartDesc.toString().trim() : '',
+              keyword: row.PartKeyWord ? row.PartKeyWord.toString().trim() : '',
+              totalQty: 0,
+              tools: []
+            };
+          }
+          const tDetail = toolsDetails[row.ToolNr];
+          if (tDetail) {
+            partsMap[partNr].totalQty += (row.PartQty || 1);
+            partsMap[partNr].tools.push({
+              toolNr: row.ToolNr,
+              desc: tDetail.desc,
+              partQty: row.PartQty || 1
+            });
+          }
+        });
+        setupParts = Object.values(partsMap).sort((a, b) => b.totalQty - a.totalQty);
+      } catch (err) {
+        console.error('Error fetching parts for simulated setup tools:', err);
+      }
+    }
+    
+    res.json({
+      machineName: name,
+      magazineSize,
+      initialToolsCount: initialToolNrs.length,
+      simulatedTimeline,
+      finalMagazine: finalMagazineResolved,
+      setupTools: setupToolsResolved,
+      setupParts
+    });
+  } catch (err) {
+    console.error('Error running inventory simulation:', err);
     res.status(500).json({ error: err.message });
   }
 });

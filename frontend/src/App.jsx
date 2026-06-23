@@ -1233,164 +1233,607 @@ function StandardizationTab() {
   );
 }
 
-// 4. Demand Timeline Tab
+// 4. Demand Timeline Tab (Machine Magazine Simulation & Future Projections)
 function DemandTab({ startDate, endDate }) {
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [machines, setMachines] = useState([]);
+  const [selectedMachineName, setSelectedMachineName] = useState('');
+  const [loadingMachines, setLoadingMachines] = useState(true);
+  const getDefaultTargetDate = () => {
+    const today = new Date();
+    today.setDate(today.getDate() + 90);
+    const y = today.getFullYear();
+    const m = String(today.getMonth() + 1).padStart(2, '0');
+    const d = String(today.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const [targetDate, setTargetDate] = useState(getDefaultTargetDate()); // default simulation stop point (90 days from today)
+  
+  const [simData, setSimData] = useState(null);
+  const [currentTools, setCurrentTools] = useState([]);
+  const [loadingSim, setLoadingSim] = useState(true);
+  
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [rightTab, setRightTab] = useState('magazine'); // 'magazine' or 'setup'
+  const [magComparisonTab, setMagComparisonTab] = useState('future'); // 'current' or 'future'
+  const [modalTab, setModalTab] = useState('setup'); // 'setup' or 'magazine' inside order details modal
+  
+  const [expandedPartNrs, setExpandedPartNrs] = useState(new Set());
   const [filterKw, setFilterKw] = useState('');
-  const [selectedPoint, setSelectedPoint] = useState(null);
 
+  // Fetch machines catalog
   useEffect(() => {
-    fetchDemand();
-  }, [startDate, endDate]);
+    const fetchMachines = async () => {
+      try {
+        setLoadingMachines(true);
+        const res = await fetch(`${API_BASE}/inventory/machines`);
+        const mData = await res.json();
+        setMachines(mData);
+        if (mData.length > 0) {
+          // Default to C400 or first machine
+          const defaultMach = mData.find(m => m.Name === 'C400') || mData[0];
+          setSelectedMachineName(defaultMach.Name);
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoadingMachines(false);
+      }
+    };
+    fetchMachines();
+  }, []);
 
-  const fetchDemand = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch(`${API_BASE}/demand?startDate=${startDate}&endDate=${endDate}`);
-      const rData = await res.json();
-      setData(rData);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Fetch simulation data and current tools when machine or targetDate changes
+  useEffect(() => {
+    if (!selectedMachineName) return;
+    const fetchSimAndTools = async () => {
+      try {
+        setLoadingSim(true);
+        
+        // 1. Fetch simulation
+        const simRes = await fetch(`${API_BASE}/inventory/machine/${selectedMachineName}/simulation?targetDate=${targetDate}`);
+        const sData = await simRes.json();
+        setSimData(sData);
+        
+        // 2. Fetch current tools
+        const toolsRes = await fetch(`${API_BASE}/inventory/machine/${selectedMachineName}/current-tools`);
+        const tData = await toolsRes.json();
+        setCurrentTools(tData);
+        
+        setSelectedOrder(null);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoadingSim(false);
+      }
+    };
+    fetchSimAndTools();
+  }, [selectedMachineName, targetDate]);
 
-  const getFilteredData = () => {
-    if (!filterKw) return data;
-    return data.map(pt => {
-      const filteredTools = pt.tools.filter(t => 
-        (t.details.desc || '').toLowerCase().includes(filterKw.toLowerCase()) ||
-        (t.details.keyword || '').toLowerCase().includes(filterKw.toLowerCase())
-      );
-      const totalTools = filteredTools.reduce((acc, curr) => acc + curr.quantity, 0);
-      return { ...pt, totalTools, tools: filteredTools };
-    }).filter(pt => pt.totalTools > 0);
-  };
-
-  const filteredTimeline = getFilteredData();
-
-  if (loading) {
-    return <div style={{ color: '#64748b' }}>Lade Bedarfsplanung...</div>;
+  if (loadingMachines || !selectedMachineName) {
+    return <div style={{ color: '#64748b', padding: '2rem' }}>Lade Maschinenbestand...</div>;
   }
 
+  // Filter simulation parts strictly by componentFilter
+  const filteredSetupParts = simData?.setupParts.filter(p => {
+    if (!filterKw) return true;
+    const search = filterKw.toLowerCase();
+    return (
+      (p.desc || '').toLowerCase().includes(search) ||
+      (p.partNr || '').toLowerCase().includes(search) ||
+      (p.keyword || '').toLowerCase().includes(search)
+    );
+  }) || [];
+
   return (
-    <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', gap: '1.5rem', height: 'calc(100vh - 120px)', overflow: 'hidden' }}>
-      <div className="glass-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.5rem' }}>
-        <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
-          <h3 style={{ fontWeight: 600 }}>Werkzeugbedarf im Zeitverlauf</h3>
-          <div className="search-input-wrapper" style={{ width: '250px' }}>
-            <Search className="search-icon" />
-            <input 
-              type="text" 
-              placeholder="Filter Werkzeugtyp / Name..." 
-              className="search-input" 
-              value={filterKw}
-              onChange={(e) => { setFilterKw(e.target.value); setSelectedPoint(null); }}
-              style={{ padding: '0.5rem 1rem 0.5rem 2.25rem', fontSize: '0.85rem' }}
-            />
-          </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'calc(100vh - 120px)', overflowY: 'auto' }}>
+      {/* Simulation Toolbar */}
+      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '2rem', alignItems: 'center', padding: '1.5rem' }}>
+        <div>
+          <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600, textTransform: 'uppercase' }}>Magazin- & Rüstsimulation</span>
+          <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '0.25rem' }}>Magazin-Bedarfsprognose</h3>
+          <p style={{ color: '#94a3b8', fontSize: '0.8rem', lineHeight: '1.4' }}>
+            Ausgehend vom Ist-Bestand der Maschine simuliert das System den zukünftigen Rüst- und Magazinbelegungsstand.
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <span style={{ color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 600 }}>Maschine auswählen:</span>
+          <select
+            value={selectedMachineName}
+            onChange={(e) => setSelectedMachineName(e.target.value)}
+            style={{
+              background: 'rgba(13, 20, 35, 0.6)',
+              border: '1px solid var(--border-glow)',
+              borderRadius: '10px',
+              color: '#fff',
+              fontSize: '0.85rem',
+              padding: '0.45rem 0.75rem',
+              outline: 'none',
+              cursor: 'pointer',
+              width: '100%'
+            }}
+          >
+            {machines.map(m => (
+              <option key={m.Id} value={m.Name}>
+                {m.Name} (Magazin: {m.MagazineSize} Plätze)
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <span style={{ color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 600 }}>Simulationsdatum (bis in die Zukunft):</span>
+          <input
+            type="date"
+            value={targetDate}
+            onChange={(e) => setTargetDate(e.target.value)}
+            style={{
+              background: 'rgba(30, 41, 59, 0.4)',
+              border: '1px solid var(--border-dim)',
+              borderRadius: '10px',
+              color: '#fff',
+              fontSize: '0.85rem',
+              padding: '0.4rem 0.75rem',
+              outline: 'none',
+              width: '100%'
+            }}
+          />
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1.5rem', overflow: 'hidden', height: '100%' }}>
-        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-          <div style={{ marginBottom: '1rem' }}>
-            <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: '#10b981', fontWeight: 600 }}>Bedarfsprognose</span>
-            <h4 style={{ fontSize: '0.95rem', fontWeight: 600 }}>Gesamtbedarf an Werkzeugteilen (Stück)</h4>
-          </div>
-          
-          <div style={{ flexGrow: 1, width: '100%', minHeight: 0 }}>
-            {filteredTimeline.length === 0 ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#475569' }}>
-                Keine Bedarfsdaten im ausgewählten Filter.
+      {loadingSim && !simData ? (
+        <div style={{ color: '#64748b', padding: '2rem' }}>Berechne Magazinsimulation...</div>
+      ) : (
+        <div className="grid-main-2" style={{ alignItems: 'start' }}>
+          {/* Left Column: Timeline and Scheduled Orders */}
+          <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: '600px' }}>
+            <div style={{ borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: '#3b82f6', fontWeight: 600, textTransform: 'uppercase' }}>Chronologischer Ablauf</span>
+                <h4 style={{ fontSize: '1rem', fontWeight: 700 }}>Geplante Produktionsaufträge</h4>
               </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="95%">
-                <AreaChart
-                  data={filteredTimeline}
-                  onClick={(e) => {
-                    if (e && e.activePayload && e.activePayload[0]) {
-                      setSelectedPoint(e.activePayload[0].payload);
-                    }
-                  }}
-                  margin={{ top: 10, right: 20, left: 0, bottom: 0 }}
-                >
-                  <defs>
-                    <linearGradient id="colorDemand" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.25}/>
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" />
-                  <XAxis 
-                    dataKey="date" 
-                    stroke="#475569" 
-                    fontSize={11}
-                    tickFormatter={(str) => {
-                      try {
-                        const d = new Date(str);
-                        return d.toLocaleDateString('de-DE', { month: 'short', day: 'numeric' });
-                      } catch(e) { return str; }
+              <span className="badge badge-blue">
+                {simData?.simulatedTimeline.filter(s => !s.isPastTarget).length} bis Zieldatum
+              </span>
+            </div>
+
+            <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: '0.35rem' }}>
+              {simData?.simulatedTimeline.map((step, idx) => {
+                const isSelected = selectedOrder?.stepId === step.stepId;
+                
+                // Color badge based on rüst misses
+                let borderLeftColor = '#10b981'; // Green (0 misses)
+                let badgeClass = 'badge-green';
+                if (step.missesCount > 0) {
+                  borderLeftColor = '#f59e0b'; // Orange
+                  badgeClass = 'badge-orange';
+                }
+                if (!step.isFeasible) {
+                  borderLeftColor = '#ef4444'; // Red (overflow)
+                  badgeClass = 'badge-red';
+                }
+                if (step.isPastTarget) {
+                  borderLeftColor = 'rgba(100, 116, 139, 0.4)'; // Dim/Grey (after target date)
+                }
+
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => setSelectedOrder(step)}
+                    style={{
+                      padding: '0.75rem 1rem',
+                      background: isSelected ? 'rgba(59, 130, 246, 0.08)' : 'rgba(255,255,255,0.01)',
+                      border: isSelected ? '1px solid var(--border-glow)' : '1px solid var(--border-dim)',
+                      borderLeft: `4px solid ${borderLeftColor}`,
+                      borderRadius: '10px',
+                      cursor: 'pointer',
+                      opacity: step.isPastTarget ? 0.5 : 1,
+                      transition: 'border-color 0.2s, background 0.2s',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.35rem'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontWeight: 600 }}>
+                        {step.date ? new Date(step.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : 'Kein Datum'}
+                        {step.isPastTarget && <span style={{ marginLeft: '0.5rem', color: '#64748b' }}>(Nach Zieldatum)</span>}
+                      </span>
+                      <span className={`badge ${badgeClass}`} style={{ fontSize: '0.7rem' }}>
+                        {step.missesCount} Rüsttools
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#fff', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {step.desc}
+                      </div>
+                      <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
+                        {step.toolsCount} Tools ges.
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', color: '#64748b' }}>
+                      <span>Prog: <strong>{step.programName || 'N/A'}</strong></span>
+                      <span>Magazinbel.: <strong>{step.occupiedSlots} / {simData?.magazineSize}</strong></span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Right Column: Magazine state & Swaps / Parts catalog */}
+          <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: '600px', overflow: 'hidden' }}>
+            {/* Top Sub-tabs */}
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.5rem' }}>
+              <button
+                onClick={() => setRightTab('magazine')}
+                style={{
+                  background: rightTab === 'magazine' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                  border: 'none',
+                  color: rightTab === 'magazine' ? '#fff' : '#64748b',
+                  padding: '0.4rem 0.8rem',
+                  borderRadius: '6px',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                Magazinbelegung ({rightTab === 'magazine' && magComparisonTab === 'current' ? currentTools.length : simData?.finalMagazine.length})
+              </button>
+              <button
+                onClick={() => setRightTab('setup')}
+                style={{
+                  background: rightTab === 'setup' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                  border: 'none',
+                  color: rightTab === 'setup' ? '#fff' : '#64748b',
+                  padding: '0.4rem 0.8rem',
+                  borderRadius: '6px',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                Rüstbedarf ({simData?.setupTools.length} Tools)
+              </button>
+            </div>
+
+            {/* TAB CONTENT 1: MAGAZINE STATE */}
+            {rightTab === 'magazine' && (
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+                <p style={{ color: '#64748b', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+                  Vergleichen Sie den aktuellen Werkzeugbestand der Maschine mit dem simulierten Bestand nach Ablauf der Aufträge bis zum Zieldatum.
+                </p>
+
+                {/* Compare toggle switches */}
+                <div style={{ display: 'flex', gap: '0.25rem', padding: '0.25rem', background: 'rgba(30, 41, 59, 0.3)', borderRadius: '8px', marginBottom: '0.75rem' }}>
+                  <button
+                    onClick={() => setMagComparisonTab('current')}
+                    style={{
+                      flexGrow: 1,
+                      background: magComparisonTab === 'current' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                      border: 'none',
+                      color: magComparisonTab === 'current' ? '#3b82f6' : '#94a3b8',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      padding: '0.35rem',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      outline: 'none'
+                    }}
+                  >
+                    Aktueller Ist-Bestand ({currentTools.length})
+                  </button>
+                  <button
+                    onClick={() => setMagComparisonTab('future')}
+                    style={{
+                      flexGrow: 1,
+                      background: magComparisonTab === 'future' ? 'rgba(16, 185, 129, 0.2)' : 'transparent',
+                      border: 'none',
+                      color: magComparisonTab === 'future' ? '#10b981' : '#94a3b8',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      padding: '0.35rem',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      outline: 'none'
+                    }}
+                  >
+                    Zukünftiger Stand ({simData?.finalMagazine.length} / {simData?.magazineSize})
+                  </button>
+                </div>
+
+                <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingRight: '0.25rem' }}>
+                  {magComparisonTab === 'current' ? (
+                    currentTools.length === 0 ? (
+                      <div style={{ color: '#475569', fontStyle: 'italic', textAlign: 'center', padding: '2rem' }}>
+                        Keine belegten Werkzeuge in dieser Maschine registriert.
+                      </div>
+                    ) : (
+                      currentTools.map((t, i) => (
+                        <div key={i} style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>{t.desc}</div>
+                            <div style={{ fontSize: '0.65rem', color: '#64748b' }}>
+                              Typ: {t.keyword} | Ø {t.dia}mm | Name: {t.toolName}
+                            </div>
+                          </div>
+                          <span className="badge badge-blue" style={{ fontSize: '0.7rem' }}>T {t.pocket}</span>
+                        </div>
+                      ))
+                    )
+                  ) : (
+                    simData?.finalMagazine.length === 0 ? (
+                      <div style={{ color: '#475569', fontStyle: 'italic', textAlign: 'center', padding: '2rem' }}>
+                        Virtuelles Magazin leer.
+                      </div>
+                    ) : (
+                      simData?.finalMagazine.map((t, i) => (
+                        <div key={i} style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>{t.desc || 'Unbekannt'}</div>
+                            <div style={{ fontSize: '0.65rem', color: '#64748b' }}>
+                              Typ: {t.keyword || 'N/A'} | Ø {t.dia || 0}mm | ID: {t.nr}
+                            </div>
+                          </div>
+                          <span className="badge badge-green" style={{ fontSize: '0.7rem' }}>Belegt</span>
+                        </div>
+                      ))
+                    )
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB CONTENT 2: SETUP DEMAND */}
+            {rightTab === 'setup' && (
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+                <p style={{ color: '#64748b', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+                  Aufstellung aller Werkzeuge und physischen Komponenten, die für die anstehenden Aufträge bis zum Zieldatum neu gerüstet werden müssen.
+                </p>
+
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <input
+                    type="text"
+                    placeholder="Komponenten filtern (z.B. HSK63, Weldon)..."
+                    value={filterKw}
+                    onChange={(e) => setFilterKw(e.target.value)}
+                    style={{
+                      background: 'rgba(30, 41, 59, 0.4)',
+                      border: '1px solid var(--border-dim)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.8rem',
+                      padding: '0.35rem 0.75rem',
+                      outline: 'none',
+                      width: '100%'
                     }}
                   />
-                  <YAxis stroke="#475569" fontSize={11} />
-                  <Tooltip 
-                    contentStyle={{ background: '#0a0f1d', borderColor: 'rgba(255,255,255,0.08)', borderRadius: '10px' }}
-                    labelStyle={{ fontWeight: 600, color: '#fff' }}
-                  />
-                  <Area type="monotone" dataKey="totalTools" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorDemand)" name="Werkzeugbedarf" />
-                </AreaChart>
-              </ResponsiveContainer>
+                </div>
+
+                <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingRight: '0.25rem' }}>
+                  {filteredSetupParts.length === 0 ? (
+                    <div style={{ color: '#475569', fontStyle: 'italic', textAlign: 'center', padding: '2rem' }}>
+                      Keine neu zu rüstenden Komponenten im Filterbereich gefunden.
+                    </div>
+                  ) : (
+                    filteredSetupParts.map((p, idx) => {
+                      const isPartExpanded = expandedPartNrs.has(p.partNr);
+                      return (
+                        <div
+                          key={p.partNr}
+                          onClick={() => {
+                            const newExpanded = new Set(expandedPartNrs);
+                            if (newExpanded.has(p.partNr)) {
+                              newExpanded.delete(p.partNr);
+                            } else {
+                              newExpanded.add(p.partNr);
+                            }
+                            setExpandedPartNrs(newExpanded);
+                          }}
+                          style={{
+                            padding: '0.65rem 0.75rem',
+                            background: 'rgba(255,255,255,0.015)',
+                            border: '1px solid var(--border-dim)',
+                            borderRadius: '8px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.5rem',
+                            cursor: 'pointer',
+                            transition: 'border-color 0.2s',
+                            userSelect: 'none'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                            <div>
+                              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span>{idx + 1}. {p.desc || 'Komponente'}</span>
+                                <span style={{ fontSize: '0.6rem', color: '#64748b' }}>{isPartExpanded ? '▲' : '▼'}</span>
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                                Teile-Nr: {p.partNr} | Typ: {p.keyword || 'N/A'}
+                              </div>
+                            </div>
+                            <span className="badge badge-green" style={{ flexShrink: 0 }}>Menge: {p.totalQty}</span>
+                          </div>
+
+                          {isPartExpanded && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              style={{
+                                borderTop: '1px dashed var(--border-dim)',
+                                paddingTop: '0.5rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.35rem',
+                                width: '100%'
+                              }}
+                            >
+                              <div style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.15rem' }}>
+                                Benötigt in folgenden Rüstwerkzeugen:
+                              </div>
+                              {p.tools.map((t, tIdx) => (
+                                <div
+                                  key={tIdx}
+                                  style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    background: 'rgba(13, 20, 35, 0.3)',
+                                    padding: '0.35rem 0.5rem',
+                                    borderRadius: '6px',
+                                    fontSize: '0.75rem'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <span style={{ color: '#fff', fontWeight: 500 }}>{t.desc}</span>
+                                    <span style={{ color: '#64748b', fontSize: '0.65rem' }}>
+                                      Werkzeug-ID: {t.toolNr}
+                                    </span>
+                                  </div>
+                                  <span className="badge badge-blue" style={{ fontSize: '0.7rem' }}>
+                                    Bedarf: {t.partQty}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>
+      )}
 
-        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-          {selectedPoint ? (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-              <div style={{ borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem', marginBottom: '1rem' }}>
-                <span style={{ fontSize: '0.7rem', color: '#3b82f6', fontWeight: 600, textTransform: 'uppercase' }}>Bedarfsdetails</span>
-                <h4 style={{ fontSize: '1.1rem', fontWeight: 700 }}>
-                  {new Date(selectedPoint.date).toLocaleDateString('de-DE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                </h4>
-                <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.15rem' }}>
-                  Gesamtwerkzeuge: <strong>{selectedPoint.totalTools}</strong> Stück
-                </div>
+      {/* Order click detail inspect overlay modal/panel */}
+      {selectedOrder && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+          background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(3px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+        }} onClick={() => setSelectedOrder(null)}>
+          <div style={{
+            background: '#0a0f1d', border: '1px solid var(--border-glow)',
+            borderRadius: '16px', padding: '1.5rem', width: '500px', maxHeight: '80vh',
+            display: 'flex', flexDirection: 'column', gap: '1rem'
+          }} onClick={(e) => e.stopPropagation()}>
+            <div>
+              <span style={{ fontSize: '0.7rem', color: '#3b82f6', fontWeight: 600, textTransform: 'uppercase' }}>Details zum Arbeitsgang</span>
+              <h4 style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fff' }}>{selectedOrder.desc}</h4>
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '0.25rem', fontSize: '0.75rem', color: '#94a3b8' }}>
+                <span>Datum: <strong>{selectedOrder.date ? new Date(selectedOrder.date).toLocaleDateString('de-DE') : 'N/A'}</strong></span>
+                <span>Programm: <strong>{selectedOrder.programName || 'N/A'}</strong></span>
               </div>
+            </div>
 
-              <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {selectedPoint.tools.map((t, i) => (
-                  <div 
-                    key={i} 
-                    style={{
-                      padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.01)',
-                      border: '1px solid var(--border-dim)', borderRadius: '10px',
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#fff' }}>{t.details.desc}</div>
-                      <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '0.15rem' }}>
-                        Typ: {t.details.keyword || 'N/A'} | Ø {t.details.dia || 0}mm | ID: {t.toolNr}
-                      </div>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div className="glass-card" style={{ flexGrow: 1, padding: '0.50rem 0.75rem', textAlign: 'center', background: 'rgba(59, 130, 246, 0.03)' }}>
+                <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Benötigt</div>
+                <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fff' }}>{selectedOrder.toolsCount}</div>
+              </div>
+              <div className="glass-card" style={{ flexGrow: 1, padding: '0.50rem 0.75rem', textAlign: 'center', background: 'rgba(16, 185, 129, 0.03)' }}>
+                <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Vorhanden</div>
+                <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#10b981' }}>{selectedOrder.hitsCount}</div>
+              </div>
+              <div className="glass-card" style={{ flexGrow: 1, padding: '0.50rem 0.75rem', textAlign: 'center', background: 'rgba(245, 158, 11, 0.03)' }}>
+                <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Neu Rüsten</div>
+                <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#f59e0b' }}>{selectedOrder.missesCount}</div>
+              </div>
+            </div>
+
+            {/* Modal Tabs */}
+            <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.5rem' }}>
+              <button
+                onClick={() => setModalTab('setup')}
+                style={{
+                  background: modalTab === 'setup' ? 'rgba(245, 158, 11, 0.15)' : 'transparent',
+                  border: 'none',
+                  color: modalTab === 'setup' ? '#fff' : '#64748b',
+                  padding: '0.4rem 0.8rem',
+                  borderRadius: '6px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                Rüstbedarf ({selectedOrder.missesCount})
+              </button>
+              <button
+                onClick={() => setModalTab('magazine')}
+                style={{
+                  background: modalTab === 'magazine' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                  border: 'none',
+                  color: modalTab === 'magazine' ? '#fff' : '#64748b',
+                  padding: '0.4rem 0.8rem',
+                  borderRadius: '6px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                Magazinbelegung ({selectedOrder.magazineTools?.length || 0})
+              </button>
+            </div>
+
+            {/* Tab Contents */}
+            <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {modalTab === 'setup' ? (
+                <>
+                  <span style={{ fontSize: '0.75rem', color: '#cbd5e1', fontWeight: 600 }}>Neu zu rüstende Werkzeuge für diesen Arbeitsschritt:</span>
+                  {selectedOrder.missesCount === 0 ? (
+                    <div style={{ color: '#10b981', fontSize: '0.8rem', fontStyle: 'italic', padding: '1rem 0' }}>
+                      Alle benötigten Werkzeuge bereits im Magazin geladen.
                     </div>
-                    <span className="badge badge-purple" style={{ fontSize: '0.8rem', padding: '0.35rem 0.5rem' }}>
-                      x {t.quantity}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                  ) : (
+                    selectedOrder.misses.map((t, idx) => (
+                      <div key={idx} style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>{t.desc}</div>
+                          <div style={{ fontSize: '0.65rem', color: '#64748b' }}>ID: {t.nr} | Typ: {t.keyword || 'N/A'}</div>
+                        </div>
+                        <span className="badge badge-orange" style={{ fontSize: '0.7rem' }}>Neu laden</span>
+                      </div>
+                    ))
+                  )}
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: '0.75rem', color: '#cbd5e1', fontWeight: 600 }}>Im Magazin geladene Werkzeuge nach diesem Schritt (Stand X):</span>
+                  {!selectedOrder.magazineTools || selectedOrder.magazineTools.length === 0 ? (
+                    <div style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic', padding: '1rem 0' }}>
+                      Magazin ist leer.
+                    </div>
+                  ) : (
+                    selectedOrder.magazineTools.map((t, idx) => (
+                      <div key={idx} style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>{t.desc || 'Unbekannt'}</div>
+                          <div style={{ fontSize: '0.65rem', color: '#64748b' }}>ID: {t.nr} | Typ: {t.keyword || 'N/A'}</div>
+                        </div>
+                        <span className="badge badge-green" style={{ fontSize: '0.7rem' }}>Belegt</span>
+                      </div>
+                    ))
+                  )}
+                </>
+              )}
             </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#475569', textAlign: 'center' }}>
-              <CalendarRange size={36} style={{ marginBottom: '0.75rem', opacity: 0.5 }} />
-              <p style={{ fontWeight: 500, fontSize: '0.95rem', color: '#64748b' }}>Kein Datum gewählt</p>
-            </div>
-          )}
+
+            <button className="btn-secondary" style={{ marginTop: '0.5rem' }} onClick={() => setSelectedOrder(null)}>
+              Schließen
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -1407,6 +1850,8 @@ function SimulationTab({ startDate, endDate }) {
   const [viewDetails, setViewDetails] = useState(false);
   const [componentFilter, setComponentFilter] = useState('');
   const [expandedToolNrs, setExpandedToolNrs] = useState(new Set());
+  const [stammSubTab, setStammSubTab] = useState('tools'); // 'tools' or 'components'
+  const [expandedStammPartNrs, setExpandedStammPartNrs] = useState(new Set());
 
   // Filter base tools by component description, keyword, ID, or part properties
   const filteredBaseTools = simData?.baseTools.filter(tool => {
@@ -1426,6 +1871,47 @@ function SimulationTab({ startDate, endDate }) {
     }
     return false;
   }) || [];
+
+  // Calculate consolidated components for the proposed base tools
+  const accumulatedStammParts = (() => {
+    const partsMap = {};
+    const toolsToAccumulate = simData?.baseTools || [];
+    toolsToAccumulate.forEach(tool => {
+      if (tool.parts && Array.isArray(tool.parts)) {
+        tool.parts.forEach(p => {
+          const partNr = p.partNr || 'Unbekannt';
+          if (!partsMap[partNr]) {
+            partsMap[partNr] = {
+              partNr,
+              desc: p.partDesc || '',
+              keyword: p.partKeyWord || '',
+              totalQty: 0,
+              tools: []
+            };
+          }
+          partsMap[partNr].totalQty += (p.partQty || 1);
+          partsMap[partNr].tools.push({
+            toolNr: tool.nr,
+            desc: tool.desc,
+            partQty: p.partQty || 1,
+            usesCount: tool.usesCount
+          });
+        });
+      }
+    });
+    return Object.values(partsMap).sort((a, b) => b.totalQty - a.totalQty);
+  })();
+
+  // Filter components directly for the Components sub-tab
+  const filteredAccumulatedStammParts = accumulatedStammParts.filter(p => {
+    if (!componentFilter) return true;
+    const search = componentFilter.toLowerCase();
+    return (
+      (p.desc || '').toLowerCase().includes(search) ||
+      (p.partNr || '').toLowerCase().includes(search) ||
+      (p.keyword || '').toLowerCase().includes(search)
+    );
+  });
 
   // Fetch machines/pools catalog on mount
   useEffect(() => {
@@ -1702,12 +2188,55 @@ function SimulationTab({ startDate, endDate }) {
             </div>
 
             <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: '500px', overflow: 'hidden' }}>
-              <h3 style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Top Stamm-Werkzeuge ({baseSetSize})</h3>
-              
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <h3 style={{ fontWeight: 600 }}>Stamm-Bestandteile</h3>
+              </div>
+
+              {/* Sub-tab Toggle buttons */}
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.5rem' }}>
+                <button 
+                  onClick={() => setStammSubTab('tools')}
+                  style={{
+                    background: stammSubTab === 'tools' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                    border: 'none',
+                    color: stammSubTab === 'tools' ? '#fff' : '#64748b',
+                    padding: '0.35rem 0.7rem',
+                    borderRadius: '6px',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    outline: 'none'
+                  }}
+                >
+                  Werkzeuge ({filteredBaseTools.length})
+                </button>
+                <button 
+                  onClick={() => setStammSubTab('components')}
+                  style={{
+                    background: stammSubTab === 'components' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                    border: 'none',
+                    color: stammSubTab === 'components' ? '#fff' : '#64748b',
+                    padding: '0.35rem 0.7rem',
+                    borderRadius: '6px',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    outline: 'none'
+                  }}
+                >
+                  Komponenten ({filteredAccumulatedStammParts.length})
+                </button>
+              </div>
+
+              {/* Shared Search Filter Input */}
               <div style={{ marginBottom: '0.75rem' }}>
                 <input
                   type="text"
-                  placeholder="Komponenten filtern (z.B. HSK63, Weldon)..."
+                  placeholder={
+                    stammSubTab === 'tools' 
+                      ? "Werkzeuge nach Name, ID oder Komponenten filtern (z.B. HSK63)..." 
+                      : "Komponenten nach Name, Nummer oder Typ filtern..."
+                  }
                   value={componentFilter}
                   onChange={(e) => setComponentFilter(e.target.value)}
                   style={{
@@ -1722,94 +2251,184 @@ function SimulationTab({ startDate, endDate }) {
                   }}
                 />
               </div>
-
-              <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {filteredBaseTools.map((tool, idx) => {
-                  const isExpanded = expandedToolNrs.has(tool.nr);
-                  return (
-                    <div 
-                      key={tool.nr} 
-                      onClick={() => {
-                        const newExpanded = new Set(expandedToolNrs);
-                        if (newExpanded.has(tool.nr)) {
-                          newExpanded.delete(tool.nr);
-                        } else {
-                          newExpanded.add(tool.nr);
-                        }
-                        setExpandedToolNrs(newExpanded);
-                      }}
-                      style={{
-                        padding: '0.65rem 0.75rem', background: 'rgba(255,255,255,0.015)',
-                        border: '1px solid var(--border-dim)', borderRadius: '8px',
-                        display: 'flex', flexDirection: 'column', gap: '0.5rem',
-                        cursor: 'pointer', transition: 'border-color 0.2s',
-                        userSelect: 'none'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                        <div>
-                          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span>{idx + 1}. {tool.desc}</span>
-                            <span style={{ fontSize: '0.6rem', color: '#64748b' }}>{isExpanded ? '▲' : '▼'}</span>
-                          </div>
-                          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                            Ø {tool.dia || 0}mm | ID: {tool.nr}
-                          </div>
-                        </div>
-                        <span className="badge badge-blue" style={{ flexShrink: 0 }}>{tool.usesCount} Listen</span>
-                      </div>
-                      
-                      {isExpanded && (
-                        <div 
-                          onClick={(e) => e.stopPropagation()}
-                          style={{
-                            borderTop: '1px dashed var(--border-dim)',
-                            paddingTop: '0.5rem',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.35rem',
-                            width: '100%'
-                          }}
-                        >
-                          <div style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>
-                            Werkzeug-Bestandteile (Aufnahme etc.):
-                          </div>
-                          {(!tool.parts || tool.parts.length === 0) ? (
-                            <div style={{ fontSize: '0.7rem', color: '#64748b', fontStyle: 'italic' }}>
-                              Keine Bestandteile in WinTool gepflegt.
+              
+              {stammSubTab === 'tools' ? (
+                <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {filteredBaseTools.map((tool, idx) => {
+                    const isExpanded = expandedToolNrs.has(tool.nr);
+                    return (
+                      <div 
+                        key={tool.nr} 
+                        onClick={() => {
+                          const newExpanded = new Set(expandedToolNrs);
+                          if (newExpanded.has(tool.nr)) {
+                            newExpanded.delete(tool.nr);
+                          } else {
+                            newExpanded.add(tool.nr);
+                          }
+                          setExpandedToolNrs(newExpanded);
+                        }}
+                        style={{
+                          padding: '0.65rem 0.75rem', background: 'rgba(255,255,255,0.015)',
+                          border: '1px solid var(--border-dim)', borderRadius: '8px',
+                          display: 'flex', flexDirection: 'column', gap: '0.5rem',
+                          cursor: 'pointer', transition: 'border-color 0.2s',
+                          userSelect: 'none'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                          <div>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span>{idx + 1}. {tool.desc}</span>
+                              <span style={{ fontSize: '0.6rem', color: '#64748b' }}>{isExpanded ? '▲' : '▼'}</span>
                             </div>
-                          ) : (
-                            tool.parts.map((part, pIdx) => (
-                              <div 
-                                key={pIdx}
-                                style={{
-                                  display: 'flex',
-                                  justifyContent: 'space-between',
-                                  alignItems: 'center',
-                                  background: 'rgba(13, 20, 35, 0.3)',
-                                  padding: '0.35rem 0.5rem',
-                                  borderRadius: '6px',
-                                  fontSize: '0.75rem'
-                                }}
-                              >
-                                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                  <span style={{ color: '#fff', fontWeight: 500 }}>{part.partDesc}</span>
-                                  <span style={{ color: '#64748b', fontSize: '0.65rem' }}>
-                                    Nr: {part.partNr} | Typ: {part.partKeyWord || '-'}
+                            <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                              Ø {tool.dia || 0}mm | ID: {tool.nr}
+                            </div>
+                          </div>
+                          <span className="badge badge-blue" style={{ flexShrink: 0 }}>{tool.usesCount} Listen</span>
+                        </div>
+                        
+                        {isExpanded && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              borderTop: '1px dashed var(--border-dim)',
+                              paddingTop: '0.5rem',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.35rem',
+                              width: '100%'
+                            }}
+                          >
+                            <div style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>
+                              Werkzeug-Bestandteile (Aufnahme etc.):
+                            </div>
+                            {(!tool.parts || tool.parts.length === 0) ? (
+                              <div style={{ fontSize: '0.7rem', color: '#64748b', fontStyle: 'italic' }}>
+                                Keine Bestandteile in WinTool gepflegt.
+                              </div>
+                            ) : (
+                              tool.parts.map((part, pIdx) => (
+                                <div 
+                                  key={pIdx}
+                                  style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    background: 'rgba(13, 20, 35, 0.3)',
+                                    padding: '0.35rem 0.5rem',
+                                    borderRadius: '6px',
+                                    fontSize: '0.75rem'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <span style={{ color: '#fff', fontWeight: 500 }}>{part.partDesc}</span>
+                                    <span style={{ color: '#64748b', fontSize: '0.65rem' }}>
+                                      Nr: {part.partNr} | Typ: {part.partKeyWord || '-'}
+                                    </span>
+                                  </div>
+                                  <span className="badge badge-purple" style={{ fontSize: '0.7rem' }}>
+                                    Menge: {part.partQty}
                                   </span>
                                 </div>
-                                <span className="badge badge-purple" style={{ fontSize: '0.7rem' }}>
-                                  Menge: {part.partQty}
-                                </span>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {filteredAccumulatedStammParts.length === 0 ? (
+                    <div style={{ color: '#475569', textAlign: 'center', padding: '2rem' }}>
+                      Keine Stamm-Komponenten im Filterbereich gefunden.
+                    </div>
+                  ) : (
+                    filteredAccumulatedStammParts.map((p, idx) => {
+                      const isPartExpanded = expandedStammPartNrs.has(p.partNr);
+                      return (
+                        <div 
+                          key={p.partNr}
+                          onClick={() => {
+                            const newExpanded = new Set(expandedStammPartNrs);
+                            if (newExpanded.has(p.partNr)) {
+                              newExpanded.delete(p.partNr);
+                            } else {
+                              newExpanded.add(p.partNr);
+                            }
+                            setExpandedStammPartNrs(newExpanded);
+                          }}
+                          style={{
+                            padding: '0.65rem 0.75rem', background: 'rgba(255,255,255,0.015)',
+                            border: '1px solid var(--border-dim)', borderRadius: '8px',
+                            display: 'flex', flexDirection: 'column', gap: '0.5rem',
+                            cursor: 'pointer', transition: 'border-color 0.2s',
+                            userSelect: 'none'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                            <div>
+                              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span>{idx + 1}. {p.desc || 'Komponente'}</span>
+                                <span style={{ fontSize: '0.6rem', color: '#64748b' }}>{isPartExpanded ? '▲' : '▼'}</span>
                               </div>
-                            ))
+                              <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                                Teile-Nr: {p.partNr} | Typ: {p.keyword || 'N/A'}
+                              </div>
+                            </div>
+                            <span className="badge badge-green" style={{ flexShrink: 0 }}>Menge: {p.totalQty}</span>
+                          </div>
+                          
+                          {isPartExpanded && (
+                            <div 
+                              onClick={(e) => e.stopPropagation()}
+                              style={{
+                                borderTop: '1px dashed var(--border-dim)',
+                                paddingTop: '0.5rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.35rem',
+                                width: '100%'
+                              }}
+                            >
+                              <div style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.15rem' }}>
+                                Benötigt in folgenden Stamm-Werkzeugen:
+                              </div>
+                              {p.tools.map((t, tIdx) => (
+                                <div 
+                                  key={tIdx}
+                                  style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    background: 'rgba(13, 20, 35, 0.3)',
+                                    padding: '0.35rem 0.5rem',
+                                    borderRadius: '6px',
+                                    fontSize: '0.75rem'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <span style={{ color: '#fff', fontWeight: 500 }}>{t.desc}</span>
+                                    <span style={{ color: '#64748b', fontSize: '0.65rem' }}>
+                                      Werkzeug-ID: {t.toolNr} | Listenverwendung: {t.usesCount}x
+                                    </span>
+                                  </div>
+                                  <span className="badge badge-blue" style={{ fontSize: '0.7rem' }}>
+                                    Bedarf: {t.partQty}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

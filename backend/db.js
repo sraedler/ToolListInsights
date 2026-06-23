@@ -60,8 +60,33 @@ const configWT = process.env.DB_WT_SERVER ? {
   pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
 };
 
+const connStrTL = process.env.DB_TL_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=SRVDEVELOP;Database=Toollist;Trusted_Connection=yes;TrustServerCertificate=yes;';
+const tlServer = process.env.DB_TL_SERVER || '';
+const tlServerParts = tlServer.split('\\');
+const tlHost = tlServerParts[0];
+const tlInstance = tlServerParts[1] || null;
+
+const configTL = process.env.DB_TL_SERVER ? {
+  server: tlHost,
+  database: process.env.DB_TL_DATABASE || 'Toollist',
+  user: process.env.DB_TL_USER,
+  password: process.env.DB_TL_PASSWORD,
+  port: process.env.DB_TL_PORT ? parseInt(process.env.DB_TL_PORT) : undefined,
+  options: {
+    encrypt: process.env.DB_TL_ENCRYPT === 'true',
+    trustServerCertificate: true,
+    instanceName: tlInstance
+  },
+  pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
+} : {
+  driver: 'msnodesqlv8',
+  connectionString: connStrTL,
+  pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
+};
+
 let poolD4 = null;
 let poolWT = null;
+let poolTL = null;
 
 async function getPoolD4() {
   if (!poolD4) {
@@ -83,8 +108,19 @@ async function getPoolWT() {
   return poolWT;
 }
 
+async function getPoolTL() {
+  if (!poolTL) {
+    console.log('Initializing Toollist database pool...');
+    poolTL = new sql.ConnectionPool(configTL);
+    await poolTL.connect();
+    console.log('Toollist database pool initialized.');
+  }
+  return poolTL;
+}
+
 module.exports = {
   getPoolD4,
   getPoolWT,
+  getPoolTL,
   sql
 };
