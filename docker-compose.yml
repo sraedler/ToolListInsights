@@ -32,7 +32,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - VITE_API_BASE=http://localhost:5000/api
+        - VITE_API_BASE=/api
     container_name: toollistinsights-frontend
     ports:
       - "2005:80"
