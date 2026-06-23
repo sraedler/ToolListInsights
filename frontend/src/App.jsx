@@ -12,14 +12,16 @@ import {
   Info, 
   Clock, 
   TrendingDown, 
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
   AlertCircle,
   HelpCircle,
   BarChart4,
   Layers,
   ArrowRight,
   RefreshCw,
-  Server,
-  CheckCircle2
+  Server
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -1257,9 +1259,11 @@ function DemandTab({ startDate, endDate }) {
   const [rightTab, setRightTab] = useState('magazine'); // 'magazine' or 'setup'
   const [magComparisonTab, setMagComparisonTab] = useState('future'); // 'current' or 'future'
   const [modalTab, setModalTab] = useState('setup'); // 'setup' or 'magazine' inside order details modal
+  const [optimize, setOptimize] = useState(false); // setup sequencing optimization toggle
   
   const [expandedPartNrs, setExpandedPartNrs] = useState(new Set());
   const [filterKw, setFilterKw] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All'); // 'All', 'Green', 'Yellow', 'Red'
 
   // Fetch machines catalog
   useEffect(() => {
@@ -1283,7 +1287,7 @@ function DemandTab({ startDate, endDate }) {
     fetchMachines();
   }, []);
 
-  // Fetch simulation data and current tools when machine or targetDate changes
+  // Fetch simulation data and current tools when machine, targetDate, or optimize changes
   useEffect(() => {
     if (!selectedMachineName) return;
     const fetchSimAndTools = async () => {
@@ -1291,7 +1295,7 @@ function DemandTab({ startDate, endDate }) {
         setLoadingSim(true);
         
         // 1. Fetch simulation
-        const simRes = await fetch(`${API_BASE}/inventory/machine/${selectedMachineName}/simulation?targetDate=${targetDate}`);
+        const simRes = await fetch(`${API_BASE}/inventory/machine/${selectedMachineName}/simulation?targetDate=${targetDate}&optimize=${optimize}`);
         const sData = await simRes.json();
         setSimData(sData);
         
@@ -1308,7 +1312,7 @@ function DemandTab({ startDate, endDate }) {
       }
     };
     fetchSimAndTools();
-  }, [selectedMachineName, targetDate]);
+  }, [selectedMachineName, targetDate, optimize]);
 
   if (loadingMachines || !selectedMachineName) {
     return <div style={{ color: '#64748b', padding: '2rem' }}>Lade Maschinenbestand...</div>;
@@ -1325,10 +1329,17 @@ function DemandTab({ startDate, endDate }) {
     );
   }) || [];
 
+  const filteredTimeline = simData?.simulatedTimeline.filter(step => {
+    if (statusFilter !== 'All' && step.statusColor !== statusFilter) return false;
+    if (startDate && step.date < startDate) return false;
+    if (endDate && step.date > endDate) return false;
+    return true;
+  }) || [];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'calc(100vh - 120px)', overflowY: 'auto' }}>
       {/* Simulation Toolbar */}
-      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '2rem', alignItems: 'center', padding: '1.5rem' }}>
+      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1.1fr 1.1fr', gap: '1.2fr', alignItems: 'center', padding: '1.5rem' }}>
         <div>
           <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600, textTransform: 'uppercase' }}>Magazin- & Rüstsimulation</span>
           <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '0.25rem' }}>Magazin-Bedarfsprognose</h3>
@@ -1380,6 +1391,72 @@ function DemandTab({ startDate, endDate }) {
             }}
           />
         </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <span style={{ color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 600 }}>Abarbeitungs-Reihenfolge:</span>
+          <div style={{ display: 'flex', gap: '0.25rem', padding: '0.25rem', background: 'rgba(30, 41, 59, 0.4)', borderRadius: '10px', height: '100%', alignItems: 'center' }}>
+            <button
+              onClick={() => setOptimize(false)}
+              style={{
+                flexGrow: 1,
+                background: !optimize ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                border: 'none',
+                color: !optimize ? '#3b82f6' : '#94a3b8',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                padding: '0.45rem 0.5rem',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                outline: 'none',
+                transition: 'background 0.2s, color 0.2s'
+              }}
+            >
+              Chronologisch
+            </button>
+            <button
+              onClick={() => setOptimize(true)}
+              style={{
+                flexGrow: 1,
+                background: optimize ? 'rgba(16, 185, 129, 0.2)' : 'transparent',
+                border: 'none',
+                color: optimize ? '#10b981' : '#94a3b8',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                padding: '0.45rem 0.5rem',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                outline: 'none',
+                transition: 'background 0.2s, color 0.2s'
+              }}
+            >
+              Rüstoptimiert
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <span style={{ color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 600 }}>Feasibility Status Filter:</span>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            style={{
+              background: 'rgba(13, 20, 35, 0.6)',
+              border: '1px solid var(--border-glow)',
+              borderRadius: '10px',
+              color: '#fff',
+              fontSize: '0.85rem',
+              padding: '0.45rem 0.75rem',
+              outline: 'none',
+              cursor: 'pointer',
+              width: '100%'
+            }}
+          >
+            <option value="All">Alle Arbeitsschritte</option>
+            <option value="Green">Bereit (Grün)</option>
+            <option value="Yellow">In Vorbereitung (Gelb)</option>
+            <option value="Red">Gesperrt (Rot)</option>
+          </select>
+        </div>
       </div>
 
       {loadingSim && !simData ? (
@@ -1390,31 +1467,45 @@ function DemandTab({ startDate, endDate }) {
           <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: '600px' }}>
             <div style={{ borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <span style={{ fontSize: '0.75rem', color: '#3b82f6', fontWeight: 600, textTransform: 'uppercase' }}>Chronologischer Ablauf</span>
-                <h4 style={{ fontSize: '1rem', fontWeight: 700 }}>Geplante Produktionsaufträge</h4>
+                <span style={{ fontSize: '0.75rem', color: optimize ? '#10b981' : '#3b82f6', fontWeight: 600, textTransform: 'uppercase' }}>
+                  {optimize ? 'Optimierter Ablauf (Vorschlag)' : 'Chronologischer Ablauf'}
+                </span>
+                <h4 style={{ fontSize: '1rem', fontWeight: 700 }}>
+                  {optimize ? 'Rüstoptimierte Reihenfolge' : 'Geplante Produktionsaufträge'}
+                </h4>
               </div>
-              <span className="badge badge-blue">
-                {simData?.simulatedTimeline.filter(s => !s.isPastTarget).length} bis Zieldatum
-              </span>
+              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                <span className="badge badge-blue" style={{ fontSize: '0.7rem' }}>
+                  {filteredTimeline.filter(s => !s.isPastTarget).length} Aufträge
+                </span>
+                <span className="badge badge-orange" style={{ fontSize: '0.7rem' }} title="Gesamtanzahl der Werkzeug-Rüstwechsel über den gesamten Zeitraum">
+                  {filteredTimeline.reduce((sum, s) => sum + s.missesCount, 0)} Wechsel
+                </span>
+              </div>
             </div>
 
             <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: '0.35rem' }}>
-              {simData?.simulatedTimeline.map((step, idx) => {
+              {filteredTimeline.map((step, idx) => {
                 const isSelected = selectedOrder?.stepId === step.stepId;
                 
-                // Color badge based on rüst misses
-                let borderLeftColor = '#10b981'; // Green (0 misses)
-                let badgeClass = 'badge-green';
-                if (step.missesCount > 0) {
-                  borderLeftColor = '#f59e0b'; // Orange
-                  badgeClass = 'badge-orange';
-                }
-                if (!step.isFeasible) {
-                  borderLeftColor = '#ef4444'; // Red (overflow)
-                  badgeClass = 'badge-red';
+                // Color based on feasibility status color (Green/Yellow/Red)
+                let borderLeftColor = '#10b981'; // Green (default)
+                if (step.statusColor === 'Yellow') {
+                  borderLeftColor = '#f59e0b'; // Yellow (Orange color)
+                } else if (step.statusColor === 'Red') {
+                  borderLeftColor = '#ef4444'; // Red
                 }
                 if (step.isPastTarget) {
                   borderLeftColor = 'rgba(100, 116, 139, 0.4)'; // Dim/Grey (after target date)
+                }
+
+                // Color badge based on rüst misses
+                let badgeClass = 'badge-green';
+                if (step.missesCount > 0) {
+                  badgeClass = 'badge-orange';
+                }
+                if (!step.isFeasible) {
+                  badgeClass = 'badge-red';
                 }
 
                 return (
@@ -1424,7 +1515,9 @@ function DemandTab({ startDate, endDate }) {
                     style={{
                       padding: '0.75rem 1rem',
                       background: isSelected ? 'rgba(59, 130, 246, 0.08)' : 'rgba(255,255,255,0.01)',
-                      border: isSelected ? '1px solid var(--border-glow)' : '1px solid var(--border-dim)',
+                      borderTop: isSelected ? '1px solid var(--border-glow)' : '1px solid var(--border-dim)',
+                      borderRight: isSelected ? '1px solid var(--border-glow)' : '1px solid var(--border-dim)',
+                      borderBottom: isSelected ? '1px solid var(--border-glow)' : '1px solid var(--border-dim)',
                       borderLeft: `4px solid ${borderLeftColor}`,
                       borderRadius: '10px',
                       cursor: 'pointer',
@@ -1436,13 +1529,26 @@ function DemandTab({ startDate, endDate }) {
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontWeight: 600 }}>
+                      <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
+                        <span style={{ color: optimize ? '#10b981' : '#3b82f6', marginRight: '0.4rem', fontWeight: 700 }}>
+                          #{idx + 1}
+                        </span>
                         {step.date ? new Date(step.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : 'Kein Datum'}
                         {step.isPastTarget && <span style={{ marginLeft: '0.5rem', color: '#64748b' }}>(Nach Zieldatum)</span>}
                       </span>
-                      <span className={`badge ${badgeClass}`} style={{ fontSize: '0.7rem' }}>
-                        {step.missesCount} Rüsttools
-                      </span>
+                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                        <span className={`badge ${
+                          step.statusColor === 'Green' ? 'badge-green' :
+                          step.statusColor === 'Yellow' ? 'badge-orange' : 'badge-red'
+                        }`} style={{ fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          {step.statusColor === 'Green' && <><CheckCircle2 size={10} /> Bereit</>}
+                          {step.statusColor === 'Yellow' && <><AlertTriangle size={10} /> In Vorbereitung</>}
+                          {step.statusColor === 'Red' && <><XCircle size={10} /> Gesperrt</>}
+                        </span>
+                        <span className={`badge ${badgeClass}`} style={{ fontSize: '0.75rem' }}>
+                          {step.missesCount} Rüsttools
+                        </span>
+                      </div>
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1455,7 +1561,11 @@ function DemandTab({ startDate, endDate }) {
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', color: '#64748b' }}>
-                      <span>Prog: <strong>{step.programName || 'N/A'}</strong></span>
+                      <span>
+                        Auftrag: <strong style={{ color: '#cbd5e1' }}>{step.contractNumber}</strong> (Pos. {step.orderPos || 'N/A'} / AS: {step.stepPos})
+                        <span style={{ margin: '0 0.4rem', opacity: 0.3 }}>|</span>
+                        Prog: <strong>{step.programName || 'N/A'}</strong>
+                      </span>
                       <span>Magazinbel.: <strong>{step.occupiedSlots} / {simData?.magazineSize}</strong></span>
                     </div>
                   </div>
@@ -1728,9 +1838,21 @@ function DemandTab({ startDate, endDate }) {
             <div>
               <span style={{ fontSize: '0.7rem', color: '#3b82f6', fontWeight: 600, textTransform: 'uppercase' }}>Details zum Arbeitsgang</span>
               <h4 style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fff' }}>{selectedOrder.desc}</h4>
-              <div style={{ display: 'flex', gap: '1rem', marginTop: '0.25rem', fontSize: '0.75rem', color: '#94a3b8' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '0.25rem', fontSize: '0.75rem', color: '#94a3b8' }}>
                 <span>Datum: <strong>{selectedOrder.date ? new Date(selectedOrder.date).toLocaleDateString('de-DE') : 'N/A'}</strong></span>
+                <span>Auftrag: <strong style={{ color: '#fff' }}>{selectedOrder.contractNumber}</strong> (Pos. {selectedOrder.orderPos || 'N/A'} / AS: {selectedOrder.stepPos})</span>
                 <span>Programm: <strong>{selectedOrder.programName || 'N/A'}</strong></span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>Start-Möglichkeit:</span>
+                <span className={`badge ${
+                  selectedOrder.statusColor === 'Green' ? 'badge-green' :
+                  selectedOrder.statusColor === 'Yellow' ? 'badge-orange' : 'badge-red'
+                }`} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.75rem' }}>
+                  {selectedOrder.statusColor === 'Green' && <><CheckCircle2 size={12} /> Bereit (kann angefangen werden)</>}
+                  {selectedOrder.statusColor === 'Yellow' && <><AlertTriangle size={12} /> In Vorbereitung (Vorgänger läuft)</>}
+                  {selectedOrder.statusColor === 'Red' && <><XCircle size={12} /> Gesperrt (Vorgänger offen)</>}
+                </span>
               </div>
             </div>
 

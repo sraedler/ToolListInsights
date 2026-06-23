@@ -143,7 +143,10 @@ async function cacheDemand() {
     LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
     LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
     WHERE p.PSP_TYP_POSITION = 0
+      AND bk.BK_BKBE_STATUS_BEARBEITUNG = 0
+      AND bk.BK_BKBE_TYP_BELEG = 2
       AND (b.BP_LI_DATUM IS NOT NULL OR au.BK_BKBE_AU_LI_DATUM IS NOT NULL)
+      AND (p.PSP_IDMS IS NOT NULL AND p.PSP_IDMS <> 0 OR p.PSP_IDMP IS NOT NULL AND p.PSP_IDMP <> 0)
   `);
 
   const steps = result.recordset;
@@ -235,8 +238,78 @@ async function cacheSetupData() {
 
   console.log('Caching steps and tools mappings for setup simulation...');
   const stepsResult = await poolD4.request().query(`
+    WITH tNF AS (
+      SELECT tPPS_SKKALP.ID,
+             PSP_POSITION_NUMMER AS POS,
+             PSK_IDBEBP AS IDBEBP,
+             CASE
+                 WHEN EXISTS
+                      (
+                          SELECT ID
+                          FROM tPPS_SKKALP_ZU
+                          WHERE tPPS_SKKALP_ZU.PSZ_IDPSP = tPPS_SKKALP.ID
+                      ) THEN
+                     1
+                 ELSE
+                     0
+             END AS NF,
+             (
+                 SELECT TOP 1
+                     tPPS_SKKALP_NF.PSP_POSITION_NUMMER
+                 FROM tPPS_SKKALP AS tPPS_SKKALP_INNER
+                     LEFT JOIN tPPS_SKKALP_ZU
+                         ON tPPS_SKKALP_ZU.PSZ_IDPSP = tPPS_SKKALP_INNER.ID
+                     LEFT JOIN tPPS_SKKALP AS tPPS_SKKALP_NF
+                         ON tPPS_SKKALP_NF.ID = tPPS_SKKALP_ZU.PSZ_IDPSP_ZU
+                     LEFT JOIN
+                     (
+                         SELECT ID,
+                                AS_TYP_BERUECKSICHTIGUNG_KONTROLLE_FERTIGSTELLUNG
+                         FROM tPPS_ARBSCHR
+                     ) AS tPPS_ARBSCHR
+                         ON tPPS_ARBSCHR.ID = tPPS_SKKALP.PSP_IDAS
+                 WHERE tPPS_SKKALP_INNER.ID = tPPS_SKKALP.ID
+                       AND AS_TYP_BERUECKSICHTIGUNG_KONTROLLE_FERTIGSTELLUNG = 0
+                 ORDER BY tPPS_SKKALP_NF.PSP_POSITION_NUMMER DESC
+             ) AS POS_NR_NF
+      FROM tPPS_SKKALP
+          INNER JOIN tPPS_SKKALK
+              ON tPPS_SKKALK.ID = tPPS_SKKALP.PSP_IDPSKKK
+          LEFT JOIN
+          (
+              SELECT ID,
+                     AS_TYP_BERUECKSICHTIGUNG_KONTROLLE_FERTIGSTELLUNG
+              FROM tPPS_ARBSCHR
+          ) AS tPPS_ARBSCHR
+              ON tPPS_ARBSCHR.ID = tPPS_SKKALP.PSP_IDAS
+      WHERE AS_TYP_BERUECKSICHTIGUNG_KONTROLLE_FERTIGSTELLUNG = 0
+    ),
+    tZE_BUCH_SUM AS (
+       SELECT tZE_BUCH.ZBU_IDPSKP,
+              SUM(ISNULL(ZBUBW_ZEIT, 0)) AS ZE_BUCH_SUMME_ZEIT_IST
+       FROM tZE_BUCH
+           LEFT JOIN
+           (
+               SELECT CASE
+                          WHEN ISNULL(ZBUBW_DATUM_ZEIT_START, 0) <> 0
+                               AND ISNULL(ZBUBW_DATUM_ZEIT_STOP, 0) <> 0 THEN
+                              ROUND(
+                                       CAST(DATEDIFF(ss, ZBUBW_DATUM_ZEIT_START, ZBUBW_DATUM_ZEIT_STOP) AS FLOAT)
+                                       / 60,
+                                       4
+                                   )
+                          ELSE
+                              0
+                      END AS ZBUBW_ZEIT,
+                      tZE_BUCH_BEWE.ZBUBW_IDZBU
+               FROM tZE_BUCH_BEWE
+           ) AS tZE_BUCH_BEWE
+               ON tZE_BUCH_BEWE.ZBUBW_IDZBU = tZE_BUCH.ID
+       GROUP BY tZE_BUCH.ZBU_IDPSKP
+    )
     SELECT
       b.ID as OrderId,
+      b.BP_POSITION_NUMMER as OrderPos,
       b.BP_ARTIKEL_BEZEICHNUNG as OrderDesc,
       b.BP_IDAR as ArticleId,
       p.ID as StepId,
@@ -245,17 +318,78 @@ async function cacheSetupData() {
       p.PSP_IDMS as MachineId,
       p.PSP_IDMP as MachinePoolId,
       p.PSP_PP_STATUS_PRODUKTION as StatusProduction,
+      p.PSP_POSITION_NUMMER as StepPos,
+      p.PSP_TYP_POSITION as StepTyp,
       CASE
         WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
         ELSE au.BK_BKBE_AU_LI_DATUM
       END as DeliveryDate,
-      bk.BK_BKBE_NUMMER as ContractNumber
+      bk.BK_BKBE_NUMMER as ContractNumber,
+      CASE
+        WHEN p.PSP_PP_STATUS_PRODUKTION = 0 THEN
+          CASE
+            WHEN ISNULL(zb.ZE_BUCH_SUMME_ZEIT_IST, 0) > 0 THEN 2
+            ELSE 1
+          END
+        ELSE 4
+      END AS SPKO,
+      ISNULL(tVORGAENGER.VORGAENGER, '') AS VORGAENGER
     FROM [D4].[dbo].[tbe_Belp] b
     INNER JOIN [D4].[dbo].[tPPS_SKKALK] k ON k.PSK_IDBEBP = b.ID
     INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.PSP_IDPSKKK = k.ID
     LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
     LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
-    WHERE p.PSP_TYP_POSITION = 0 AND p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL > 0
+    LEFT JOIN tZE_BUCH_SUM zb ON zb.ZBU_IDPSKP = p.ID
+    LEFT JOIN (
+       SELECT ID,
+              IDBEBP,
+              POS,
+              REPLACE(REPLACE(STUFF(
+                              (
+                                  SELECT *
+                                  FROM
+                                  (
+                                      SELECT TOP 1
+                                          '|' + POS AS POS
+                                      FROM tNF
+                                      WHERE IDBEBP = tNF_OUTER.IDBEBP
+                                            AND POS < tNF_OUTER.POS
+                                            AND (
+                                                    ISNULL(POS_NR_NF, 0) = tNF_OUTER.POS
+                                                    OR ISNULL(POS_NR_NF, -999) = -999
+                                                )
+                                      GROUP BY POS
+                                      ORDER BY POS DESC
+                                      UNION
+                                      SELECT TOP 1000
+                                          '|' + POS AS POS
+                                      FROM tNF
+                                      WHERE IDBEBP = tNF_OUTER.IDBEBP
+                                            AND POS < tNF_OUTER.POS
+                                            AND (ISNULL(POS_NR_NF, 0) = tNF_OUTER.POS)
+                                      GROUP BY POS
+                                      ORDER BY POS DESC
+                                  ) AS T
+                                  FOR XML PATH('')
+                              ),
+                              1,
+                              0,
+                              ''
+                                   ),
+                              '<POS>',
+                              ''
+                             ),
+                      '</POS>',
+                      ''
+                     ) AS VORGAENGER
+       FROM tNF AS tNF_OUTER
+       GROUP BY tNF_OUTER.ID,
+                tNF_OUTER.IDBEBP,
+                tNF_OUTER.POS
+    ) tVORGAENGER ON tVORGAENGER.ID = p.ID
+    WHERE p.PSP_TYP_LAYOUT_POSITION = 0
+      AND bk.BK_BKBE_STATUS_BEARBEITUNG = 0
+      AND bk.BK_BKBE_TYP_BELEG = 2
   `);
 
   const mappingResult = await poolWT.request().query(`
@@ -290,7 +424,81 @@ async function cacheSetupData() {
     };
   });
 
-  const steps = stepsResult.recordset;
+  const rows = stepsResult.recordset;
+
+  // Group steps by OrderId to resolve predecessors correctly within each order
+  const ordersMap = {};
+  rows.forEach(row => {
+    if (!ordersMap[row.OrderId]) {
+      ordersMap[row.OrderId] = [];
+    }
+    ordersMap[row.OrderId].push(row);
+  });
+
+  // Sort and resolve feasibility status for each step in each order
+  Object.keys(ordersMap).forEach(orderId => {
+    const stepsGroup = ordersMap[orderId];
+    stepsGroup.sort((a, b) => (a.StepPos || '').localeCompare(b.StepPos || ''));
+
+    stepsGroup.forEach((step, idx) => {
+      // Rule: If self is 2, status is Green (In-Progress can always be run/continued)
+      if (step.SPKO === 2) {
+        step.color = 'Green';
+        return;
+      }
+      // If completed, keep it Green (already run)
+      if (step.SPKO === 4) {
+        step.color = 'Green';
+        return;
+      }
+
+      // Predecessor check
+      let predPos = null;
+      let vgRaw = (step.VORGAENGER || '').trim();
+      if (vgRaw.startsWith('|')) {
+        vgRaw = vgRaw.replace('|', '').trim();
+      }
+
+      if (vgRaw === '') {
+        // "Wenn Vorgänger ist leer, dann nehme nächst kleinere PSP_Position_Nummer als eigene PSP_Position_Nummer als Vorgänger."
+        if (idx > 0) {
+          predPos = stepsGroup[idx - 1].StepPos;
+        }
+      } else {
+        // "Ist Vorgänger eine Zahl, nehme diese Zahl als PSP_Position_nummer Vorgänger."
+        predPos = vgRaw;
+      }
+
+      let predStep = null;
+      if (predPos !== null) {
+        predStep = stepsGroup.find(s => s.StepPos === predPos);
+      }
+
+      if (!predStep) {
+        // No predecessor -> Can start, so Green
+        step.color = 'Green';
+      } else {
+        // "Ist der Vorgäner = 2, dann hast du selbst den Status Gelb."
+        // "Ist der Vorgänger = 1, dann bist du Rot."
+        if (predStep.SPKO === 2) {
+          step.color = 'Yellow';
+        } else if (predStep.SPKO === 1) {
+          step.color = 'Red';
+        } else if (predStep.SPKO === 4) {
+          step.color = 'Green';
+        } else {
+          step.color = 'Green';
+        }
+      }
+    });
+  });
+
+  // Keep only normal work steps (StepTyp = 0) with valid setup time (> 0) and assigned to a machine or pool
+  const steps = rows.filter(step => 
+    step.StepTyp === 0 && 
+    step.SetupTime > 0 &&
+    ((step.MachineId !== null && step.MachineId !== 0) || (step.MachinePoolId !== null && step.MachinePoolId !== 0))
+  );
   console.log(`Matching NC programs for ${steps.length} setup steps...`);
   const matchCache = {};
   steps.forEach(step => {
@@ -1082,7 +1290,7 @@ app.get('/api/machines/:id/tools', async (req, res) => {
     const request = poolD4.request();
     request.input('dbId', sql.Int, dbId);
 
-    let whereClause = `p.PSP_TYP_POSITION = 0`;
+    let whereClause = `p.PSP_TYP_POSITION = 0 AND bk.BK_BKBE_STATUS_BEARBEITUNG = 0 AND bk.BK_BKBE_TYP_BELEG = 2`;
     if (type === 'pool') {
       whereClause += ` AND p.PSP_IDMP = @dbId`;
     } else {
@@ -1395,7 +1603,7 @@ function mapToollistMachineToD4(machineName) {
 app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
   try {
     const { name } = req.params;
-    const { targetDate } = req.query;
+    const { targetDate, optimize } = req.query;
     
     if (!cachedSetupData) {
       return res.status(503).json({ error: 'Rüstdaten werden noch geladen' });
@@ -1469,6 +1677,74 @@ app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
     });
     
     machineSteps.sort((a, b) => new Date(a.DeliveryDate) - new Date(b.DeliveryDate));
+
+    // Optimize sequence if requested (setup minimization using greedy Nearest Neighbor)
+    if (optimize === 'true') {
+      let remainingSteps = [...machineSteps];
+      let optimizedSteps = [];
+      let currentSimMagazine = [...initialToolNrs].slice(0, magazineSize);
+      let simLastUsedIndex = {};
+      currentSimMagazine.forEach(tNr => {
+        simLastUsedIndex[tNr] = -1;
+      });
+
+      while (remainingSteps.length > 0) {
+        let bestStepIdx = -1;
+        let minMissesCount = Infinity;
+        
+        for (let i = 0; i < remainingSteps.length; i++) {
+          const step = remainingSteps[i];
+          const stepToolNrs = listToToolsMap[step.MatchedListNr] || [];
+          
+          let missesCount = 0;
+          stepToolNrs.forEach(tNr => {
+            if (!currentSimMagazine.includes(tNr)) {
+              missesCount++;
+            }
+          });
+          
+          if (missesCount < minMissesCount) {
+            minMissesCount = missesCount;
+            bestStepIdx = i;
+          } else if (missesCount === minMissesCount) {
+            if (bestStepIdx === -1 || new Date(step.DeliveryDate) < new Date(remainingSteps[bestStepIdx].DeliveryDate)) {
+              bestStepIdx = i;
+            }
+          }
+        }
+        
+        const chosenStep = remainingSteps.splice(bestStepIdx, 1)[0];
+        optimizedSteps.push(chosenStep);
+        
+        const stepToolNrs = listToToolsMap[chosenStep.MatchedListNr] || [];
+        const misses = stepToolNrs.filter(tNr => !currentSimMagazine.includes(tNr));
+        
+        misses.forEach(tNr => {
+          while (currentSimMagazine.length >= magazineSize) {
+            const candidates = currentSimMagazine.filter(mNr => !stepToolNrs.includes(mNr));
+            if (candidates.length === 0) break;
+            
+            let victim = candidates[0];
+            let oldestIdx = simLastUsedIndex[victim] !== undefined ? simLastUsedIndex[victim] : -2;
+            candidates.forEach(cand => {
+              const candIdx = simLastUsedIndex[cand] !== undefined ? simLastUsedIndex[cand] : -2;
+              if (candIdx < oldestIdx) {
+                oldestIdx = candIdx;
+                victim = cand;
+              }
+            });
+            currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== victim);
+          }
+          currentSimMagazine.push(tNr);
+        });
+        
+        stepToolNrs.forEach(tNr => {
+          simLastUsedIndex[tNr] = optimizedSteps.length - 1;
+        });
+      }
+      
+      machineSteps = optimizedSteps;
+    }
     
     // Run simulation step-by-step
     let virtualMagazine = [...initialToolNrs].slice(0, magazineSize);
@@ -1540,6 +1816,9 @@ app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
       
       simulatedTimeline.push({
         stepId: step.StepId,
+        contractNumber: step.ContractNumber || 'N/A',
+        stepPos: step.StepPos || null,
+        orderPos: step.OrderPos || null,
         desc: step.StepDesc.trim().replace(/\s+/g, ' '),
         date: stepDateStr,
         setupTime: step.SetupTime,
@@ -1551,7 +1830,8 @@ app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
         magazineTools: virtualMagazine.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' }),
         occupiedSlots: virtualMagazine.length,
         isFeasible: virtualMagazine.length <= magazineSize,
-        isPastTarget
+        isPastTarget,
+        statusColor: step.color || 'Green'
       });
     });
     
