@@ -12,6 +12,7 @@ RUN npm install --omit=dev --ignore-scripts || npm install --omit=dev
 
 # Copy application source code
 COPY backend ./backend
+COPY KV_test.sql ./
 
 EXPOSE 5000
 
