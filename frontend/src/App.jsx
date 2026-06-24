@@ -44,9 +44,19 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [summary, setSummary] = useState(null);
 
+  // Helper to format date as YYYY-MM-DD with offset in days from today
+  const getOffsetDateStr = (offsetDays) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   // Global Date range filters
-  const [globalStartDate, setGlobalStartDate] = useState('2025-01-01');
-  const [globalEndDate, setGlobalEndDate] = useState('2025-12-31');
+  const [globalStartDate, setGlobalStartDate] = useState(getOffsetDateStr(-14));
+  const [globalEndDate, setGlobalEndDate] = useState(getOffsetDateStr(42)); // 6 weeks = 42 days
 
   // Poll system status on mount
   useEffect(() => {
@@ -250,7 +260,7 @@ export default function App() {
 
         <div className="footer-section">
           <p>Version 1.0.0</p>
-          <p>© 2026 Antigravity-Team</p>
+          <p>© 2026 Rädler & Reutemann</p>
         </div>
       </aside>
 
@@ -816,6 +826,8 @@ function ExplorerTab({ startDate, endDate }) {
                         <th>Kunde</th>
                         <th>Beschreibung</th>
                         <th>Status & Liefertermin</th>
+                        <th>Rüstbedarf (Sim)</th>
+                        <th>Magazinbel. (Sim)</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -890,6 +902,24 @@ function ExplorerTab({ startDate, endDate }) {
                               </div>
                             </td>
                             <td>
+                              {ord.SimMissesCount !== undefined ? (
+                                <span className={`badge ${ord.SimMissesCount > 0 ? 'badge-orange' : 'badge-green'}`} style={{ fontSize: '0.75rem' }}>
+                                  {ord.SimMissesCount} Tools
+                                </span>
+                              ) : (
+                                <span style={{ color: '#64748b', fontSize: '0.75rem' }}>-</span>
+                              )}
+                            </td>
+                            <td>
+                              {ord.SimOccupiedSlots !== undefined ? (
+                                <span className={`badge ${ord.SimOccupiedSlots > (ord.SimMagazineSize || 999) ? 'badge-red' : 'badge-blue'}`} style={{ fontSize: '0.75rem' }}>
+                                  {ord.SimOccupiedSlots} / {ord.SimMagazineSize || '-'}
+                                </span>
+                              ) : (
+                                <span style={{ color: '#64748b', fontSize: '0.75rem' }}>-</span>
+                              )}
+                            </td>
+                            <td>
                               <ChevronRight size={14} style={{ color: selectedOrder?.OrderId === ord.OrderId ? '#3b82f6' : '#475569' }} />
                             </td>
                           </tr>
@@ -934,7 +964,7 @@ function ExplorerTab({ startDate, endDate }) {
                       border: '1px solid var(--border-dim)',
                       borderRadius: '10px',
                       display: 'grid',
-                      gridTemplateColumns: '80px 1.5fr 2fr 1fr',
+                      gridTemplateColumns: '80px 1.2fr 2fr 1.2fr 1fr',
                       gap: '1rem',
                       alignItems: 'center'
                     }}
@@ -997,6 +1027,48 @@ function ExplorerTab({ startDate, endDate }) {
                         )
                       ) : (
                         <span style={{ fontSize: '0.75rem', color: '#475569' }}>Keine Werkzeugzuordnung (Nicht-NC-Schritt)</span>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: 0 }}>
+                      {step.SimMissesCount !== undefined ? (
+                        <>
+                          <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span className={`badge ${
+                              step.SimStatusColor === 'Green' ? 'badge-green' :
+                              step.SimStatusColor === 'Yellow' ? 'badge-orange' : 'badge-red'
+                            }`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>
+                              {step.SimStatusColor === 'Green' && 'Bereit'}
+                              {step.SimStatusColor === 'Yellow' && 'Vorbereitung'}
+                              {step.SimStatusColor === 'Red' && 'Gesperrt'}
+                            </span>
+                            <span className={`badge ${step.SimMissesCount > 0 ? 'badge-orange' : 'badge-green'}`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>
+                              {step.SimMissesCount} Wechsel
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                            Magazinbel.: <strong style={{ color: step.SimIsFeasible ? '#cbd5e1' : '#ef4444', fontWeight: step.SimIsFeasible ? 500 : 700 }}>{step.SimOccupiedSlots} / {step.SimMagazineSize}</strong>{!step.SimIsFeasible && <span style={{ marginLeft: '0.2rem', fontSize: '0.85rem' }} title="Magazin-Kapazität überschritten">⚠️</span>}
+                          </div>
+                          {step.SimMisses && step.SimMisses.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginTop: '0.25rem' }}>
+                              <span style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 600 }}>Rüstbedarf:</span>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                                {step.SimMisses.map((mTool, idx) => (
+                                  <span 
+                                    key={idx} 
+                                    className="badge badge-amber" 
+                                    style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', textTransform: 'none', whiteSpace: 'nowrap' }}
+                                    title={mTool.desc}
+                                  >
+                                    ID {mTool.nr}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span style={{ color: '#475569', fontSize: '0.75rem', fontStyle: 'italic' }}>Keine Sim</span>
                       )}
                     </div>
 
@@ -1256,7 +1328,7 @@ function DemandTab({ startDate, endDate }) {
   const [loadingSim, setLoadingSim] = useState(true);
   
   const [selectedOrder, setSelectedOrder] = useState(null);
-  const [rightTab, setRightTab] = useState('magazine'); // 'magazine' or 'setup'
+  const [rightTab, setRightTab] = useState('magazine'); // 'magazine', 'setup', or 'config'
   const [magComparisonTab, setMagComparisonTab] = useState('future'); // 'current' or 'future'
   const [modalTab, setModalTab] = useState('setup'); // 'setup' or 'magazine' inside order details modal
   const [optimize, setOptimize] = useState(false); // setup sequencing optimization toggle
@@ -1264,6 +1336,11 @@ function DemandTab({ startDate, endDate }) {
   const [expandedPartNrs, setExpandedPartNrs] = useState(new Set());
   const [filterKw, setFilterKw] = useState('');
   const [statusFilter, setStatusFilter] = useState('All'); // 'All', 'Green', 'Yellow', 'Red'
+
+  // Scenario editor states
+  const [machinePrograms, setMachinePrograms] = useState([]);
+  const [unloadedProgramIds, setUnloadedProgramIds] = useState([]);
+  const [preloadedProgramNames, setPreloadedProgramNames] = useState([]);
 
   // Fetch machines catalog
   useEffect(() => {
@@ -1287,15 +1364,35 @@ function DemandTab({ startDate, endDate }) {
     fetchMachines();
   }, []);
 
-  // Fetch simulation data and current tools when machine, targetDate, or optimize changes
+  // Fetch loaded programs in Toollist-DB for selected machine
+  useEffect(() => {
+    if (!selectedMachineName) return;
+    const fetchPrograms = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/inventory/machine/${selectedMachineName}/programs`);
+        const data = await res.json();
+        setMachinePrograms(data);
+        setUnloadedProgramIds([]); // reset selection
+        setPreloadedProgramNames([]); // reset selection
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    fetchPrograms();
+  }, [selectedMachineName]);
+
+  // Fetch simulation data and current tools when parameters change
   useEffect(() => {
     if (!selectedMachineName) return;
     const fetchSimAndTools = async () => {
       try {
         setLoadingSim(true);
         
+        const unloadParam = unloadedProgramIds.join(',');
+        const loadParam = preloadedProgramNames.join(',');
+        
         // 1. Fetch simulation
-        const simRes = await fetch(`${API_BASE}/inventory/machine/${selectedMachineName}/simulation?targetDate=${targetDate}&optimize=${optimize}`);
+        const simRes = await fetch(`${API_BASE}/inventory/machine/${selectedMachineName}/simulation?targetDate=${targetDate}&optimize=${optimize}&unloadPrograms=${unloadParam}&loadPrograms=${loadParam}&startDate=${startDate}`);
         const sData = await simRes.json();
         setSimData(sData);
         
@@ -1312,7 +1409,7 @@ function DemandTab({ startDate, endDate }) {
       }
     };
     fetchSimAndTools();
-  }, [selectedMachineName, targetDate, optimize]);
+  }, [selectedMachineName, targetDate, optimize, unloadedProgramIds, preloadedProgramNames, startDate]);
 
   if (loadingMachines || !selectedMachineName) {
     return <div style={{ color: '#64748b', padding: '2rem' }}>Lade Maschinenbestand...</div>;
@@ -1537,6 +1634,36 @@ function DemandTab({ startDate, endDate }) {
                         {step.isPastTarget && <span style={{ marginLeft: '0.5rem', color: '#64748b' }}>(Nach Zieldatum)</span>}
                       </span>
                       <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                        {step.programName && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const isPreloaded = preloadedProgramNames.includes(step.programName);
+                              if (isPreloaded) {
+                                setPreloadedProgramNames(prev => prev.filter(p => p !== step.programName));
+                              } else {
+                                setPreloadedProgramNames(prev => [...prev, step.programName]);
+                              }
+                            }}
+                            style={{
+                              background: preloadedProgramNames.includes(step.programName) ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255,255,255,0.05)',
+                              border: `1px solid ${preloadedProgramNames.includes(step.programName) ? '#3b82f6' : 'var(--border-dim)'}`,
+                              borderRadius: '6px',
+                              color: preloadedProgramNames.includes(step.programName) ? '#60a5fa' : '#94a3b8',
+                              fontSize: '0.7rem',
+                              padding: '0.2rem 0.5rem',
+                              cursor: 'pointer',
+                              fontWeight: 600,
+                              outline: 'none',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.25rem',
+                              height: '22px'
+                            }}
+                          >
+                            {preloadedProgramNames.includes(step.programName) ? '✓ Vorab geladen' : '+ Vorab laden'}
+                          </button>
+                        )}
                         <span className={`badge ${
                           step.statusColor === 'Green' ? 'badge-green' :
                           step.statusColor === 'Yellow' ? 'badge-orange' : 'badge-red'
@@ -1564,10 +1691,30 @@ function DemandTab({ startDate, endDate }) {
                       <span>
                         Auftrag: <strong style={{ color: '#cbd5e1' }}>{step.contractNumber}</strong> (Pos. {step.orderPos || 'N/A'} / AS: {step.stepPos})
                         <span style={{ margin: '0 0.4rem', opacity: 0.3 }}>|</span>
+                        KV Status: <strong style={{ color: '#cbd5e1' }}>{step.spko === 2 ? '2 (In Arbeit)' : step.spko === 1 ? '1 (Offen)' : step.spko}</strong>
+                        <span style={{ margin: '0 0.4rem', opacity: 0.3 }}>|</span>
                         Prog: <strong>{step.programName || 'N/A'}</strong>
                       </span>
-                      <span>Magazinbel.: <strong>{step.occupiedSlots} / {simData?.magazineSize}</strong></span>
+                      <span>Magazinbel.: <strong style={{ color: step.isFeasible ? '#cbd5e1' : '#ef4444', fontWeight: step.isFeasible ? 500 : 700 }}>{step.occupiedSlots} / {simData?.magazineSize}</strong>{!step.isFeasible && <span style={{ marginLeft: '0.2rem', fontSize: '0.85rem' }} title="Magazin-Kapazität überschritten">⚠️</span>}</span>
                     </div>
+
+                    {step.misses && step.misses.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginTop: '0.5rem', borderTop: '1px dashed rgba(255,255,255,0.06)', paddingTop: '0.5rem' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8', fontWeight: 600 }}>Erforderliche Rüstwerkzeuge:</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                          {step.misses.map((mTool, idx) => (
+                            <span 
+                              key={idx} 
+                              className="badge badge-amber" 
+                              style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', textTransform: 'none', whiteSpace: 'nowrap' }}
+                              title={mTool.desc}
+                            >
+                              ID {mTool.nr}: {mTool.desc}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1610,15 +1757,30 @@ function DemandTab({ startDate, endDate }) {
               >
                 Rüstbedarf ({simData?.setupTools.length} Tools)
               </button>
+              <button
+                onClick={() => setRightTab('config')}
+                style={{
+                  background: rightTab === 'config' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                  border: 'none',
+                  color: rightTab === 'config' ? '#fff' : '#64748b',
+                  padding: '0.4rem 0.8rem',
+                  borderRadius: '6px',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                Konfiguration ({(unloadedProgramIds.length + preloadedProgramNames.length) > 0 ? `${unloadedProgramIds.length + preloadedProgramNames.length} geändert` : 'Standard'})
+              </button>
             </div>
 
             {/* TAB CONTENT 1: MAGAZINE STATE */}
             {rightTab === 'magazine' && (
               <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
                 <p style={{ color: '#64748b', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
-                  Vergleichen Sie den aktuellen Werkzeugbestand der Maschine mit dem simulierten Bestand nach Ablauf der Aufträge bis zum Zieldatum.
+                  Vergleichen Sie den aktuellen Werkzeugbestand der Maschine mit dem simulierten Zustand.
                 </p>
-
                 {/* Compare toggle switches */}
                 <div style={{ display: 'flex', gap: '0.25rem', padding: '0.25rem', background: 'rgba(30, 41, 59, 0.3)', borderRadius: '8px', marginBottom: '0.75rem' }}>
                   <button
@@ -1628,15 +1790,34 @@ function DemandTab({ startDate, endDate }) {
                       background: magComparisonTab === 'current' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
                       border: 'none',
                       color: magComparisonTab === 'current' ? '#3b82f6' : '#94a3b8',
-                      fontSize: '0.75rem',
+                      fontSize: '0.7rem',
                       fontWeight: 600,
                       padding: '0.35rem',
                       borderRadius: '6px',
                       cursor: 'pointer',
                       outline: 'none'
                     }}
+                    title="Aktueller Ist-Bestand aus der DB"
                   >
-                    Aktueller Ist-Bestand ({currentTools.length})
+                    Ist-Bestand DB ({currentTools.length})
+                  </button>
+                  <button
+                    onClick={() => setMagComparisonTab('simulated_start')}
+                    style={{
+                      flexGrow: 1,
+                      background: magComparisonTab === 'simulated_start' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                      border: 'none',
+                      color: magComparisonTab === 'simulated_start' ? '#3b82f6' : '#94a3b8',
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                      padding: '0.35rem',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      outline: 'none'
+                    }}
+                    title="Simulierter Anfangszustand nach Entladen/Vorab-Laden"
+                  >
+                    Simulierter Start ({simData?.initialMagazine?.length || 0})
                   </button>
                   <button
                     onClick={() => setMagComparisonTab('future')}
@@ -1645,20 +1826,21 @@ function DemandTab({ startDate, endDate }) {
                       background: magComparisonTab === 'future' ? 'rgba(16, 185, 129, 0.2)' : 'transparent',
                       border: 'none',
                       color: magComparisonTab === 'future' ? '#10b981' : '#94a3b8',
-                      fontSize: '0.75rem',
+                      fontSize: '0.7rem',
                       fontWeight: 600,
                       padding: '0.35rem',
                       borderRadius: '6px',
                       cursor: 'pointer',
                       outline: 'none'
                     }}
+                    title="Zukünftiger Stand am Ende der Simulations-Timeline"
                   >
-                    Zukünftiger Stand ({simData?.finalMagazine.length} / {simData?.magazineSize})
+                    End-Zustand ({simData?.finalMagazine?.length || 0} / {simData?.magazineSize})
                   </button>
                 </div>
 
                 <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingRight: '0.25rem' }}>
-                  {magComparisonTab === 'current' ? (
+                  {magComparisonTab === 'current' && (
                     currentTools.length === 0 ? (
                       <div style={{ color: '#475569', fontStyle: 'italic', textAlign: 'center', padding: '2rem' }}>
                         Keine belegten Werkzeuge in dieser Maschine registriert.
@@ -1676,13 +1858,92 @@ function DemandTab({ startDate, endDate }) {
                         </div>
                       ))
                     )
-                  ) : (
-                    simData?.finalMagazine.length === 0 ? (
+                  )}
+
+                  {magComparisonTab === 'simulated_start' && (() => {
+                    const simulatedStartList = [];
+
+                    if (simData?.initialMagazine) {
+                      simData.initialMagazine.forEach(t => {
+                        const isInMachine = currentTools.some(ct => ct.wtNr === t.nr);
+                        if (isInMachine) {
+                          simulatedStartList.push({
+                            ...t,
+                            status: 'bleibt',
+                            label: 'Bleibt in Maschine',
+                            badgeClass: 'badge-green',
+                            style: {}
+                          });
+                        } else {
+                          simulatedStartList.push({
+                            ...t,
+                            status: 'neu',
+                            label: 'Muss neu rein (Vorab laden)',
+                            badgeClass: 'badge-blue',
+                            style: { border: '1px solid rgba(59, 130, 246, 0.3)', background: 'rgba(59, 130, 246, 0.03)' }
+                          });
+                        }
+                      });
+                    }
+
+                    currentTools.forEach(ct => {
+                      const isStillPresent = simData?.initialMagazine?.some(im => im.nr === ct.wtNr);
+                      if (!isStillPresent) {
+                        simulatedStartList.push({
+                          nr: ct.wtNr,
+                          desc: ct.desc,
+                          keyword: ct.keyword,
+                          dia: ct.dia,
+                          pocket: ct.pocket,
+                          status: 'raus',
+                          label: 'Muss raus (Entladen)',
+                          badgeClass: 'badge-red',
+                          style: { textDecoration: 'line-through', opacity: 0.7, border: '1px dashed rgba(239, 68, 68, 0.3)', background: 'rgba(239, 68, 68, 0.03)' }
+                        });
+                      }
+                    });
+
+                    // Sort: Bleibt first, then Neu, then Raus
+                    const statusOrder = { bleibt: 0, neu: 1, raus: 2 };
+                    simulatedStartList.sort((a, b) => statusOrder[a.status] - statusOrder[b.status] || (a.nr - b.nr));
+
+                    return simulatedStartList.length === 0 ? (
                       <div style={{ color: '#475569', fontStyle: 'italic', textAlign: 'center', padding: '2rem' }}>
-                        Virtuelles Magazin leer.
+                        Simulierter Anfangszustand leer (alle Listen entladen).
                       </div>
                     ) : (
-                      simData?.finalMagazine.map((t, i) => (
+                      simulatedStartList.map((t, idx) => (
+                        <div key={idx} style={{ 
+                          padding: '0.5rem 0.75rem', 
+                          background: t.style.background || 'rgba(255,255,255,0.01)', 
+                          border: t.style.border || '1px solid var(--border-dim)', 
+                          borderRadius: '8px', 
+                          display: 'flex', 
+                          justifyContent: 'space-between', 
+                          alignItems: 'center',
+                          opacity: t.style.opacity || 1
+                        }}>
+                          <div>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 600, color: t.status === 'raus' ? '#f87171' : '#fff', textDecoration: t.style.textDecoration || 'none' }}>
+                              {t.desc || 'Unbekannt'}
+                            </div>
+                            <div style={{ fontSize: '0.65rem', color: '#64748b' }}>
+                              Typ: {t.keyword || 'N/A'} | Ø {t.dia || 0}mm | ID: {t.nr} {t.pocket ? `| Pocket: T${t.pocket}` : ''}
+                            </div>
+                          </div>
+                          <span className={`badge ${t.badgeClass}`} style={{ fontSize: '0.7rem' }}>{t.label}</span>
+                        </div>
+                      ))
+                    );
+                  })()}
+
+                  {magComparisonTab === 'future' && (
+                    !simData?.finalMagazine || simData.finalMagazine.length === 0 ? (
+                      <div style={{ color: '#475569', fontStyle: 'italic', textAlign: 'center', padding: '2rem' }}>
+                        Virtuelles Magazin am Ende leer.
+                      </div>
+                    ) : (
+                      simData.finalMagazine.map((t, i) => (
                         <div key={i} style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div>
                             <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>{t.desc || 'Unbekannt'}</div>
@@ -1733,6 +1994,11 @@ function DemandTab({ startDate, endDate }) {
                   ) : (
                     filteredSetupParts.map((p, idx) => {
                       const isPartExpanded = expandedPartNrs.has(p.partNr);
+                      const allToolsAlreadyInMachine = p.tools.every(t => {
+                        const isInMachineNow = currentTools.some(ct => ct.wtNr === t.toolNr);
+                        const isKilled = simData?.initialMagazine ? !simData.initialMagazine.some(im => im.nr === t.toolNr) : false;
+                        return isInMachineNow && !isKilled;
+                      });
                       return (
                         <div
                           key={p.partNr}
@@ -1760,8 +2026,11 @@ function DemandTab({ startDate, endDate }) {
                         >
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
                             <div>
-                              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
                                 <span>{idx + 1}. {p.desc || 'Komponente'}</span>
+                                {allToolsAlreadyInMachine && (
+                                  <span className="badge badge-green" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', textTransform: 'none' }}>Bereits in Maschine</span>
+                                )}
                                 <span style={{ fontSize: '0.6rem', color: '#64748b' }}>{isPartExpanded ? '▲' : '▼'}</span>
                               </div>
                               <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
@@ -1786,35 +2055,200 @@ function DemandTab({ startDate, endDate }) {
                               <div style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.15rem' }}>
                                 Benötigt in folgenden Rüstwerkzeugen:
                               </div>
-                              {p.tools.map((t, tIdx) => (
-                                <div
-                                  key={tIdx}
-                                  style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    alignItems: 'center',
-                                    background: 'rgba(13, 20, 35, 0.3)',
-                                    padding: '0.35rem 0.5rem',
-                                    borderRadius: '6px',
-                                    fontSize: '0.75rem'
-                                  }}
-                                >
-                                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                    <span style={{ color: '#fff', fontWeight: 500 }}>{t.desc}</span>
-                                    <span style={{ color: '#64748b', fontSize: '0.65rem' }}>
-                                      Werkzeug-ID: {t.toolNr}
-                                    </span>
+                              {p.tools.map((t, tIdx) => {
+                                const isInMachineNow = currentTools.some(ct => ct.wtNr === t.toolNr);
+                                const isKilled = simData?.initialMagazine ? !simData.initialMagazine.some(im => im.nr === t.toolNr) : false;
+
+                                let statusLabel = 'Neu';
+                                let badgeColor = 'badge-blue';
+                                let rowBg = 'rgba(13, 20, 35, 0.3)';
+
+                                if (isInMachineNow) {
+                                  if (isKilled) {
+                                    statusLabel = 'In Maschine (Wird entladen)';
+                                    badgeColor = 'badge-red';
+                                    rowBg = 'rgba(239, 68, 68, 0.03)';
+                                  } else {
+                                    statusLabel = 'Bereits in Maschine';
+                                    badgeColor = 'badge-green';
+                                    rowBg = 'rgba(16, 185, 129, 0.03)';
+                                  }
+                                }
+
+                                return (
+                                  <div
+                                    key={tIdx}
+                                    style={{
+                                      display: 'flex',
+                                      justifyContent: 'space-between',
+                                      alignItems: 'center',
+                                      background: rowBg,
+                                      padding: '0.35rem 0.5rem',
+                                      borderRadius: '6px',
+                                      fontSize: '0.75rem',
+                                      border: isInMachineNow ? (isKilled ? '1px dashed rgba(239, 68, 68, 0.2)' : '1px solid rgba(16, 185, 129, 0.2)') : '1px solid var(--border-dim)'
+                                    }}
+                                  >
+                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                      <span style={{ color: '#fff', fontWeight: 500, textDecoration: (isInMachineNow && isKilled) ? 'line-through' : 'none' }}>{t.desc}</span>
+                                      <span style={{ color: '#64748b', fontSize: '0.65rem' }}>
+                                        Werkzeug-ID: {t.toolNr}
+                                      </span>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                                      <span className={`badge ${badgeColor}`} style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
+                                        {statusLabel}
+                                      </span>
+                                      <span className="badge badge-blue" style={{ fontSize: '0.7rem' }}>
+                                        Bedarf: {t.partQty}
+                                      </span>
+                                    </div>
                                   </div>
-                                  <span className="badge badge-blue" style={{ fontSize: '0.7rem' }}>
-                                    Bedarf: {t.partQty}
-                                  </span>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           )}
                         </div>
                       );
                     })
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB CONTENT 3: SCENARIO CONFIGURATION */}
+            {rightTab === 'config' && (
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', gap: '0.75rem' }}>
+                <p style={{ color: '#64748b', fontSize: '0.8rem', marginBottom: '0.25rem' }}>
+                  Passen Sie das Rüst-Szenario an: Entladen Sie aktuell gerüstete Listen oder laden Sie kommende Listen vorab in das Magazin.
+                </p>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flexGrow: 1, overflowY: 'auto', paddingRight: '0.25rem' }}>
+                  {/* Part 1: Unload lists in Toollist-DB */}
+                  <div>
+                    <h5 style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
+                      Toollist-DB: Listen entladen ({machinePrograms.length})
+                    </h5>
+                    {machinePrograms.length === 0 ? (
+                      <div style={{ color: '#64748b', fontSize: '0.75rem', padding: '0.5rem', fontStyle: 'italic' }}>Keine externen Listen auf Maschine geladen.</div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                        {machinePrograms.map(prog => {
+                          const isUnloaded = unloadedProgramIds.includes(prog.Id);
+                          return (
+                            <label
+                              key={prog.Id}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                fontSize: '0.8rem',
+                                color: isUnloaded ? '#f87171' : '#cbd5e1',
+                                cursor: 'pointer',
+                                background: isUnloaded ? 'rgba(239, 68, 68, 0.08)' : 'rgba(255,255,255,0.01)',
+                                padding: '0.4rem 0.6rem',
+                                borderRadius: '8px',
+                                border: isUnloaded ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid var(--border-dim)',
+                                transition: 'background 0.2s, border-color 0.2s'
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isUnloaded}
+                                onChange={() => {
+                                  if (isUnloaded) {
+                                    setUnloadedProgramIds(prev => prev.filter(id => id !== prog.Id));
+                                  } else {
+                                    setUnloadedProgramIds(prev => [...prev, prog.Id]);
+                                  }
+                                }}
+                                style={{ cursor: 'pointer' }}
+                              />
+                              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                <span style={{ fontWeight: 600 }}>{prog.ProgramName}</span>
+                                <span style={{ fontSize: '0.65rem', color: isUnloaded ? '#f87171' : '#64748b' }}>
+                                  Status: {isUnloaded ? 'Wird entladen (aus Ist-Bestand abgezogen)' : 'Geladen (Teil des Ist-Bestands)'}
+                                </span>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Part 2: Preload upcoming lists */}
+                  <div>
+                    <h5 style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.25rem', marginBottom: '0.5rem', marginTop: '0.5rem' }}>
+                      Kommende Listen vorab laden ({preloadedProgramNames.length})
+                    </h5>
+                    {preloadedProgramNames.length === 0 ? (
+                      <div style={{ color: '#64748b', fontSize: '0.75rem', padding: '0.5rem', fontStyle: 'italic', lineHeight: '1.4' }}>
+                        Klicken Sie in der Timeline bei einem Arbeitsschritt auf <strong>"+ Vorab laden"</strong>, um dessen Werkzeuge vorab zu rüsten.
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                        {preloadedProgramNames.map(progName => (
+                          <div
+                            key={progName}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              fontSize: '0.8rem',
+                              color: '#60a5fa',
+                              background: 'rgba(59, 130, 246, 0.08)',
+                              padding: '0.4rem 0.6rem',
+                              borderRadius: '8px',
+                              border: '1px solid rgba(59, 130, 246, 0.3)'
+                            }}
+                          >
+                            <span style={{ fontWeight: 600 }}>{progName}</span>
+                            <button
+                              onClick={() => setPreloadedProgramNames(prev => prev.filter(p => p !== progName))}
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#ef4444',
+                                cursor: 'pointer',
+                                fontWeight: 700,
+                                fontSize: '0.85rem',
+                                outline: 'none'
+                              }}
+                              title="Vorab laden aufheben"
+                            >
+                              × Entfernen
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Part 3: Reset Actions */}
+                  {(unloadedProgramIds.length > 0 || preloadedProgramNames.length > 0) && (
+                    <button
+                      onClick={() => {
+                        setUnloadedProgramIds([]);
+                        setPreloadedProgramNames([]);
+                      }}
+                      style={{
+                        marginTop: '0.5rem',
+                        padding: '0.5rem',
+                        background: 'rgba(239, 68, 68, 0.1)',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: '8px',
+                        color: '#f87171',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'background 0.2s',
+                        outline: 'none',
+                        width: '100%'
+                      }}
+                    >
+                      Konfiguration zurücksetzen
+                    </button>
                   )}
                 </div>
               </div>
@@ -1841,6 +2275,7 @@ function DemandTab({ startDate, endDate }) {
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '0.25rem', fontSize: '0.75rem', color: '#94a3b8' }}>
                 <span>Datum: <strong>{selectedOrder.date ? new Date(selectedOrder.date).toLocaleDateString('de-DE') : 'N/A'}</strong></span>
                 <span>Auftrag: <strong style={{ color: '#fff' }}>{selectedOrder.contractNumber}</strong> (Pos. {selectedOrder.orderPos || 'N/A'} / AS: {selectedOrder.stepPos})</span>
+                <span>KV Status: <strong style={{ color: '#fff' }}>{selectedOrder.spko === 2 ? '2 (In Arbeit)' : selectedOrder.spko === 1 ? '1 (Offen)' : selectedOrder.spko === 4 ? '4 (Erledigt)' : selectedOrder.spko || 'N/A'}</strong></span>
                 <span>Programm: <strong>{selectedOrder.programName || 'N/A'}</strong></span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>

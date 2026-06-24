@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 const { getPoolD4, getPoolWT, getPoolTL, sql } = require('./db');
 const { extractNCPrograms, findMatches } = require('./matching');
@@ -32,6 +34,92 @@ let cachedDemandSteps = null;
 let cachedToolDetails = {};
 let cachedSetupData = null;
 let cachedMachines = [];
+const activeScenarios = {}; // machineName -> { unloadPrograms, loadPrograms }
+
+async function fetchActiveStepsAndMaterials(poolD4) {
+  const sqlPath = path.join(__dirname, '..', 'KV_test.sql');
+  console.log(`Loading KV_test.sql from ${sqlPath}...`);
+  let kvSql = fs.readFileSync(sqlPath, 'utf8');
+  
+  // Clean it up
+  kvSql = kvSql.replace(/\bgo\b/gi, '');
+
+  // Split at the CTE definition closing parenthesis before SELECT ID,
+  const selectStartMatch = kvSql.match(/\)\s+SELECT\s+ID\s*,\s*IDBEBP\s*,/i);
+  if (!selectStartMatch) {
+    throw new Error('Could not find the end of CTE in KV_test.sql');
+  }
+
+  const selectStartIndex = selectStartMatch.index;
+  const ctePart = kvSql.substring(0, selectStartIndex + 1); // include the closing parenthesis ')'
+  const selectPartAndSuffix = kvSql.substring(selectStartIndex + 1);
+
+  const whereIdx = selectPartAndSuffix.lastIndexOf('WHERE ISNULL(IDBEBP, 0) <> 0');
+  if (whereIdx === -1) {
+    throw new Error('Could not find WHERE clause in select part');
+  }
+
+  const selectPart = selectPartAndSuffix.substring(0, whereIdx);
+
+  const finalSql = `
+    ${ctePart}
+    SELECT
+      OuterTemp.ID as StepId,
+      OuterTemp.IDBEBP as OrderId,
+      OuterTemp.PSP_POSITION_NUMMER as StepPos,
+      OuterTemp.PSP_TYP_HERKUNFT as TypHerkunft,
+      OuterTemp.PSP_TYP_POSITION as StepTyp,
+      OuterTemp.SPKO as SPKO,
+      OuterTemp.VORGAENGER as VORGAENGER,
+      b.BP_ARTIKEL_BEZEICHNUNG as OrderDesc,
+      b.BP_POSITION_NUMMER as OrderPos,
+      b.BP_IDAR as ArticleId,
+      p.PSP_BEZEICHNUNG as StepDesc,
+      p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
+      p.PSP_IDMS as MachineId,
+      p.PSP_IDMP as MachinePoolId,
+      p.PSP_MENGE_SOLL as Quantity,
+      p.PSP_PP_STATUS_PRODUKTION as StatusProduction,
+      CASE
+        WHEN b.BP_PP_DATUM_TERMIN IS NOT NULL THEN b.BP_PP_DATUM_TERMIN
+        ELSE
+          CASE
+            WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
+            ELSE au.BK_BKBE_AU_LI_DATUM
+          END
+      END as DeliveryDate,
+      CASE
+        WHEN OuterTemp.PSP_TYP_HERKUNFT = 0 THEN
+          (
+            SELECT MIN(PSPP_DATUM_START)
+            FROM tPPS_SKKALP_PLAN
+            WHERE tPPS_SKKALP_PLAN.PSPP_IDPSKP = OuterTemp.ID
+              AND tPPS_SKKALP_PLAN.PSPP_STATUS_PLANUNG <> 1
+          )
+        ELSE
+          (
+            SELECT MIN(PSPP_DATUM_START)
+            FROM tPPS_SKKALP_PLAN
+            WHERE tPPS_SKKALP_PLAN.PSPP_IDSKKP = OuterTemp.ID
+              AND tPPS_SKKALP_PLAN.PSPP_STATUS_PLANUNG <> 1
+          )
+      END as StartDate,
+      bk.BK_BKBE_NUMMER as ContractNumber
+    FROM (
+      ${selectPart}
+    ) AS OuterTemp
+    INNER JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = OuterTemp.IDBEBP
+    INNER JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
+    LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
+    LEFT JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = OuterTemp.ID AND OuterTemp.PSP_TYP_HERKUNFT = 0
+    WHERE bk.BK_BKBE_STATUS_BEARBEITUNG = 0 
+      AND bk.BK_BKBE_TYP_BELEG = 2
+  `;
+
+  console.log('Executing database query for active steps/materials...');
+  const result = await poolD4.request().query(finalSql);
+  return result.recordset;
+}
 
 // Warm-up functions
 async function loadToolListsCache() {
@@ -126,30 +214,14 @@ async function cacheDemand() {
   const poolWT = await getPoolWT();
 
   console.log('Caching phased tool demand timeline...');
-  const result = await poolD4.request().query(`
-    SELECT
-      b.ID as OrderId,
-      CASE
-        WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
-        ELSE au.BK_BKBE_AU_LI_DATUM
-      END as DeliveryDate,
-      p.PSP_BEZEICHNUNG as StepDesc,
-      p.PSP_MENGE_SOLL as Quantity,
-      p.PSP_IDMS as MachineId,
-      p.PSP_IDMP as MachinePoolId
-    FROM [D4].[dbo].[tbe_Belp] b
-    INNER JOIN [D4].[dbo].[tPPS_SKKALK] k ON k.PSK_IDBEBP = b.ID
-    INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.PSP_IDPSKKK = k.ID
-    LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
-    LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
-    WHERE p.PSP_TYP_POSITION = 0
-      AND bk.BK_BKBE_STATUS_BEARBEITUNG = 0
-      AND bk.BK_BKBE_TYP_BELEG = 2
-      AND (b.BP_LI_DATUM IS NOT NULL OR au.BK_BKBE_AU_LI_DATUM IS NOT NULL)
-      AND (p.PSP_IDMS IS NOT NULL AND p.PSP_IDMS <> 0 OR p.PSP_IDMP IS NOT NULL AND p.PSP_IDMP <> 0)
-  `);
+  const rows = await fetchActiveStepsAndMaterials(poolD4);
 
-  const steps = result.recordset;
+  const steps = rows.filter(step => 
+    step.TypHerkunft === 0 &&
+    step.StepTyp === 0 &&
+    step.SPKO !== 4 &&
+    ((step.MachineId !== null && step.MachineId !== 0) || (step.MachinePoolId !== null && step.MachinePoolId !== 0))
+  );
 
   const mappingResult = await poolWT.request().query(`
     SELECT ToolListNr, ToolNr, ToolQuantity
@@ -187,8 +259,9 @@ async function cacheDemand() {
   const matchCache = {};
   const tempSteps = [];
   steps.forEach(step => {
-    if (!step.DeliveryDate) return;
-    const dateStr = new Date(step.DeliveryDate).toISOString().substring(0, 10);
+    const targetDate = step.StartDate || step.DeliveryDate;
+    if (!targetDate) return;
+    const dateStr = new Date(targetDate).toISOString().substring(0, 10);
     const progs = extractNCPrograms(step.StepDesc);
     const stepTools = [];
 
@@ -237,160 +310,7 @@ async function cacheSetupData() {
   const poolWT = await getPoolWT();
 
   console.log('Caching steps and tools mappings for setup simulation...');
-  const stepsResult = await poolD4.request().query(`
-    WITH tNF AS (
-      SELECT tPPS_SKKALP.ID,
-             PSP_POSITION_NUMMER AS POS,
-             PSK_IDBEBP AS IDBEBP,
-             CASE
-                 WHEN EXISTS
-                      (
-                          SELECT ID
-                          FROM tPPS_SKKALP_ZU
-                          WHERE tPPS_SKKALP_ZU.PSZ_IDPSP = tPPS_SKKALP.ID
-                      ) THEN
-                     1
-                 ELSE
-                     0
-             END AS NF,
-             (
-                 SELECT TOP 1
-                     tPPS_SKKALP_NF.PSP_POSITION_NUMMER
-                 FROM tPPS_SKKALP AS tPPS_SKKALP_INNER
-                     LEFT JOIN tPPS_SKKALP_ZU
-                         ON tPPS_SKKALP_ZU.PSZ_IDPSP = tPPS_SKKALP_INNER.ID
-                     LEFT JOIN tPPS_SKKALP AS tPPS_SKKALP_NF
-                         ON tPPS_SKKALP_NF.ID = tPPS_SKKALP_ZU.PSZ_IDPSP_ZU
-                     LEFT JOIN
-                     (
-                         SELECT ID,
-                                AS_TYP_BERUECKSICHTIGUNG_KONTROLLE_FERTIGSTELLUNG
-                         FROM tPPS_ARBSCHR
-                     ) AS tPPS_ARBSCHR
-                         ON tPPS_ARBSCHR.ID = tPPS_SKKALP.PSP_IDAS
-                 WHERE tPPS_SKKALP_INNER.ID = tPPS_SKKALP.ID
-                       AND AS_TYP_BERUECKSICHTIGUNG_KONTROLLE_FERTIGSTELLUNG = 0
-                 ORDER BY tPPS_SKKALP_NF.PSP_POSITION_NUMMER DESC
-             ) AS POS_NR_NF
-      FROM tPPS_SKKALP
-          INNER JOIN tPPS_SKKALK
-              ON tPPS_SKKALK.ID = tPPS_SKKALP.PSP_IDPSKKK
-          LEFT JOIN
-          (
-              SELECT ID,
-                     AS_TYP_BERUECKSICHTIGUNG_KONTROLLE_FERTIGSTELLUNG
-              FROM tPPS_ARBSCHR
-          ) AS tPPS_ARBSCHR
-              ON tPPS_ARBSCHR.ID = tPPS_SKKALP.PSP_IDAS
-      WHERE AS_TYP_BERUECKSICHTIGUNG_KONTROLLE_FERTIGSTELLUNG = 0
-    ),
-    tZE_BUCH_SUM AS (
-       SELECT tZE_BUCH.ZBU_IDPSKP,
-              SUM(ISNULL(ZBUBW_ZEIT, 0)) AS ZE_BUCH_SUMME_ZEIT_IST
-       FROM tZE_BUCH
-           LEFT JOIN
-           (
-               SELECT CASE
-                          WHEN ISNULL(ZBUBW_DATUM_ZEIT_START, 0) <> 0
-                               AND ISNULL(ZBUBW_DATUM_ZEIT_STOP, 0) <> 0 THEN
-                              ROUND(
-                                       CAST(DATEDIFF(ss, ZBUBW_DATUM_ZEIT_START, ZBUBW_DATUM_ZEIT_STOP) AS FLOAT)
-                                       / 60,
-                                       4
-                                   )
-                          ELSE
-                              0
-                      END AS ZBUBW_ZEIT,
-                      tZE_BUCH_BEWE.ZBUBW_IDZBU
-               FROM tZE_BUCH_BEWE
-           ) AS tZE_BUCH_BEWE
-               ON tZE_BUCH_BEWE.ZBUBW_IDZBU = tZE_BUCH.ID
-       GROUP BY tZE_BUCH.ZBU_IDPSKP
-    )
-    SELECT
-      b.ID as OrderId,
-      b.BP_POSITION_NUMMER as OrderPos,
-      b.BP_ARTIKEL_BEZEICHNUNG as OrderDesc,
-      b.BP_IDAR as ArticleId,
-      p.ID as StepId,
-      p.PSP_BEZEICHNUNG as StepDesc,
-      p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
-      p.PSP_IDMS as MachineId,
-      p.PSP_IDMP as MachinePoolId,
-      p.PSP_PP_STATUS_PRODUKTION as StatusProduction,
-      p.PSP_POSITION_NUMMER as StepPos,
-      p.PSP_TYP_POSITION as StepTyp,
-      CASE
-        WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
-        ELSE au.BK_BKBE_AU_LI_DATUM
-      END as DeliveryDate,
-      bk.BK_BKBE_NUMMER as ContractNumber,
-      CASE
-        WHEN p.PSP_PP_STATUS_PRODUKTION = 0 THEN
-          CASE
-            WHEN ISNULL(zb.ZE_BUCH_SUMME_ZEIT_IST, 0) > 0 THEN 2
-            ELSE 1
-          END
-        ELSE 4
-      END AS SPKO,
-      ISNULL(tVORGAENGER.VORGAENGER, '') AS VORGAENGER
-    FROM [D4].[dbo].[tbe_Belp] b
-    INNER JOIN [D4].[dbo].[tPPS_SKKALK] k ON k.PSK_IDBEBP = b.ID
-    INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.PSP_IDPSKKK = k.ID
-    LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
-    LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
-    LEFT JOIN tZE_BUCH_SUM zb ON zb.ZBU_IDPSKP = p.ID
-    LEFT JOIN (
-       SELECT ID,
-              IDBEBP,
-              POS,
-              REPLACE(REPLACE(STUFF(
-                              (
-                                  SELECT *
-                                  FROM
-                                  (
-                                      SELECT TOP 1
-                                          '|' + POS AS POS
-                                      FROM tNF
-                                      WHERE IDBEBP = tNF_OUTER.IDBEBP
-                                            AND POS < tNF_OUTER.POS
-                                            AND (
-                                                    ISNULL(POS_NR_NF, 0) = tNF_OUTER.POS
-                                                    OR ISNULL(POS_NR_NF, -999) = -999
-                                                )
-                                      GROUP BY POS
-                                      ORDER BY POS DESC
-                                      UNION
-                                      SELECT TOP 1000
-                                          '|' + POS AS POS
-                                      FROM tNF
-                                      WHERE IDBEBP = tNF_OUTER.IDBEBP
-                                            AND POS < tNF_OUTER.POS
-                                            AND (ISNULL(POS_NR_NF, 0) = tNF_OUTER.POS)
-                                      GROUP BY POS
-                                      ORDER BY POS DESC
-                                  ) AS T
-                                  FOR XML PATH('')
-                              ),
-                              1,
-                              0,
-                              ''
-                                   ),
-                              '<POS>',
-                              ''
-                             ),
-                      '</POS>',
-                      ''
-                     ) AS VORGAENGER
-       FROM tNF AS tNF_OUTER
-       GROUP BY tNF_OUTER.ID,
-                tNF_OUTER.IDBEBP,
-                tNF_OUTER.POS
-    ) tVORGAENGER ON tVORGAENGER.ID = p.ID
-    WHERE p.PSP_TYP_LAYOUT_POSITION = 0
-      AND bk.BK_BKBE_STATUS_BEARBEITUNG = 0
-      AND bk.BK_BKBE_TYP_BELEG = 2
-  `);
+  const rows = await fetchActiveStepsAndMaterials(poolD4);
 
   const mappingResult = await poolWT.request().query(`
     SELECT ToolListNr, ToolNr
@@ -423,8 +343,6 @@ async function cacheSetupData() {
       len: t.CLength
     };
   });
-
-  const rows = stepsResult.recordset;
 
   // Group steps by OrderId to resolve predecessors correctly within each order
   const ordersMap = {};
@@ -494,9 +412,12 @@ async function cacheSetupData() {
   });
 
   // Keep only normal work steps (StepTyp = 0) with valid setup time (> 0) and assigned to a machine or pool
+  // Also filter out completed steps (SPKO === 4)
   const steps = rows.filter(step => 
+    step.TypHerkunft === 0 &&
     step.StepTyp === 0 && 
     step.SetupTime > 0 &&
+    step.SPKO !== 4 &&
     ((step.MachineId !== null && step.MachineId !== 0) || (step.MachinePoolId !== null && step.MachinePoolId !== 0))
   );
   console.log(`Matching NC programs for ${steps.length} setup steps...`);
@@ -662,8 +583,9 @@ app.get('/api/dashboard-summary', (req, res) => {
   if ((startDate || endDate) && cachedSetupData) {
     const { steps } = cachedSetupData;
     const filteredSteps = steps.filter(step => {
-      if (!step.DeliveryDate) return false;
-      const dStr = new Date(step.DeliveryDate).toISOString().substring(0, 10);
+      const targetDate = step.StartDate || step.DeliveryDate;
+      if (!targetDate) return false;
+      const dStr = new Date(targetDate).toISOString().substring(0, 10);
       if (startDate && dStr < startDate) return false;
       if (endDate && dStr > endDate) return false;
       return true;
@@ -775,14 +697,94 @@ app.get('/api/articles/:id/orders', async (req, res) => {
       ORDER BY b.BP_PP_DATUM_START DESC
     `);
 
-    res.json(result.recordset);
+    const ordersList = result.recordset;
+    if (!cachedSetupData) {
+      return res.json(ordersList);
+    }
+    
+    // Group active steps by OrderId
+    const { steps } = cachedSetupData;
+    const ordersMap = {};
+    steps.forEach(step => {
+      if (!ordersMap[step.OrderId]) {
+        ordersMap[step.OrderId] = [];
+      }
+      ordersMap[step.OrderId].push(step);
+    });
+
+    // Track which machines are involved across these orders to pre-simulate them
+    const machinesInvolved = new Set();
+    ordersList.forEach(ord => {
+      const oSteps = ordersMap[ord.OrderId] || [];
+      oSteps.forEach(step => {
+        const mName = findMachineNameFromD4(step.MachineId, step.MachinePoolId);
+        if (mName) {
+          step.MatchedMachineName = mName;
+          machinesInvolved.add(mName);
+        }
+      });
+    });
+
+    // Run active simulation for each involved machine
+    const simulatedStepsMap = {};
+    for (let mName of Array.from(machinesInvolved)) {
+      try {
+        const scenario = activeScenarios[mName] || { unloadPrograms: '', loadPrograms: '' };
+        const simResult = await runSimulationForMachine(
+          mName,
+          scenario.unloadPrograms,
+          scenario.loadPrograms,
+          '2028-12-31',
+          'false'
+        );
+        simResult.simulatedTimeline.forEach(sStep => {
+          simulatedStepsMap[sStep.stepId] = {
+            missesCount: sStep.missesCount,
+            occupiedSlots: sStep.occupiedSlots,
+            magazineSize: simResult.magazineSize,
+            isFeasible: sStep.isFeasible
+          };
+        });
+      } catch (err) {
+        console.error(`Error simulating machine ${mName} for articles orders:`, err);
+      }
+    }
+
+    // Attach aggregated simulation data to orders
+    const resolvedOrders = ordersList.map(ord => {
+      const oSteps = ordersMap[ord.OrderId] || [];
+      let totalMisses = 0;
+      let maxOccupied = 0;
+      let magSize = 0;
+      let hasSim = false;
+
+      oSteps.forEach(step => {
+        const simData = simulatedStepsMap[step.StepId];
+        if (simData) {
+          hasSim = true;
+          totalMisses += simData.missesCount;
+          if (simData.occupiedSlots > maxOccupied) {
+            maxOccupied = simData.occupiedSlots;
+            magSize = simData.magazineSize;
+          }
+        }
+      });
+
+      return {
+        ...ord,
+        SimMissesCount: hasSim ? totalMisses : undefined,
+        SimOccupiedSlots: hasSim ? maxOccupied : undefined,
+        SimMagazineSize: hasSim ? magSize : undefined
+      };
+    });
+
+    res.json(resolvedOrders);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 4. Order steps with NC-program names and WinTool matches (Dynamic lookup)
 app.get('/api/orders/:id/steps', async (req, res) => {
   try {
     const { id } = req.params;
@@ -799,9 +801,40 @@ app.get('/api/orders/:id/steps', async (req, res) => {
         p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
         p.PSP_ZEIT_MINUTEN_PRODUKTION_GESAMT_SOLL as ProdTime,
         p.PSP_MENGE_SOLL as TargetQty,
-        p.PSP_PP_STATUS_PRODUKTION as StatusProduction
+        p.PSP_PP_STATUS_PRODUKTION as StatusProduction,
+        CASE
+          WHEN p.PSP_PP_STATUS_PRODUKTION = 0 THEN
+            CASE
+              WHEN EXISTS (
+                SELECT 1 FROM tZE_BUCH zb
+                INNER JOIN tZE_BUCH_BEWE zbb ON zbb.ZBUBW_IDZBU = zb.ID
+                WHERE zb.ZBU_IDPSKP = p.ID
+              ) THEN 2
+              ELSE 1
+            END
+          ELSE 4
+        END AS SPKO,
+        CASE
+          WHEN b.BP_PP_DATUM_TERMIN IS NOT NULL THEN b.BP_PP_DATUM_TERMIN
+          ELSE
+            CASE
+              WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
+              ELSE au.BK_BKBE_AU_LI_DATUM
+            END
+        END as DeliveryDate,
+        (
+          SELECT MIN(PSPP_DATUM_START)
+          FROM tPPS_SKKALP_PLAN
+          WHERE tPPS_SKKALP_PLAN.PSPP_IDPSKP = p.ID
+            AND tPPS_SKKALP_PLAN.PSPP_STATUS_PLANUNG <> 1
+        ) as StartDate,
+        p.PSP_IDMS as MachineId,
+        p.PSP_IDMP as MachinePoolId
       FROM [D4].[dbo].[tPPS_SKKALK] k
       INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.PSP_IDPSKKK = k.ID
+      LEFT JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = k.PSK_IDBEBP
+      LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
+      LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
       WHERE k.PSK_IDBEBP = @orderId
       ORDER BY p.PSP_POSITION_NUMMER
     `);
@@ -833,11 +866,73 @@ app.get('/api/orders/:id/steps', async (req, res) => {
         StepTypName: stepTypName,
         parsedPrograms,
         toolListMatches,
-        IsFinished: step.StatusProduction === 1
+        IsFinished: step.SPKO === 4
       };
     });
 
-    res.json(processedSteps);
+    if (!cachedSetupData) {
+      return res.json(processedSteps);
+    }
+
+    // Determine unique machines involved in active steps
+    const machinesInvolved = new Set();
+    processedSteps.forEach(step => {
+      if (step.StepTyp === 0) {
+        const mName = findMachineNameFromD4(step.MachineId, step.MachinePoolId);
+        if (mName) {
+          step.MatchedMachineName = mName;
+          machinesInvolved.add(mName);
+        }
+      }
+    });
+
+    // Run active simulation for each involved machine and build steps map
+    const simulatedStepsMap = {};
+    for (let mName of Array.from(machinesInvolved)) {
+      try {
+        const scenario = activeScenarios[mName] || { unloadPrograms: '', loadPrograms: '' };
+        const simResult = await runSimulationForMachine(
+          mName,
+          scenario.unloadPrograms,
+          scenario.loadPrograms,
+          '2028-12-31',
+          'false'
+        );
+        simResult.simulatedTimeline.forEach(sStep => {
+          simulatedStepsMap[sStep.stepId] = {
+            missesCount: sStep.missesCount,
+            occupiedSlots: sStep.occupiedSlots,
+            magazineSize: simResult.magazineSize,
+            isFeasible: sStep.isFeasible,
+            statusColor: sStep.statusColor,
+            misses: sStep.misses,
+            magazineTools: sStep.magazineTools
+          };
+        });
+      } catch (err) {
+        console.error(`Error simulating machine ${mName} for order steps:`, err);
+      }
+    }
+
+    // Attach simulation attributes to each step
+    const finalSteps = processedSteps.map(step => {
+      const simData = simulatedStepsMap[step.StepId];
+      if (simData) {
+        return {
+          ...step,
+          SimMissesCount: simData.missesCount,
+          SimOccupiedSlots: simData.occupiedSlots,
+          SimMagazineSize: simData.magazineSize,
+          SimIsFeasible: simData.isFeasible,
+          SimStatusColor: simData.statusColor,
+          SimMisses: simData.misses,
+          SimMagazineTools: simData.magazineTools
+        };
+      }
+      return step;
+    });
+
+    res.json(finalSteps);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -1023,8 +1118,9 @@ app.get('/api/setup-reduction', async (req, res) => {
 
     if (startDate || endDate) {
       filteredSteps = filteredSteps.filter(step => {
-        if (!step.DeliveryDate) return false;
-        const dStr = new Date(step.DeliveryDate).toISOString().substring(0, 10);
+        const targetDate = step.StartDate || step.DeliveryDate;
+        if (!targetDate) return false;
+        const dStr = new Date(targetDate).toISOString().substring(0, 10);
         if (startDate && dStr < startDate) return false;
         if (endDate && dStr > endDate) return false;
         return true;
@@ -1305,9 +1401,19 @@ app.get('/api/machines/:id/tools', async (req, res) => {
         p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
         bk.BK_BKBE_NUMMER as ContractNumber,
         CASE
-          WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
-          ELSE au.BK_BKBE_AU_LI_DATUM
-        END as DeliveryDate
+          WHEN b.BP_PP_DATUM_TERMIN IS NOT NULL THEN b.BP_PP_DATUM_TERMIN
+          ELSE
+            CASE
+              WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
+              ELSE au.BK_BKBE_AU_LI_DATUM
+            END
+        END as DeliveryDate,
+        (
+          SELECT MIN(PSPP_DATUM_START)
+          FROM tPPS_SKKALP_PLAN
+          WHERE tPPS_SKKALP_PLAN.PSPP_IDPSKP = p.ID
+            AND tPPS_SKKALP_PLAN.PSPP_STATUS_PLANUNG <> 1
+        ) as StartDate
       FROM [D4].[dbo].[tbe_Belp] b
       INNER JOIN [D4].[dbo].[tPPS_SKKALK] k ON k.PSK_IDBEBP = b.ID
       INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.PSP_IDPSKKK = k.ID
@@ -1320,8 +1426,9 @@ app.get('/api/machines/:id/tools', async (req, res) => {
 
     // Filter steps by date range in Node.js to avoid conversion errors
     const filteredSteps = dbSteps.filter(step => {
-      if (!step.DeliveryDate) return false;
-      const dStr = new Date(step.DeliveryDate).toISOString().substring(0, 10);
+      const targetDate = step.StartDate || step.DeliveryDate;
+      if (!targetDate) return false;
+      const dStr = new Date(targetDate).toISOString().substring(0, 10);
       if (startDate && dStr < startDate) return false;
       if (endDate && dStr > endDate) return false;
       return true;
@@ -1493,48 +1600,52 @@ app.get('/api/inventory/machine/:name/current-tools', async (req, res) => {
     
     const machineId = machineResult.recordset[0].Id;
     
-    // Resolve the geparkt/Parkplatz program for this machine
+    // Resolve ALL programs for this machine (both geparkt/Parkplatz and active programs)
     const programResult = await poolTL.request()
       .input('machineId', sql.Int, machineId)
       .query(`
-        SELECT TOP 1 Id, ProgramName
+        SELECT Id, ProgramName
         FROM MachineToProgram
         WHERE Machine = @machineId
-        ORDER BY 
-          CASE 
-            WHEN ProgramName LIKE '%geparkt%' THEN 1
-            WHEN ProgramName LIKE '%Parkplatz%' THEN 2
-            WHEN ProgramName LIKE '%Geparkt%' THEN 3
-            ELSE 4
-          END ASC
       `);
       
     if (programResult.recordset.length === 0) {
       return res.json([]);
     }
     
-    const programId = programResult.recordset[0].Id;
+    const programIds = programResult.recordset.map(p => p.Id);
     
-    // Get tools inside this program
+    // Get tools inside all these programs
     const toolsResult = await poolTL.request()
-      .input('programId', sql.Int, programId)
-      .query('SELECT T, ToolName, Comment FROM ProgramToTool WHERE MachineToProgramId = @programId ORDER BY T');
+      .query(`SELECT T, ToolName, Comment FROM ProgramToTool WHERE MachineToProgramId IN (${programIds.join(',')}) ORDER BY T`);
       
     const toolsList = toolsResult.recordset;
     
-    // Parse WinTool Nr from suffix and resolve detailed data
+    // Parse WinTool Nr from suffix, deduplicate, and resolve detailed data
     const resolvedTools = [];
     const wtToolIds = [];
+    const seenTools = new Set();
+    const uniqueToolsList = [];
     
     toolsList.forEach(t => {
       const nameStr = t.ToolName || '';
       const idx = nameStr.lastIndexOf('-');
+      let wtNr = null;
       if (idx !== -1) {
         const suffix = nameStr.substring(idx + 1);
         const nr = parseInt(suffix, 10);
         if (!isNaN(nr)) {
-          t.wtNr = nr;
-          wtToolIds.push(nr);
+          wtNr = nr;
+        }
+      }
+      
+      const key = wtNr ? `nr:${wtNr}` : `name:${nameStr}`;
+      if (!seenTools.has(key)) {
+        seenTools.add(key);
+        t.wtNr = wtNr;
+        uniqueToolsList.push(t);
+        if (wtNr) {
+          wtToolIds.push(wtNr);
         }
       }
     });
@@ -1560,7 +1671,7 @@ app.get('/api/inventory/machine/:name/current-tools', async (req, res) => {
       }
     }
     
-    toolsList.forEach(t => {
+    uniqueToolsList.forEach(t => {
       const wtDetails = t.wtNr ? wtDetailsMap[t.wtNr] : null;
       resolvedTools.push({
         pocket: t.T,
@@ -1599,258 +1710,383 @@ function mapToollistMachineToD4(machineName) {
   };
 }
 
-// 3. Simulate future magazine tools and consolidated setup demand
-app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
-  try {
-    const { name } = req.params;
-    const { targetDate, optimize } = req.query;
+// Reverse mapping D4 Machine/Pool ID to Toollist Machine Name
+function findMachineNameFromD4(machineId, machinePoolId) {
+  const names = ['C40', 'C400', 'RS1', 'RS2', 'Chiron', 'C42'];
+  for (let name of names) {
+    const mapping = mapToollistMachineToD4(name);
+    if (machineId && mapping.machineIds.includes(machineId)) {
+      return name;
+    }
+    if (machinePoolId && mapping.poolIds.includes(machinePoolId)) {
+      return name;
+    }
+  }
+  return null;
+}
+
+// Reusable Machine Simulation Engine
+async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targetDate, optimize, startDate) {
+  const poolTL = await getPoolTL();
+  
+  // Find machine definition
+  const machineResult = await poolTL.request()
+    .input('name', sql.VarChar, name)
+    .query('SELECT Id, Name, MagazineSize FROM Machines WHERE Name = @name');
     
-    if (!cachedSetupData) {
-      return res.status(503).json({ error: 'Rüstdaten werden noch geladen' });
+  if (machineResult.recordset.length === 0) {
+    throw new Error('Maschine nicht gefunden');
+  }
+  
+  const machine = machineResult.recordset[0];
+  const magazineSize = machine.MagazineSize || 40;
+  
+  // Get all loaded programs for this machine (both geparkt and active ones)
+  const programResult = await poolTL.request()
+    .input('machineId', sql.Int, machine.Id)
+    .query('SELECT Id, ProgramName FROM MachineToProgram WHERE Machine = @machineId');
+    
+  // Determine which programs are active (not unloaded)
+  let activePrograms = programResult.recordset;
+  
+  // Parse unloaded program IDs
+  let unloadIds = [];
+  if (unloadPrograms) {
+    unloadIds = unloadPrograms.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+  }
+  
+  // Filter out unloaded programs
+  if (unloadIds.length > 0) {
+    activePrograms = activePrograms.filter(p => !unloadIds.includes(parseInt(p.Id, 10)));
+  }
+  
+  // Fetch tools for all active programs
+  let initialToolNrs = [];
+  if (activePrograms.length > 0) {
+    const activeProgramIds = activePrograms.map(p => p.Id);
+    const toolsResult = await poolTL.request()
+      .query(`SELECT ToolName FROM ProgramToTool WHERE MachineToProgramId IN (${activeProgramIds.join(',')})`);
+      
+    toolsResult.recordset.forEach(t => {
+      const nameStr = t.ToolName || '';
+      const idx = nameStr.lastIndexOf('-');
+      if (idx !== -1) {
+        const suffix = nameStr.substring(idx + 1);
+        const nr = parseInt(suffix, 10);
+        if (!isNaN(nr) && !initialToolNrs.includes(nr)) {
+          initialToolNrs.push(nr);
+        }
+      }
+    });
+  }
+
+  // Filter and sort upcoming orders chronologically
+  let { steps, listToToolsMap, toolsDetails } = cachedSetupData;
+
+  // Load specified upcoming lists (NC programs or tool list names)
+  const preloadedToolNrs = [];
+  const activeMachineToolNrs = [...initialToolNrs];
+  if (loadPrograms) {
+    const loadListNames = loadPrograms.split(',').map(name => name.trim()).filter(name => name.length > 0);
+    loadListNames.forEach(listName => {
+      const matches = findMatches(listName, cachedToolLists, 0.6);
+      if (matches.length > 0) {
+        const matchedNr = matches[0].Nr;
+        const tools = listToToolsMap[matchedNr] || [];
+        tools.forEach(tNr => {
+          if (!preloadedToolNrs.includes(tNr)) {
+            preloadedToolNrs.push(tNr);
+          }
+          if (!initialToolNrs.includes(tNr)) {
+            initialToolNrs.push(tNr);
+          }
+        });
+      }
+    });
+  }
+  
+  // Map machine to D4 machine/pool IDs
+  const mapping = mapToollistMachineToD4(name);
+  
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+  const todayStr = `${year}-${month}-${day}`;
+
+  // Calculate default simulation start (today - 14 days)
+  let simStartStr = startDate;
+  if (!simStartStr) {
+    const defaultStart = new Date();
+    defaultStart.setDate(defaultStart.getDate() - 14);
+    const y = defaultStart.getFullYear();
+    const m = String(defaultStart.getMonth() + 1).padStart(2, '0');
+    const d = String(defaultStart.getDate()).padStart(2, '0');
+    simStartStr = `${y}-${m}-${d}`;
+  }
+
+  let machineSteps = steps.filter(step => {
+    const tDate = step.StartDate || step.DeliveryDate;
+    if (!tDate) return false;
+    const stepDateStr = new Date(tDate).toISOString().substring(0, 10);
+    if (stepDateStr < simStartStr) return false;
+    if (stepDateStr < todayStr && step.StatusProduction === 1) return false;
+    return mapping.machineIds.includes(step.MachineId) || mapping.poolIds.includes(step.MachinePoolId);
+  });
+  
+  machineSteps.sort((a, b) => new Date(a.StartDate || a.DeliveryDate) - new Date(b.StartDate || b.DeliveryDate));
+
+  // Optimize sequence if requested (setup minimization using greedy Nearest Neighbor)
+  if (optimize === 'true') {
+    let remainingSteps = [...machineSteps];
+    let optimizedSteps = [];
+    let currentSimMagazine = [...initialToolNrs];
+    let simLastUsedIndex = {};
+    currentSimMagazine.forEach(tNr => {
+      simLastUsedIndex[tNr] = -1;
+    });
+
+    while (remainingSteps.length > 0) {
+      let bestStepIdx = -1;
+      let minMissesCount = Infinity;
+      
+      for (let i = 0; i < remainingSteps.length; i++) {
+        const step = remainingSteps[i];
+        const stepToolNrs = listToToolsMap[step.MatchedListNr] || [];
+        
+        let missesCount = 0;
+        stepToolNrs.forEach(tNr => {
+          if (!currentSimMagazine.includes(tNr)) {
+            missesCount++;
+          }
+        });
+        
+        if (missesCount < minMissesCount) {
+          minMissesCount = missesCount;
+          bestStepIdx = i;
+        } else if (missesCount === minMissesCount) {
+          if (bestStepIdx === -1 || new Date(step.StartDate || step.DeliveryDate) < new Date(remainingSteps[bestStepIdx].StartDate || remainingSteps[bestStepIdx].DeliveryDate)) {
+            bestStepIdx = i;
+          }
+        }
+      }
+      
+      const chosenStep = remainingSteps.splice(bestStepIdx, 1)[0];
+      optimizedSteps.push(chosenStep);
+      
+      const stepToolNrs = listToToolsMap[chosenStep.MatchedListNr] || [];
+      const misses = stepToolNrs.filter(tNr => !currentSimMagazine.includes(tNr));
+      
+      misses.forEach(tNr => {
+        while (currentSimMagazine.length >= magazineSize) {
+          const candidates = currentSimMagazine.filter(mNr => !stepToolNrs.includes(mNr) && !preloadedToolNrs.includes(mNr));
+          if (candidates.length === 0) break;
+          
+          let victim = candidates[0];
+          let oldestIdx = simLastUsedIndex[victim] !== undefined ? simLastUsedIndex[victim] : -2;
+          candidates.forEach(cand => {
+            const candIdx = simLastUsedIndex[cand] !== undefined ? simLastUsedIndex[cand] : -2;
+            if (candIdx < oldestIdx) {
+              oldestIdx = candIdx;
+              victim = cand;
+            }
+          });
+          currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== victim);
+        }
+        currentSimMagazine.push(tNr);
+      });
+      
+      stepToolNrs.forEach(tNr => {
+        simLastUsedIndex[tNr] = optimizedSteps.length - 1;
+      });
     }
     
+    machineSteps = optimizedSteps;
+  }
+  
+  // Run simulation step-by-step
+  let virtualMagazine = [...initialToolNrs];
+  let lastUsedIndex = {}; // toolNr -> step index when last used
+  
+  // Initialize last used indexes for tools in magazine
+  virtualMagazine.forEach(tNr => {
+    lastUsedIndex[tNr] = -1;
+  });
+  
+  const simulatedTimeline = [];
+  const loadedToolsSet = new Set(); // holds all tool Nrs that had to be loaded/setup
+  preloadedToolNrs.forEach(tNr => {
+    if (!activeMachineToolNrs.includes(tNr)) {
+      loadedToolsSet.add(tNr);
+    }
+  });
+  
+  machineSteps.forEach((step, idx) => {
+    const stepDate = step.StartDate || step.DeliveryDate;
+    const stepDateStr = stepDate ? new Date(stepDate).toISOString().substring(0, 10) : '';
+    
+    // Stop condition: if targetDate is provided and this step is after targetDate, we don't apply it to the magazine
+    const isPastTarget = targetDate && stepDateStr > targetDate;
+    
+    const stepToolNrs = listToToolsMap[step.MatchedListNr] || [];
+    const hits = [];
+    const misses = [];
+    
+    // Always calculate hits and misses first
+    stepToolNrs.forEach(tNr => {
+      if (virtualMagazine.includes(tNr)) {
+        hits.push(tNr);
+      } else {
+        misses.push(tNr);
+      }
+    });
+
+    // The occupied slots represents the current magazine tools plus the new tools that must be loaded
+    const occupiedSlots = isPastTarget ? virtualMagazine.length : (virtualMagazine.length + misses.length);
+    const isFeasible = isPastTarget ? (virtualMagazine.length <= magazineSize) : (occupiedSlots <= magazineSize);
+    
+    if (!isPastTarget) {
+      // Eviction / Insert loop for misses
+      misses.forEach(tNr => {
+        loadedToolsSet.add(tNr);
+        
+        while (virtualMagazine.length >= magazineSize) {
+          const candidates = virtualMagazine.filter(mNr => !stepToolNrs.includes(mNr) && !preloadedToolNrs.includes(mNr));
+          if (candidates.length === 0) {
+            break; 
+          }
+          
+          // Find the LRU candidate
+          let victim = candidates[0];
+          let oldestIndex = lastUsedIndex[victim] !== undefined ? lastUsedIndex[victim] : -2;
+          
+          candidates.forEach(cand => {
+            const candIndex = lastUsedIndex[cand] !== undefined ? lastUsedIndex[cand] : -2;
+            if (candIndex < oldestIndex) {
+              oldestIndex = candIndex;
+              victim = cand;
+            }
+          });
+          
+          // Remove victim
+          virtualMagazine = virtualMagazine.filter(mNr => mNr !== victim);
+        }
+        
+        // Now add the new tool
+        virtualMagazine.push(tNr);
+      });
+      
+      // Update last used indexes for all tools active in this step
+      stepToolNrs.forEach(tNr => {
+        lastUsedIndex[tNr] = idx;
+      });
+    }
+    
+    simulatedTimeline.push({
+      stepId: step.StepId,
+      contractNumber: step.ContractNumber || 'N/A',
+      stepPos: step.StepPos || null,
+      orderPos: step.OrderPos || null,
+      desc: step.StepDesc.trim().replace(/\s+/g, ' '),
+      date: stepDateStr,
+      setupTime: step.SetupTime,
+      programName: step.NCProgram || null,
+      toolsCount: stepToolNrs.length,
+      hitsCount: hits.length,
+      missesCount: misses.length,
+      misses: misses.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt' }),
+      magazineTools: virtualMagazine.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' }),
+      occupiedSlots: occupiedSlots,
+      isFeasible: isFeasible,
+      isPastTarget,
+      statusColor: step.color || 'Green',
+      spko: step.SPKO
+    });
+  });
+  
+  // Resolve initial magazine tools details
+  const initialMagazineResolved = initialToolNrs.map(tNr => {
+    return toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' };
+  });
+
+  // Resolve final magazine tools details
+  const finalMagazineResolved = virtualMagazine.map(tNr => {
+    return toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' };
+  });
+  
+  // Resolve aggregated setup tools (that had to be loaded)
+  const setupToolsResolved = Array.from(loadedToolsSet).map(tNr => {
+    return toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' };
+  });
+  
+  return {
+    machineName: name,
+    magazineSize,
+    initialToolsCount: initialToolNrs.length,
+    simulatedTimeline,
+    initialMagazine: initialMagazineResolved,
+    finalMagazine: finalMagazineResolved,
+    setupTools: setupToolsResolved
+  };
+}
+
+// 2.5. Get loaded programs (tool lists) associated with a machine in Toollist-DB (excluding parked programs)
+app.get('/api/inventory/machine/:name/programs', async (req, res) => {
+  try {
+    const { name } = req.params;
     const poolTL = await getPoolTL();
     
-    // Find machine definition
     const machineResult = await poolTL.request()
       .input('name', sql.VarChar, name)
-      .query('SELECT Id, Name, MagazineSize FROM Machines WHERE Name = @name');
+      .query('SELECT Id FROM Machines WHERE Name = @name');
       
     if (machineResult.recordset.length === 0) {
       return res.status(404).json({ error: 'Maschine nicht gefunden' });
     }
     
-    const machine = machineResult.recordset[0];
-    const magazineSize = machine.MagazineSize || 40;
+    const machineId = machineResult.recordset[0].Id;
     
-    // Get initial tools in machine from ProgramToTool
-    const programResult = await poolTL.request()
-      .input('machineId', sql.Int, machine.Id)
+    const programsResult = await poolTL.request()
+      .input('machineId', sql.Int, machineId)
       .query(`
-        SELECT TOP 1 Id FROM MachineToProgram WHERE Machine = @machineId
-        ORDER BY 
-          CASE 
-            WHEN ProgramName LIKE '%geparkt%' THEN 1
-            WHEN ProgramName LIKE '%Parkplatz%' THEN 2
-            WHEN ProgramName LIKE '%Geparkt%' THEN 3
-            ELSE 4
-          END ASC
+        SELECT Id, ProgramName 
+        FROM MachineToProgram 
+        WHERE Machine = @machineId
+        ORDER BY ProgramName
       `);
       
-    let initialToolNrs = [];
-    if (programResult.recordset.length > 0) {
-      const toolsResult = await poolTL.request()
-        .input('programId', sql.Int, programResult.recordset[0].Id)
-        .query('SELECT ToolName FROM ProgramToTool WHERE MachineToProgramId = @programId');
-        
-      toolsResult.recordset.forEach(t => {
-        const nameStr = t.ToolName || '';
-        const idx = nameStr.lastIndexOf('-');
-        if (idx !== -1) {
-          const suffix = nameStr.substring(idx + 1);
-          const nr = parseInt(suffix, 10);
-          if (!isNaN(nr)) {
-            initialToolNrs.push(nr);
-          }
-        }
-      });
+    res.json(programsResult.recordset);
+  } catch (err) {
+    console.error('Error fetching machine programs:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Simulate future magazine tools and consolidated setup demand
+app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const { targetDate, optimize, unloadPrograms, loadPrograms, startDate } = req.query;
+    
+    if (!cachedSetupData) {
+      return res.status(503).json({ error: 'Rüstdaten werden noch geladen' });
     }
     
-    // Map machine to D4 machine/pool IDs
-    const mapping = mapToollistMachineToD4(name);
+    // Save scenario globally
+    activeScenarios[name] = {
+      unloadPrograms: unloadPrograms || '',
+      loadPrograms: loadPrograms || ''
+    };
     
-    // Filter and sort upcoming orders chronologically
-    let { steps, listToToolsMap, toolsDetails } = cachedSetupData;
+    const cleanStartDate = (startDate && startDate !== 'undefined' && startDate !== '') ? startDate : null;
+    const result = await runSimulationForMachine(name, unloadPrograms, loadPrograms, targetDate, optimize, cleanStartDate);
     
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
-    const todayStr = `${year}-${month}-${day}`;
-
-    let machineSteps = steps.filter(step => {
-      if (!step.DeliveryDate) return false;
-      const stepDateStr = new Date(step.DeliveryDate).toISOString().substring(0, 10);
-      // Include past steps only if they are not finished (StatusProduction !== 1)
-      if (stepDateStr < todayStr && step.StatusProduction === 1) return false;
-      return mapping.machineIds.includes(step.MachineId) || mapping.poolIds.includes(step.MachinePoolId);
-    });
-    
-    machineSteps.sort((a, b) => new Date(a.DeliveryDate) - new Date(b.DeliveryDate));
-
-    // Optimize sequence if requested (setup minimization using greedy Nearest Neighbor)
-    if (optimize === 'true') {
-      let remainingSteps = [...machineSteps];
-      let optimizedSteps = [];
-      let currentSimMagazine = [...initialToolNrs].slice(0, magazineSize);
-      let simLastUsedIndex = {};
-      currentSimMagazine.forEach(tNr => {
-        simLastUsedIndex[tNr] = -1;
-      });
-
-      while (remainingSteps.length > 0) {
-        let bestStepIdx = -1;
-        let minMissesCount = Infinity;
-        
-        for (let i = 0; i < remainingSteps.length; i++) {
-          const step = remainingSteps[i];
-          const stepToolNrs = listToToolsMap[step.MatchedListNr] || [];
-          
-          let missesCount = 0;
-          stepToolNrs.forEach(tNr => {
-            if (!currentSimMagazine.includes(tNr)) {
-              missesCount++;
-            }
-          });
-          
-          if (missesCount < minMissesCount) {
-            minMissesCount = missesCount;
-            bestStepIdx = i;
-          } else if (missesCount === minMissesCount) {
-            if (bestStepIdx === -1 || new Date(step.DeliveryDate) < new Date(remainingSteps[bestStepIdx].DeliveryDate)) {
-              bestStepIdx = i;
-            }
-          }
-        }
-        
-        const chosenStep = remainingSteps.splice(bestStepIdx, 1)[0];
-        optimizedSteps.push(chosenStep);
-        
-        const stepToolNrs = listToToolsMap[chosenStep.MatchedListNr] || [];
-        const misses = stepToolNrs.filter(tNr => !currentSimMagazine.includes(tNr));
-        
-        misses.forEach(tNr => {
-          while (currentSimMagazine.length >= magazineSize) {
-            const candidates = currentSimMagazine.filter(mNr => !stepToolNrs.includes(mNr));
-            if (candidates.length === 0) break;
-            
-            let victim = candidates[0];
-            let oldestIdx = simLastUsedIndex[victim] !== undefined ? simLastUsedIndex[victim] : -2;
-            candidates.forEach(cand => {
-              const candIdx = simLastUsedIndex[cand] !== undefined ? simLastUsedIndex[cand] : -2;
-              if (candIdx < oldestIdx) {
-                oldestIdx = candIdx;
-                victim = cand;
-              }
-            });
-            currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== victim);
-          }
-          currentSimMagazine.push(tNr);
-        });
-        
-        stepToolNrs.forEach(tNr => {
-          simLastUsedIndex[tNr] = optimizedSteps.length - 1;
-        });
-      }
-      
-      machineSteps = optimizedSteps;
-    }
-    
-    // Run simulation step-by-step
-    let virtualMagazine = [...initialToolNrs].slice(0, magazineSize);
-    let lastUsedIndex = {}; // toolNr -> step index when last used
-    
-    // Initialize last used indexes for tools in magazine
-    virtualMagazine.forEach(tNr => {
-      lastUsedIndex[tNr] = -1;
-    });
-    
-    const simulatedTimeline = [];
-    const loadedToolsSet = new Set(); // holds all tool Nrs that had to be loaded/setup
-    
-    machineSteps.forEach((step, idx) => {
-      const stepDateStr = step.DeliveryDate ? new Date(step.DeliveryDate).toISOString().substring(0, 10) : '';
-      
-      // Stop condition: if targetDate is provided and this step is after targetDate, we don't apply it to the magazine
-      const isPastTarget = targetDate && stepDateStr > targetDate;
-      
-      const stepToolNrs = listToToolsMap[step.MatchedListNr] || [];
-      const hits = [];
-      const misses = [];
-      
-      if (!isPastTarget) {
-        stepToolNrs.forEach(tNr => {
-          if (virtualMagazine.includes(tNr)) {
-            hits.push(tNr);
-          } else {
-            misses.push(tNr);
-          }
-        });
-        
-        // Eviction / Insert loop for misses
-        misses.forEach(tNr => {
-          loadedToolsSet.add(tNr);
-          
-          // Evict candidates until we have room under magazineSize, if possible
-          while (virtualMagazine.length >= magazineSize) {
-            const candidates = virtualMagazine.filter(mNr => !stepToolNrs.includes(mNr));
-            if (candidates.length === 0) {
-              break; // No more tools can be evicted because they are all required in the current step
-            }
-            
-            // Find the LRU candidate
-            let victim = candidates[0];
-            let oldestIndex = lastUsedIndex[victim] !== undefined ? lastUsedIndex[victim] : -2;
-            
-            candidates.forEach(cand => {
-              const candIndex = lastUsedIndex[cand] !== undefined ? lastUsedIndex[cand] : -2;
-              if (candIndex < oldestIndex) {
-                oldestIndex = candIndex;
-                victim = cand;
-              }
-            });
-            
-            // Remove victim
-            virtualMagazine = virtualMagazine.filter(mNr => mNr !== victim);
-          }
-          
-          // Now add the new tool
-          virtualMagazine.push(tNr);
-        });
-        
-        // Update last used indexes for all tools active in this step
-        stepToolNrs.forEach(tNr => {
-          lastUsedIndex[tNr] = idx;
-        });
-      }
-      
-      simulatedTimeline.push({
-        stepId: step.StepId,
-        contractNumber: step.ContractNumber || 'N/A',
-        stepPos: step.StepPos || null,
-        orderPos: step.OrderPos || null,
-        desc: step.StepDesc.trim().replace(/\s+/g, ' '),
-        date: stepDateStr,
-        setupTime: step.SetupTime,
-        programName: step.NCProgram || null,
-        toolsCount: stepToolNrs.length,
-        hitsCount: hits.length,
-        missesCount: misses.length,
-        misses: misses.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt' }),
-        magazineTools: virtualMagazine.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' }),
-        occupiedSlots: virtualMagazine.length,
-        isFeasible: virtualMagazine.length <= magazineSize,
-        isPastTarget,
-        statusColor: step.color || 'Green'
-      });
-    });
-    
-    // Resolve final magazine tools details
-    const finalMagazineResolved = virtualMagazine.map(tNr => {
-      return toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' };
-    });
-    
-    // Resolve aggregated setup tools (that had to be loaded)
-    const setupToolsResolved = Array.from(loadedToolsSet).map(tNr => {
-      return toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' };
-    });
-    
-    // Resolve parts for setup tools
+    // Resolve setup parts for setupTools
     let setupParts = [];
-    if (setupToolsResolved.length > 0) {
+    if (result.setupTools.length > 0) {
       try {
         const poolWT = await getPoolWT();
-        const setupToolIds = setupToolsResolved.map(t => t.nr);
+        const setupToolIds = result.setupTools.map(t => t.nr);
         const partsResult = await poolWT.request().query(`
           SELECT
             tp.ToolNr, tp.Pos as PartPos, tp.Nbr as PartQty,
@@ -1873,7 +2109,7 @@ app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
               tools: []
             };
           }
-          const tDetail = toolsDetails[row.ToolNr];
+          const tDetail = cachedSetupData.toolsDetails[row.ToolNr];
           if (tDetail) {
             partsMap[partNr].totalQty += (row.PartQty || 1);
             partsMap[partNr].tools.push({
@@ -1890,12 +2126,7 @@ app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
     }
     
     res.json({
-      machineName: name,
-      magazineSize,
-      initialToolsCount: initialToolNrs.length,
-      simulatedTimeline,
-      finalMagazine: finalMagazineResolved,
-      setupTools: setupToolsResolved,
+      ...result,
       setupParts
     });
   } catch (err) {
