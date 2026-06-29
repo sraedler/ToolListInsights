@@ -9,80 +9,116 @@ const sql = isWindows && !process.env.DB_FORCE_TEDIOUS
 
 const connStrD4 = process.env.DB_D4_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=D4;Trusted_Connection=yes;TrustServerCertificate=yes;';
 const connStrWT = process.env.DB_WT_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=WTDATA;Trusted_Connection=yes;TrustServerCertificate=yes;';
+const connStrTL = process.env.DB_TL_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=192.168.100.8;Database=Toollist;Trusted_Connection=yes;TrustServerCertificate=yes;';
 
 // Build database configuration dynamically.
 // If DB_D4_SERVER / DB_WT_SERVER parameters are provided, we configure
 // a standard TCP/IP connection. Otherwise, we fallback to the Windows ODBC connection string.
 // We support Server\Instance parsing for named instances.
-const d4Server = process.env.DB_D4_SERVER || '';
-const d4ServerParts = d4Server.split('\\');
-const d4Host = d4ServerParts[0];
-const d4Instance = d4ServerParts[1] || null;
+function buildConfig(serverEnv, databaseEnv, userEnv, passwordEnv, portEnv, encryptEnv, defaultConnStr, defaultUser, defaultPassword) {
+  if (serverEnv) {
+    const serverParts = serverEnv.split('\\');
+    const host = serverParts[0];
+    const instance = serverParts[1] || null;
+    return {
+      server: host,
+      database: databaseEnv,
+      user: userEnv,
+      password: passwordEnv,
+      port: portEnv ? parseInt(portEnv) : undefined,
+      options: {
+        encrypt: encryptEnv === 'true',
+        trustServerCertificate: true,
+        instanceName: instance
+      },
+      pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
+    };
+  }
 
-const configD4 = process.env.DB_D4_SERVER ? {
-  server: d4Host,
-  database: process.env.DB_D4_DATABASE || 'D4',
-  user: process.env.DB_D4_USER,
-  password: process.env.DB_D4_PASSWORD,
-  port: process.env.DB_D4_PORT ? parseInt(process.env.DB_D4_PORT) : undefined,
-  options: {
-    encrypt: process.env.DB_D4_ENCRYPT === 'true',
-    trustServerCertificate: true,
-    instanceName: d4Instance
-  },
-  pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
-} : {
-  driver: 'msnodesqlv8',
-  connectionString: connStrD4,
-  pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
-};
+  // Use msnodesqlv8 if we are on Windows and not forcing tedious
+  const useMsnodesql = isWindows && !process.env.DB_FORCE_TEDIOUS;
+  if (useMsnodesql) {
+    return {
+      driver: 'msnodesqlv8',
+      connectionString: defaultConnStr,
+      pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
+    };
+  }
 
-const wtServer = process.env.DB_WT_SERVER || '';
-const wtServerParts = wtServer.split('\\');
-const wtHost = wtServerParts[0];
-const wtInstance = wtServerParts[1] || null;
+  // Parse ODBC connection string for pure tedious (Linux/Docker fallback)
+  const parsed = {};
+  const pairs = defaultConnStr.split(';');
+  for (const pair of pairs) {
+    const eqIdx = pair.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = pair.slice(0, eqIdx).trim().toLowerCase();
+    const value = pair.slice(eqIdx + 1).trim();
+    if (key === 'server' || key === 'data source') {
+      const serverParts = value.split('\\');
+      parsed.server = serverParts[0];
+      if (serverParts[1]) {
+        parsed.instanceName = serverParts[1];
+      }
+    } else if (key === 'database' || key === 'initial catalog') {
+      parsed.database = value;
+    } else if (key === 'uid' || key === 'user id' || key === 'user') {
+      parsed.user = value;
+    } else if (key === 'pwd' || key === 'password') {
+      parsed.password = value;
+    } else if (key === 'encrypt') {
+      parsed.encrypt = value.toLowerCase() === 'yes' || value.toLowerCase() === 'true';
+    }
+  }
 
-const configWT = process.env.DB_WT_SERVER ? {
-  server: wtHost,
-  database: process.env.DB_WT_DATABASE || 'WTDATA',
-  user: process.env.DB_WT_USER,
-  password: process.env.DB_WT_PASSWORD,
-  port: process.env.DB_WT_PORT ? parseInt(process.env.DB_WT_PORT) : undefined,
-  options: {
-    encrypt: process.env.DB_WT_ENCRYPT === 'true',
-    trustServerCertificate: true,
-    instanceName: wtInstance
-  },
-  pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
-} : {
-  driver: 'msnodesqlv8',
-  connectionString: connStrWT,
-  pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
-};
+  return {
+    server: parsed.server || 'localhost',
+    database: parsed.database || databaseEnv,
+    user: parsed.user || userEnv || defaultUser,
+    password: parsed.password || passwordEnv || defaultPassword,
+    options: {
+      encrypt: parsed.encrypt || false,
+      trustServerCertificate: true,
+      instanceName: parsed.instanceName || null
+    },
+    pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
+  };
+}
 
-const connStrTL = process.env.DB_TL_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=SRVDEVELOP;Database=Toollist;Trusted_Connection=yes;TrustServerCertificate=yes;';
-const tlServer = process.env.DB_TL_SERVER || '';
-const tlServerParts = tlServer.split('\\');
-const tlHost = tlServerParts[0];
-const tlInstance = tlServerParts[1] || null;
+const configD4 = buildConfig(
+  process.env.DB_D4_SERVER,
+  process.env.DB_D4_DATABASE || 'D4',
+  process.env.DB_D4_USER,
+  process.env.DB_D4_PASSWORD,
+  process.env.DB_D4_PORT,
+  process.env.DB_D4_ENCRYPT,
+  connStrD4,
+  'werkzeug',
+  'werkzeug'
+);
 
-const configTL = process.env.DB_TL_SERVER ? {
-  server: tlHost,
-  database: process.env.DB_TL_DATABASE || 'Toollist',
-  user: process.env.DB_TL_USER,
-  password: process.env.DB_TL_PASSWORD,
-  port: process.env.DB_TL_PORT ? parseInt(process.env.DB_TL_PORT) : undefined,
-  options: {
-    encrypt: process.env.DB_TL_ENCRYPT === 'true',
-    trustServerCertificate: true,
-    instanceName: tlInstance
-  },
-  pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
-} : {
-  driver: 'msnodesqlv8',
-  connectionString: connStrTL,
-  pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
-};
+const configWT = buildConfig(
+  process.env.DB_WT_SERVER,
+  process.env.DB_WT_DATABASE || 'WTDATA',
+  process.env.DB_WT_USER,
+  process.env.DB_WT_PASSWORD,
+  process.env.DB_WT_PORT,
+  process.env.DB_WT_ENCRYPT,
+  connStrWT,
+  'werkzeug',
+  'werkzeug'
+);
+
+const configTL = buildConfig(
+  process.env.DB_TL_SERVER,
+  process.env.DB_TL_DATABASE || 'Toollist',
+  process.env.DB_TL_USER,
+  process.env.DB_TL_PASSWORD,
+  process.env.DB_TL_PORT,
+  process.env.DB_TL_ENCRYPT,
+  connStrTL,
+  'werkzeug',
+  'werkzeug'
+);
 
 let poolD4 = null;
 let poolWT = null;

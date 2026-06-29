@@ -1,1 +1,1 @@
-node --openssl-legacy-provider index.js
+call npm run dev
