@@ -24,7 +24,7 @@ services:
       - DB_WT_PASSWORD=werkzeug
       - DB_WT_ENCRYPT=false
 
-      - DB_TL_SERVER=192.168.100.8
+      - DB_TL_SERVER=192.168.100.8\CIM4NET
       - DB_TL_DATABASE=Toollist
       - DB_TL_USER=werkzeug
       - DB_TL_PASSWORD=werkzeug

@@ -9,7 +9,11 @@ const sql = isWindows && !process.env.DB_FORCE_TEDIOUS
 
 const connStrD4 = process.env.DB_D4_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=D4;Trusted_Connection=yes;TrustServerCertificate=yes;';
 const connStrWT = process.env.DB_WT_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=WTDATA;Trusted_Connection=yes;TrustServerCertificate=yes;';
-const connStrTL = process.env.DB_TL_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=192.168.100.8;Database=Toollist;Trusted_Connection=yes;TrustServerCertificate=yes;';
+const connStrTL = process.env.DB_TL_CONN || (
+  process.env.NODE_ENV === 'production'
+    ? 'Driver={ODBC Driver 17 for SQL Server};Server=192.168.100.8\\CIM4NET;Database=Toollist;Uid=werkzeug;Pwd=werkzeug;TrustServerCertificate=yes;'
+    : 'Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=Toollist;Trusted_Connection=yes;TrustServerCertificate=yes;'
+);
 
 // Build database configuration dynamically.
 // If DB_D4_SERVER / DB_WT_SERVER parameters are provided, we configure
@@ -124,34 +128,71 @@ let poolD4 = null;
 let poolWT = null;
 let poolTL = null;
 
+let poolD4Promise = null;
+let poolWTPromise = null;
+let poolTLPromise = null;
+
 async function getPoolD4() {
-  if (!poolD4) {
-    console.log('Initializing D4 database pool...');
-    poolD4 = new sql.ConnectionPool(configD4);
-    await poolD4.connect();
-    console.log('D4 database pool initialized.');
+  if (poolD4) return poolD4;
+  if (!poolD4Promise) {
+    poolD4Promise = (async () => {
+      console.log('Initializing D4 database pool...');
+      const pool = new sql.ConnectionPool(configD4);
+      try {
+        await pool.connect();
+        poolD4 = pool;
+        console.log('D4 database pool initialized.');
+        return pool;
+      } catch (err) {
+        console.error('Failed to initialize D4 pool:', err.message);
+        poolD4Promise = null;
+        throw err;
+      }
+    })();
   }
-  return poolD4;
+  return poolD4Promise;
 }
 
 async function getPoolWT() {
-  if (!poolWT) {
-    console.log('Initializing WTDATA database pool...');
-    poolWT = new sql.ConnectionPool(configWT);
-    await poolWT.connect();
-    console.log('WTDATA database pool initialized.');
+  if (poolWT) return poolWT;
+  if (!poolWTPromise) {
+    poolWTPromise = (async () => {
+      console.log('Initializing WTDATA database pool...');
+      const pool = new sql.ConnectionPool(configWT);
+      try {
+        await pool.connect();
+        poolWT = pool;
+        console.log('WTDATA database pool initialized.');
+        return pool;
+      } catch (err) {
+        console.error('Failed to initialize WTDATA pool:', err.message);
+        poolWTPromise = null;
+        throw err;
+      }
+    })();
   }
-  return poolWT;
+  return poolWTPromise;
 }
 
 async function getPoolTL() {
-  if (!poolTL) {
-    console.log('Initializing Toollist database pool...');
-    poolTL = new sql.ConnectionPool(configTL);
-    await poolTL.connect();
-    console.log('Toollist database pool initialized.');
+  if (poolTL) return poolTL;
+  if (!poolTLPromise) {
+    poolTLPromise = (async () => {
+      console.log('Initializing Toollist database pool...');
+      const pool = new sql.ConnectionPool(configTL);
+      try {
+        await pool.connect();
+        poolTL = pool;
+        console.log('Toollist database pool initialized.');
+        return pool;
+      } catch (err) {
+        console.error('Failed to initialize Toollist pool:', err.message);
+        poolTLPromise = null;
+        throw err;
+      }
+    })();
   }
-  return poolTL;
+  return poolTLPromise;
 }
 
 module.exports = {

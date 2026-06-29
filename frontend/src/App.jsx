@@ -21,7 +21,8 @@ import {
   Layers,
   ArrowRight,
   RefreshCw,
-  Server
+  Server,
+  Moon
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -255,6 +256,14 @@ export default function App() {
               <Server size={18} />
               <span>Maschinenanalyse</span>
             </div>
+
+            <div 
+              className={`nav-item ${activeTab === 'planning' ? 'active' : ''}`}
+              onClick={() => setActiveTab('planning')}
+            >
+              <Layers size={18} />
+              <span>Planung</span>
+            </div>
           </nav>
         </div>
 
@@ -275,6 +284,7 @@ export default function App() {
               {activeTab === 'demand' && 'Phasenbezogener Werkzeugbedarf'}
               {activeTab === 'simulation' && 'Rüstzeit-Optimierungs-Simulator'}
               {activeTab === 'machines' && 'Maschinen-Werkzeugbedarf'}
+              {activeTab === 'planning' && 'Kanban-Maschinenbelegungsplanung'}
             </h2>
           </div>
 
@@ -332,6 +342,7 @@ export default function App() {
           {activeTab === 'demand' && <DemandTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'simulation' && <SimulationTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'machines' && <MachinesTab startDate={globalStartDate} endDate={globalEndDate} />}
+          {activeTab === 'planning' && <PlanningTab />}
         </div>
       </main>
     </div>
@@ -3406,6 +3417,790 @@ function MachinesTab({ startDate, endDate }) {
 
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// 7. Planning Tab (Kanban Board for next 5 working days)
+function PlanningTab() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [startDate, setStartDate] = useState(() => new Date().toISOString().substring(0, 10));
+  const [optimize, setOptimize] = useState(true);
+  const [optimizeNightRun, setOptimizeNightRun] = useState(true);
+  const [selectedMachine, setSelectedMachine] = useState('All');
+  const [activeModalStep, setActiveModalStep] = useState(null);
+  const [hideExecuting, setHideExecuting] = useState(false);
+  const [algo, setAlgo] = useState('greedy');
+
+  const fetchPlanningData = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}`;
+      if (startDate) {
+        url += `&startDate=${startDate}`;
+      }
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`Fehler beim Laden: ${res.statusText}`);
+      }
+      const json = await res.json();
+      setData(json);
+      if (json.days && json.days.length > 0 && !startDate) {
+        setStartDate(json.days[0]);
+      }
+    } catch (err) {
+      console.error('Error fetching planning data:', err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPlanningData();
+  }, [optimize, optimizeNightRun, algo]);
+
+  const handleDateChange = (e) => {
+    setStartDate(e.target.value);
+  };
+
+  const handleApplyDate = () => {
+    fetchPlanningData();
+  };
+
+  if (loading && !data) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', gap: '1rem', color: '#94a3b8' }}>
+        <RefreshCw className="animate-spin" size={32} />
+        <span>Planungsdaten werden berechnet & rüstoptimiert...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center', background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.15)', borderRadius: '12px', margin: '2rem 0' }}>
+        <AlertTriangle size={32} style={{ color: '#ef4444', marginBottom: '1rem' }} />
+        <h3 style={{ color: '#f1f5f9', marginBottom: '0.5rem' }}>Verbindungsfehler</h3>
+        <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1.5rem' }}>{error}</p>
+        <button onClick={fetchPlanningData} className="btn btn-primary">Erneut versuchen</button>
+      </div>
+    );
+  }
+
+  const { days = [], machines = [], board = {}, capacities = {} } = data || {};
+
+  const getDayName = (dateStr) => {
+    if (dateStr === 'Überlauf') return 'Überlauf';
+    const d = new Date(dateStr);
+    const dayNames = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+    return dayNames[d.getDay()];
+  };
+
+  const formatDate = (dateStr) => {
+    if (dateStr === 'Überlauf') return 'Postponed backlog';
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}.${parts[1]}.`;
+    }
+    return dateStr;
+  };
+
+  const formatMinutes = (mins) => {
+    if (mins < 60) return `${mins}m`;
+    const hrs = Math.floor(mins / 60);
+    const remainingMins = mins % 60;
+    return remainingMins > 0 ? `${hrs}h ${remainingMins}m` : `${hrs}h`;
+  };
+
+  return (
+    <div className="planning-tab">
+      {/* Controls Header */}
+      <div className="planning-controls card">
+        <div className="controls-row">
+          <div className="control-group">
+            <label>Planungs-Startdatum:</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input
+                type="date"
+                value={startDate}
+                onChange={handleDateChange}
+                style={{
+                  background: 'rgba(13, 20, 35, 0.4)',
+                  border: '1px solid var(--border-dim)',
+                  borderRadius: '8px',
+                  color: '#fff',
+                  fontSize: '0.85rem',
+                  padding: '0.4rem 0.75rem',
+                  outline: 'none'
+                }}
+              />
+              <button onClick={handleApplyDate} className="btn btn-primary btn-sm">
+                Planung laden
+              </button>
+            </div>
+          </div>
+
+          <div className="control-group" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                <input
+                  type="checkbox"
+                  checked={optimize}
+                  onChange={(e) => setOptimize(e.target.checked)}
+                  style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
+                />
+                <span>Rüstoptimierung aktiv</span>
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                <input
+                  type="checkbox"
+                  checked={optimizeNightRun}
+                  onChange={(e) => setOptimizeNightRun(e.target.checked)}
+                  style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                />
+                <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Moon size={14} /> Nachtlauf-Optimierung</span>
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                <input
+                  type="checkbox"
+                  checked={hideExecuting}
+                  onChange={(e) => setHideExecuting(e.target.checked)}
+                  style={{ width: '16px', height: '16px', accentColor: '#10b981' }}
+                />
+                <span style={{ color: '#a7f3d0' }}>⚡ Laufende ausblenden</span>
+              </label>
+            </div>
+            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+              Sortiert nach Werkzeugüberschneidung. Die Nachtlauf-Optimierung erkennt historische Nachtlauf-Kompatibilität und priorisiert diese entsprechend.
+            </span>
+
+            {optimize && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.35rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.75rem', borderRadius: '10px', width: 'fit-content', border: '1px solid rgba(255,255,255,0.05)' }}>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Algorithmus:</span>
+                <div style={{ display: 'flex', gap: '0.35rem' }}>
+                  <button
+                    onClick={() => setAlgo('greedy')}
+                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'greedy' ? '#3b82f6' : 'rgba(255,255,255,0.03)', border: algo === 'greedy' ? '1px solid #3b82f6' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                  >
+                    Greedy (NN)
+                  </button>
+                  <button
+                    onClick={() => setAlgo('ga')}
+                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'ga' ? '#10b981' : 'rgba(255,255,255,0.03)', border: algo === 'ga' ? '1px solid #10b981' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                  >
+                    Genetisch (GA)
+                  </button>
+                  <button
+                    onClick={() => setAlgo('mip')}
+                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'mip' ? '#a855f7' : 'rgba(255,255,255,0.03)', border: algo === 'mip' ? '1px solid #a855f7' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                  >
+                    Exakt (MIP)
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Machine Tabs */}
+        <div className="machine-pills">
+          <button
+            className={`pill ${selectedMachine === 'All' ? 'active' : ''}`}
+            onClick={() => setSelectedMachine('All')}
+          >
+            Alle Maschinen (Übersicht)
+          </button>
+          {machines.map(m => (
+            <button
+              key={m}
+              className={`pill ${selectedMachine === m ? 'active' : ''}`}
+              onClick={() => setSelectedMachine(m)}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Optimization Savings Banner */}
+      {(() => {
+        const activeSavings = (() => {
+          if (!data || !data.savings) return null;
+          if (selectedMachine === 'All') {
+            return data.savings.total;
+          } else {
+            return (data.savings.machines && data.savings.machines[selectedMachine]) || null;
+          }
+        })();
+
+        if (!activeSavings || activeSavings.savedChanges <= 0) return null;
+
+        const algoLabel = algo === 'ga' ? 'Genetischer Algorithmus (GA)' : algo === 'mip' ? 'Exakter Solver (MIP)' : 'Greedy Nearest Neighbor';
+        const scopeLabel = selectedMachine === 'All' ? 'alle Maschinen' : `Maschine ${selectedMachine}`;
+
+        return (
+          <div style={{
+            background: 'radial-gradient(100% 100% at 0% 0%, rgba(16, 185, 129, 0.08) 0%, rgba(8, 12, 20, 0.4) 100%)',
+            border: '1px solid rgba(16, 185, 129, 0.25)',
+            borderRadius: '16px',
+            padding: '1.25rem 1.5rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.15)',
+            marginBottom: '1rem',
+            animation: 'slide-in 0.3s ease-out'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <div style={{
+                background: 'rgba(16, 185, 129, 0.15)',
+                border: '1px solid rgba(16, 185, 129, 0.3)',
+                color: '#34d399',
+                width: '42px',
+                height: '42px',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <TrendingDown size={22} />
+              </div>
+              <div>
+                <h4 style={{ color: '#fff', fontSize: '1rem', fontWeight: 700, margin: '0 0 0.15rem 0' }}>
+                  Effizienzgewinn durch Rüstoptimierung ({algoLabel})
+                </h4>
+                <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: 0 }}>
+                  Gerechneter Optimierungs-Erfolg für <strong>{scopeLabel}</strong> über den gesamten Planungszeitraum.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '2rem' }}>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Eingesparte Rüstzeit</div>
+                <div style={{ fontSize: '1.4rem', color: '#10b981', fontWeight: 800 }}>
+                  {formatMinutes(activeSavings.savedMinutes)}
+                </div>
+              </div>
+              {activeSavings.originalSetupTime > 0 && (
+                <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '2rem' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstzeit-Ersparnis</div>
+                  <div style={{ fontSize: '1.4rem', color: '#10b981', fontWeight: 800 }}>
+                    -{activeSavings.originalSetupTime ? Math.round((activeSavings.savedMinutes / activeSavings.originalSetupTime) * 100) : 0}%
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b' }}>von {formatMinutes(activeSavings.originalSetupTime)} gepl.</div>
+                </div>
+              )}
+              <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '2rem' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstwechsel vermieden</div>
+                <div style={{ fontSize: '1.4rem', color: '#38bdf8', fontWeight: 800 }}>
+                  -{activeSavings.savedChanges} <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: 600 }}>Tools</span>
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '2rem' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstwechsel (Vorher / Nachher)</div>
+                <div style={{ fontSize: '1.05rem', color: '#fff', fontWeight: 700, marginTop: '0.2rem' }}>
+                  <span style={{ textDecoration: 'line-through', color: '#ef4444' }}>{activeSavings.originalChanges}</span>
+                  <span style={{ color: '#64748b', margin: '0 0.25rem' }}>→</span>
+                  <span style={{ color: '#10b981', fontWeight: 800 }}>{activeSavings.optimizedChanges}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {loading && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.9rem', padding: '0.5rem' }}>
+          <RefreshCw size={16} className="animate-spin" />
+          <span>Optimiere Sequenz...</span>
+        </div>
+      )}
+
+      {/* Kanban Board */}
+      {selectedMachine !== 'All' ? (
+        // Detailed Single Machine Kanban Board (5 columns)
+        <div className="kanban-board">
+          {days.map(day => {
+            const daySteps = (board[selectedMachine]?.[day] || []).filter(s => !hideExecuting || !s.isExecuting);
+            const totalSetupTime = daySteps.reduce((acc, s) => acc + s.setupTime, 0);
+            const totalProdTime = daySteps.reduce((acc, s) => acc + s.prodTime, 0);
+            const totalWorkloadTime = totalSetupTime + totalProdTime;
+            const totalChanges = daySteps.reduce((acc, s) => acc + s.missesCount, 0);
+
+            const dayCapacity = capacities[selectedMachine]?.[day];
+            const loadPercentage = dayCapacity ? Math.min(100, Math.round((totalWorkloadTime / dayCapacity) * 100)) : 0;
+            const barColor = loadPercentage > 100 ? '#ef4444' : loadPercentage > 85 ? '#f59e0b' : '#10b981';
+
+            return (
+              <div key={day} className="kanban-column">
+                <div className="column-header">
+                  <div className="day-name">{getDayName(day)}</div>
+                  <div className="day-date">{formatDate(day)}</div>
+                  <div className="column-summary" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                    <div style={{ color: '#fff', fontWeight: 600 }}>{daySteps.length} Aufträge</div>
+                    <div style={{ color: '#38bdf8', fontSize: '0.75rem', fontWeight: 600 }}>
+                      Gesamt: {formatMinutes(totalWorkloadTime)}
+                    </div>
+                    <div style={{ color: '#64748b', fontSize: '0.65rem' }}>
+                      (Rüst: {totalSetupTime}m | Prod: {totalProdTime}m)
+                    </div>
+                  </div>
+                  {dayCapacity && day !== 'Überlauf' && (
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: '#94a3b8', fontWeight: 500 }}>
+                        <span>Auslastung: {loadPercentage}%</span>
+                        <span>Max: {formatMinutes(dayCapacity)}</span>
+                      </div>
+                      <div style={{ width: '100%', height: '4px', background: 'rgba(255, 255, 255, 0.06)', borderRadius: '2px', marginTop: '2px', overflow: 'hidden' }}>
+                        <div style={{ width: `${loadPercentage}%`, height: '100%', background: barColor, transition: 'width 0.3s ease' }} />
+                      </div>
+                    </div>
+                  )}
+                  {totalChanges > 0 && (
+                    <span className="badge badge-warning" style={{ marginTop: '0.5rem', display: 'inline-block' }}>
+                      {totalChanges} Wz. rüsten
+                    </span>
+                  )}
+                </div>
+
+                <div className="column-content">
+                  {daySteps.length === 0 ? (
+                    <div className="empty-column-state">Keine Aufträge geplant</div>
+                  ) : (
+                    daySteps.map((step, idx) => (
+                      <div key={step.stepId} className={`kanban-card ${step.isExecuting ? 'executing' : ''}`} onClick={() => setActiveModalStep(step)} style={{ cursor: 'pointer' }}>
+                        <div className="card-top">
+                          <span className="card-order-id">Auftrag #{step.orderId}</span>
+                          <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+                            {step.isExecuting && (
+                              <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 700 }}>
+                                ⚡ AKTIV
+                              </span>
+                            )}
+                            {step.isSplit && (
+                              <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>
+                                ✂ Teil {step.splitPart}
+                              </span>
+                            )}
+                            {step.isConflict && (
+                              <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>
+                                <AlertTriangle size={10} /> Soll: {formatDate(step.originalStartDate)}
+                              </span>
+                            )}
+                            {step.isNightRunCapable && (
+                              <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>
+                                <Moon size={10} /> Nachtlauf
+                              </span>
+                            )}
+                            <span className="badge badge-success">Aktivierbar</span>
+                          </div>
+                        </div>
+                        <div className="card-desc" title={step.orderDesc}>{step.orderDesc}</div>
+                        <div className="card-step-desc" style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                          Arbeitsschritt: {step.stepDesc}
+                        </div>
+                        
+                        <div className="card-badges">
+                          <span className="card-badge" title="Rüstzeit"><Clock size={12} /> Rüst: {step.setupTime} Min</span>
+                          <span className="card-badge" title="Produktionszeit" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                            Prod: {step.prodTime} Min
+                          </span>
+                          {step.ncProgram && (
+                            <span className="card-badge" style={{ fontFamily: 'monospace' }}>NC: {step.ncProgram}</span>
+                          )}
+                          {step.matchedListIdent && (
+                            <span className="card-badge">WinTool: {step.matchedListIdent}</span>
+                          )}
+                        </div>
+
+                        {/* Rüstbedarf Section */}
+                        <div className="card-rustbedarf">
+                          <div className="rustbedarf-title">Rüstbedarf ({step.toolsCount} Wz. gesamt)</div>
+                          {step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
+                            <div className="rustbedarf-clean">
+                              <CheckCircle2 size={12} style={{ color: '#10b981' }} />
+                              <span>Übernahme (0 Wechsel)</span>
+                            </div>
+                          ) : (
+                            <div className="rustbedarf-changes">
+                              {step.loadTools.length > 0 && (
+                                <div className="change-list load">
+                                  <div className="change-header">Einwechseln (+{step.loadTools.length}):</div>
+                                  <div className="change-items">
+                                    {step.loadTools.map(t => (
+                                      <div key={t.nr} className="change-item">
+                                        <span className="tool-nr">T{t.nr}</span>
+                                        <span className="tool-desc" title={t.desc}>{t.desc}</span>
+                                        {t.dia && <span className="tool-dim">Ø{t.dia}</span>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {step.unloadTools.length > 0 && (
+                                <div className="change-list unload">
+                                  <div className="change-header">Auswechseln (-{step.unloadTools.length}):</div>
+                                  <div className="change-items">
+                                    {step.unloadTools.map(t => (
+                                      <div key={t.nr} className="change-item">
+                                        <span className="tool-nr">T{t.nr}</span>
+                                        <span className="tool-desc" title={t.desc}>{t.desc}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        // Swimlane Matrix View (Rows = Machines, Cols = Days)
+        <div className="swimlane-view card">
+          <div className="swimlane-grid">
+            {/* Header Row */}
+            <div className="grid-row header-row">
+              <div className="grid-cell machine-cell header-cell" style={{ fontWeight: 700 }}>Maschine</div>
+              {days.map(day => (
+                <div key={day} className="grid-cell header-cell">
+                  <div className="day-name">{getDayName(day)}</div>
+                  <div className="day-date">{formatDate(day)}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Content Rows */}
+            {machines.map(mName => (
+              <div key={mName} className="grid-row content-row">
+                <div className="grid-cell machine-cell" onClick={() => setSelectedMachine(mName)}>
+                  <div className="machine-title">{mName}</div>
+                  <div className="machine-click-hint">Kanban-Ansicht</div>
+                </div>
+                
+                {days.map(day => {
+                  const daySteps = (board[mName]?.[day] || []).filter(s => !hideExecuting || !s.isExecuting);
+                  const totalSetupTime = daySteps.reduce((acc, s) => acc + s.setupTime, 0);
+                  const totalProdTime = daySteps.reduce((acc, s) => acc + s.prodTime, 0);
+                  const totalWorkloadTime = totalSetupTime + totalProdTime;
+                  const totalChanges = daySteps.reduce((acc, s) => acc + s.missesCount, 0);
+                  const nightRunsCount = daySteps.filter(s => s.isNightRunCapable).length;
+
+                  const dayCapacity = capacities[mName]?.[day];
+                  const loadPercentage = dayCapacity ? Math.min(100, Math.round((totalWorkloadTime / dayCapacity) * 100)) : 0;
+                  const barColor = loadPercentage > 100 ? '#ef4444' : loadPercentage > 85 ? '#f59e0b' : '#10b981';
+
+                  return (
+                    <div key={day} className="grid-cell cell-content" onClick={() => setSelectedMachine(mName)}>
+                      {daySteps.length === 0 ? (
+                        <div className="grid-empty">Keine Belegung</div>
+                      ) : (
+                        <div className="grid-summary-card">
+                          <div className="summary-qty" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span>{daySteps.length} Aufträge</span>
+                            {nightRunsCount > 0 && (
+                              <span style={{ color: '#c084fc', fontSize: '0.7rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.1rem' }} title={`${nightRunsCount} Nachtlauf-geeignet`}>
+                                🌙 {nightRunsCount}
+                              </span>
+                            )}
+                          </div>
+                          <div className="summary-time" style={{ display: 'flex', flexDirection: 'column', gap: '0.05rem', margin: '0.15rem 0' }}>
+                            <span>Gesamt: <strong style={{ color: '#38bdf8' }}>{formatMinutes(totalWorkloadTime)}</strong></span>
+                            <span style={{ fontSize: '0.65rem', color: '#64748b' }}>(Rüst: {totalSetupTime}m | Prod: {totalProdTime}m)</span>
+                          </div>
+                          {dayCapacity && day !== 'Überlauf' && (
+                            <div style={{ marginTop: '0.2rem', width: '100%' }}>
+                              <div style={{ height: '3px', background: 'rgba(255, 255, 255, 0.06)', borderRadius: '1.5px', overflow: 'hidden' }} title={`Auslastung: ${loadPercentage}% (Max: ${formatMinutes(dayCapacity)})`}>
+                                <div style={{ width: `${loadPercentage}%`, height: '100%', background: barColor }} />
+                              </div>
+                            </div>
+                          )}
+                          {totalChanges > 0 ? (
+                            <span className="mini-badge warning">
+                              {totalChanges} Wz. rüsten
+                            </span>
+                          ) : (
+                            <span className="mini-badge success">
+                              ✓ 0 Rüstwechsel
+                            </span>
+                          )}
+                          <div className="grid-steps-preview">
+                            {daySteps.slice(0, 2).map(s => (
+                              <div key={s.stepId} className="preview-item">
+                                {s.ncProgram || s.stepDesc.substring(0, 15)}...
+                              </div>
+                            ))}
+                            {daySteps.length > 2 && (
+                              <div className="preview-more">+{daySteps.length - 2} weitere</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Modal for Detailed Step Information */}
+      {activeModalStep && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(4, 6, 10, 0.85)',
+          backdropFilter: 'blur(10px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '2rem'
+        }} onClick={() => setActiveModalStep(null)}>
+          <div style={{
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-dim)',
+            borderRadius: '16px',
+            width: '100%',
+            maxWidth: '650px',
+            maxHeight: '90vh',
+            overflowY: 'auto',
+            padding: '2.25rem',
+            boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)',
+            position: 'relative'
+          }} onClick={e => e.stopPropagation()}>
+            
+            {/* Close Button */}
+            <button
+              onClick={() => setActiveModalStep(null)}
+              style={{
+                position: 'absolute',
+                top: '1.25rem',
+                right: '1.25rem',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid var(--border-dim)',
+                color: '#94a3b8',
+                cursor: 'pointer',
+                padding: '0.4rem',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={e => e.currentTarget.style.color = '#fff'}
+              onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
+            >
+              <X size={18} />
+            </button>
+
+            {/* Modal Header */}
+            <div style={{ marginBottom: '1.5rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '1rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                {activeModalStep.isExecuting ? (
+                  <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.7rem', fontWeight: 700 }}>
+                    ⚡ IN AUSFÜHRUNG
+                  </span>
+                ) : (
+                  <span className="badge badge-success" style={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>Aktivierbar</span>
+                )}
+                {activeModalStep.isSplit && (
+                  <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
+                    ✂ Teil {activeModalStep.splitPart}
+                  </span>
+                )}
+                {activeModalStep.isConflict && (
+                  <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
+                    <AlertTriangle size={12} /> Soll: {formatDate(activeModalStep.originalStartDate)}
+                  </span>
+                )}
+                {activeModalStep.isNightRunCapable && (
+                  <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
+                    <Moon size={12} /> Nachtlauf
+                  </span>
+                )}
+              </div>
+              <h3 style={{ color: '#fff', fontSize: '1.4rem', fontWeight: 700, margin: '0.25rem 0' }}>
+                Arbeitsschritt-Details
+              </h3>
+              <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: 0 }}>
+                Detaillierte Belegungsdaten des Arbeitsschritts
+              </p>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              {activeModalStep.isSplit && (
+                <div style={{ background: 'rgba(14, 165, 233, 0.08)', border: '1px solid rgba(14, 165, 233, 0.25)', padding: '0.85rem 1.1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <span>✂ Aufgeteilter Arbeitsschritt (Kapazität)</span>
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: '#94a3b8', lineHeight: 1.4 }}>
+                    Aufgrund der maximalen Belegungszeit von 24 Std. pro Tag wurde dieser Arbeitsschritt automatisch gesplittet. Dies ist <strong style={{ color: '#fff' }}>Teil {activeModalStep.splitPart}</strong>. Rüstzeiten fallen nur am ersten Tag an.
+                  </div>
+                </div>
+              )}
+
+              {/* Row 1: P-Nummer & Order ID */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>P-Nummer (Projekt)</div>
+                  <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>{activeModalStep.contractNumber || 'Keine P-Nummer'}</div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>D4-Auftrags-ID</div>
+                  <div style={{ fontSize: '1.05rem', color: '#fff', fontWeight: 700 }}>#{activeModalStep.orderId}</div>
+                </div>
+              </div>
+
+              {/* Row 2: Artikel */}
+              <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Artikel (Teil)</div>
+                <div style={{ fontSize: '0.95rem', color: '#fff', fontWeight: 600 }}>{activeModalStep.orderDesc}</div>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>Artikel-ID: {activeModalStep.articleId}</div>
+              </div>
+
+              {/* Row 3: Arbeitsplan-Schritt */}
+              <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Arbeitsplan-Position (Arbeitsschritt)</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                  <span style={{ color: '#38bdf8', fontWeight: 700, fontSize: '1.1rem' }}>{activeModalStep.stepPos || 'N/A'}</span>
+                  <span style={{ color: '#fff', fontWeight: 600 }}>- {activeModalStep.stepDesc}</span>
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>Schritt-ID: {activeModalStep.stepId}</div>
+              </div>
+
+              {/* Row 4: Zeiten */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Rüstzeit</div>
+                  <div style={{ fontSize: '1.1rem', color: '#f59e0b', fontWeight: 700 }}>{activeModalStep.setupTime} Min</div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Produktion</div>
+                  <div style={{ fontSize: '1.1rem', color: '#10b981', fontWeight: 700 }}>{activeModalStep.prodTime} Min</div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Gesamt</div>
+                  <div style={{ fontSize: '1.1rem', color: '#38bdf8', fontWeight: 700 }}>{activeModalStep.setupTime + activeModalStep.prodTime} Min</div>
+                </div>
+              </div>
+
+              {/* Row 5: NC & WinTool */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>NC-Programm</div>
+                  <div style={{ fontSize: '0.9rem', color: '#fff', fontFamily: 'monospace', fontWeight: 600 }}>{activeModalStep.ncProgram || 'Kein NC-Prog.'}</div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>WinTool-Liste</div>
+                  <div style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 600 }}>{activeModalStep.matchedListIdent || 'Keine Liste'}</div>
+                  {activeModalStep.matchedListNr && <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Liste: #{activeModalStep.matchedListNr}</div>}
+                </div>
+              </div>
+
+              {/* Entire Arbeitsplan Section */}
+              <div>
+                <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <span>Gesamter Arbeitsplan (Routing)</span>
+                  <span style={{ fontSize: '0.7rem', background: 'rgba(255, 255, 255, 0.04)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#94a3b8' }}>
+                    {activeModalStep.entireArbeitsplan ? activeModalStep.entireArbeitsplan.length : 0} Operationen
+                  </span>
+                </div>
+                {activeModalStep.entireArbeitsplan && activeModalStep.entireArbeitsplan.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem', border: '1px solid var(--border-dim)', padding: '0.75rem', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                    {activeModalStep.entireArbeitsplan.map((op, opIdx) => {
+                      const isCurrent = op.stepId === activeModalStep.stepId;
+                      const isCompleted = op.isCompleted;
+                      const isExecuting = op.isExecuting;
+
+                      let statusBadge = null;
+                      let bgStyle = 'rgba(255, 255, 255, 0.01)';
+                      let borderStyle = '1px solid rgba(255, 255, 255, 0.03)';
+
+                      if (isCurrent) {
+                        statusBadge = <span style={{ background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#38bdf8', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>Aktuell geplant</span>;
+                        bgStyle = 'rgba(59, 130, 246, 0.04)';
+                        borderStyle = '1px solid rgba(59, 130, 246, 0.25)';
+                      } else if (isCompleted) {
+                        statusBadge = <span style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.15)', color: '#6b7280', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>✓ Erledigt</span>;
+                        bgStyle = 'rgba(255, 255, 255, 0.01)';
+                        borderStyle = '1px solid rgba(255, 255, 255, 0.02)';
+                      } else if (isExecuting) {
+                        statusBadge = <span style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 700 }}>⚡ In Arbeit</span>;
+                        bgStyle = 'rgba(16, 185, 129, 0.02)';
+                        borderStyle = '1px solid rgba(16, 185, 129, 0.15)';
+                      } else {
+                        statusBadge = <span style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', color: '#94a3b8', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>Offen</span>;
+                      }
+
+                      return (
+                        <div key={opIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: bgStyle, border: borderStyle, padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', transition: 'all 0.2s' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexGrow: 1, overflow: 'hidden' }}>
+                            <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px' }}>Pos {op.stepPos}</span>
+                            <span style={{ color: isCompleted ? '#64748b' : '#fff', fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={op.stepDesc}>{op.stepDesc}</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+                            <span style={{ color: '#94a3b8', fontSize: '0.75rem' }} title="Zugeordnete Maschine/Pool">{op.machineName}</span>
+                            <span style={{ color: '#475569', fontSize: '0.75rem' }} title="Rüstzeit / Prodzeit">{op.setupTime}m / {op.prodTime}m</span>
+                            {statusBadge}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic', padding: '0.5rem', textAlign: 'center' }}>
+                    Kein Arbeitsplan für diesen Auftrag hinterlegt.
+                  </div>
+                )}
+              </div>
+
+              {/* Row 6: Rüstbedarf (Werkzeuge zu laden) */}
+              <div>
+                <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <span>Werkzeug-Rüstbedarf</span>
+                  <span style={{ fontSize: '0.7rem', background: 'rgba(255,255,255,0.04)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#94a3b8' }}>
+                    {activeModalStep.loadTools ? activeModalStep.loadTools.length : 0} neu zu laden
+                  </span>
+                </div>
+                {activeModalStep.loadTools && activeModalStep.loadTools.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                    {activeModalStep.loadTools.map((t, tIdx) => (
+                      <div key={tIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(245, 158, 11, 0.05)', border: '1px solid rgba(245, 158, 11, 0.12)', padding: '0.4rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem' }}>
+                        <span style={{ color: '#fff', fontWeight: 600 }}>Wz #{t.nr}</span>
+                        <span style={{ color: '#94a3b8', fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>{t.desc}</span>
+                        {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace' }}>D={t.dia}</span>}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ color: '#10b981', fontSize: '0.8rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500 }}>
+                    ✓ Alle benötigten Werkzeuge sind bereits im Magazin gerüstet! (Kein Rüstwechsel erforderlich)
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
