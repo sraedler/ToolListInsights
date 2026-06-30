@@ -79,6 +79,7 @@ async function fetchActiveStepsAndMaterials(poolD4) {
       p.PSP_ZEIT_MINUTEN_PRODUKTION_GESAMT_SOLL as ProdTime,
       p.PSP_IDMS as MachineId,
       p.PSP_IDMP as MachinePoolId,
+      p.PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG as MaxProdTag,
       p.PSP_MENGE_SOLL as Quantity,
       p.PSP_PP_STATUS_PRODUKTION as StatusProduction,
       CASE
@@ -432,13 +433,25 @@ async function cacheSetupData() {
 
   // Keep only normal work steps (StepTyp = 0) with valid setup time (> 0) and assigned to a machine or pool
   // Also filter out completed steps (SPKO === 4)
-  const steps = rows.filter(step => 
-    step.TypHerkunft === 0 &&
-    step.StepTyp === 0 && 
-    step.SetupTime > 0 &&
-    step.SPKO !== 4 &&
-    ((step.MachineId !== null && step.MachineId !== 0) || (step.MachinePoolId !== null && step.MachinePoolId !== 0))
-  );
+  const steps = rows.filter(step => {
+    if (step.SPKO === 4) return false;
+    if (step.TypHerkunft !== 0 || step.StepTyp !== 0) return false;
+
+    const desc = (step.StepDesc || '').toLowerCase();
+    const isDeburringAssembly = 
+      step.MachineId === 15 || desc.includes('ur5') ||
+      step.MachineId === 16 || desc.includes('laser') ||
+      step.MachineId === 17 || desc.includes('messmaschine') || desc.includes('zeiss') || desc.includes('kmg') ||
+      desc.includes('versand') || desc.includes('verpacken') || desc.includes('etikett') ||
+      desc.includes('montage') || desc.includes('gewindeeinsatz') || desc.includes('zapfen brechen') ||
+      desc.includes('prüf') || desc.includes('abnahme') || desc.includes('serienprüfung') || desc.includes('stempeln') ||
+      desc.includes('entgrat');
+
+    const isMachining = step.SetupTime > 0 &&
+      ((step.MachineId !== null && step.MachineId !== 0) || (step.MachinePoolId !== null && step.MachinePoolId !== 0));
+
+    return isDeburringAssembly || isMachining;
+  });
   console.log(`Matching NC programs for ${steps.length} setup steps...`);
   const matchCache = {};
   steps.forEach((step, idx) => {
@@ -833,6 +846,10 @@ app.get('/api/orders/:id/steps', async (req, res) => {
                 INNER JOIN tZE_BUCH_BEWE zbb ON zbb.ZBUBW_IDZBU = zb.ID
                 WHERE zb.ZBU_IDPSKP = p.ID
               ) THEN 2
+              WHEN EXISTS (
+                SELECT 1 FROM tSK_KALP_LGBEWE
+                WHERE KPLG_IDSKKP = p.ID
+              ) THEN 4
               ELSE 1
             END
           ELSE 4
@@ -853,7 +870,7 @@ app.get('/api/orders/:id/steps', async (req, res) => {
         ) as StartDate,
         p.PSP_IDMS as MachineId,
         p.PSP_IDMP as MachinePoolId,
-        COALESCE(masta.MS_BEZEICHNUNG, pool.MP_BEZEICHNUNG, '') as MachineName
+        COALESCE(masta.MS_BEZEICHNUNG, pool.MP_BEZEICHNUNG, masta.MS_NUMMER, '') as MachineName
       FROM [D4].[dbo].[tPPS_SKKALK] k
       INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.PSP_IDPSKKK = k.ID
       LEFT JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = k.PSK_IDBEBP
@@ -873,7 +890,14 @@ app.get('/api/orders/:id/steps', async (req, res) => {
         p.ID as StepId,
         p.KP_POSITION_NUMMER as StepPos,
         p.KP_TYP_POSITION as StepTyp,
-        p.KP_BEZEICHNUNG as StepDesc
+        p.KP_BEZEICHNUNG as StepDesc,
+        CASE
+          WHEN EXISTS (
+            SELECT 1 FROM tSK_KALP_LGBEWE
+            WHERE KPLG_IDSKKP = p.ID
+          ) THEN 4
+          ELSE 1
+        END as SPKO
       FROM [D4].[dbo].[tSK_KALK] k
       INNER JOIN [D4].[dbo].[tSK_KALP] p ON p.KP_IDSKKK = k.ID
       WHERE k.KK_IDBEBP = @orderId
@@ -898,7 +922,7 @@ app.get('/api/orders/:id/steps', async (req, res) => {
           ProdTime: 0,
           TargetQty: 0,
           StatusProduction: 0,
-          SPKO: 1, // Offen
+          SPKO: tskRow.SPKO,
           DeliveryDate: null,
           StartDate: null,
           MachineId: null,
@@ -1218,10 +1242,21 @@ function sequenceStepsGA(stepsList, initialMagazine, magazineSize, listToToolsMa
     let changes = 0;
     permutation.forEach(s => {
       const tools = listToToolsMap[s.MatchedListNr] || [];
-      const load = tools.filter(t => !currentMag.includes(t));
-      changes += load.length;
-      const combined = Array.from(new Set([...currentMag, ...load]));
-      currentMag = combined.slice(-magazineSize);
+      const loadTools = tools.filter(t => !currentMag.includes(t));
+      changes += loadTools.length;
+
+      const newMagazine = [...currentMag];
+      loadTools.forEach(tNr => {
+        while (newMagazine.length >= magazineSize) {
+          const candidates = newMagazine.filter(mNr => !tools.includes(mNr));
+          if (candidates.length === 0) break;
+          const victim = candidates[0];
+          const idx = newMagazine.indexOf(victim);
+          newMagazine.splice(idx, 1);
+        }
+        newMagazine.push(tNr);
+      });
+      currentMag = newMagazine;
     });
 
     let penalty = 0;
@@ -1354,6 +1389,311 @@ function sequenceStepsGA(stepsList, initialMagazine, magazineSize, listToToolsMa
   return population[bestIdx];
 }
 
+function sequenceStepsHybrid(stepsList, initialMagazine, magazineSize, listToToolsMap) {
+  if (stepsList.length <= 1) return stepsList;
+
+  // Pre-calculate timestamps and normalize them for tie-breaking
+  const times = stepsList.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times);
+  const timeRange = maxTime - minTime || 1;
+
+  function evaluatePermutation(permutation) {
+    let currentMag = [...initialMagazine];
+    let changes = 0;
+    permutation.forEach(s => {
+      const tools = listToToolsMap[s.MatchedListNr] || [];
+      const loadTools = tools.filter(t => !currentMag.includes(t));
+      changes += loadTools.length;
+
+      const newMagazine = [...currentMag];
+      loadTools.forEach(tNr => {
+        while (newMagazine.length >= magazineSize) {
+          const candidates = newMagazine.filter(mNr => !tools.includes(mNr));
+          if (candidates.length === 0) break;
+          const victim = candidates[0];
+          const idx = newMagazine.indexOf(victim);
+          newMagazine.splice(idx, 1);
+        }
+        newMagazine.push(tNr);
+      });
+      currentMag = newMagazine;
+    });
+
+    let penalty = 0;
+    const N = permutation.length;
+    permutation.forEach((s, idx) => {
+      const t = new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime();
+      const norm = (t - minTime) / timeRange;
+      penalty += (N - 1 - idx) * norm;
+    });
+
+    const scaledPenalty = N > 1 ? (penalty / (N * N)) * 0.45 : 0;
+    return changes + scaledPenalty;
+  }
+
+  const popSize = 40;
+  const generations = 40;
+  const mutationRate = 0.3;
+  const tournamentSize = 3;
+
+  let population = [];
+
+  // Seed 1: Pure Greedy NN sequence
+  const greedySeq = [];
+  {
+    let remaining = [...stepsList];
+    let currentMag = [...initialMagazine];
+    while (remaining.length > 0) {
+      let bestIdx = 0;
+      let minLoad = Infinity;
+      for (let i = 0; i < remaining.length; i++) {
+        const tools = listToToolsMap[remaining[i].MatchedListNr] || [];
+        const loadCount = tools.filter(t => !currentMag.includes(t)).length;
+        if (loadCount < minLoad) {
+          minLoad = loadCount;
+          bestIdx = i;
+        }
+      }
+      const chosen = remaining.splice(bestIdx, 1)[0];
+      greedySeq.push(chosen);
+      const tools = listToToolsMap[chosen.MatchedListNr] || [];
+      currentMag = Array.from(new Set([...currentMag, ...tools])).slice(-magazineSize);
+    }
+  }
+  population.push(greedySeq);
+
+  // Seed 2..20: GRASP randomized greedy construction
+  for (let p = 1; p < 20; p++) {
+    let remaining = [...stepsList];
+    let currentMag = [...initialMagazine];
+    const seq = [];
+    while (remaining.length > 0) {
+      const candidates = remaining.map((step, idx) => {
+        const tools = listToToolsMap[step.MatchedListNr] || [];
+        const loadCount = tools.filter(t => !currentMag.includes(t)).length;
+        return { step, idx, loadCount };
+      });
+      candidates.sort((a, b) => a.loadCount - b.loadCount);
+      const poolSize = Math.min(3, candidates.length);
+      const chosenCandidate = candidates[Math.floor(Math.random() * poolSize)];
+      
+      remaining.splice(chosenCandidate.idx, 1);
+      seq.push(chosenCandidate.step);
+      const tools = listToToolsMap[chosenCandidate.step.MatchedListNr] || [];
+      currentMag = Array.from(new Set([...currentMag, ...tools])).slice(-magazineSize);
+    }
+    population.push(seq);
+  }
+
+  // Seed 21..40: Mutations of the pure greedy sequence
+  for (let p = 20; p < popSize; p++) {
+    const mutatedGreedy = [...greedySeq];
+    // Apply 1 or 2 swaps
+    const swaps = Math.random() < 0.5 ? 1 : 2;
+    for (let s = 0; s < swaps; s++) {
+      const idxA = Math.floor(Math.random() * mutatedGreedy.length);
+      const idxB = Math.floor(Math.random() * mutatedGreedy.length);
+      [mutatedGreedy[idxA], mutatedGreedy[idxB]] = [mutatedGreedy[idxB], mutatedGreedy[idxA]];
+    }
+    population.push(mutatedGreedy);
+  }
+
+  function selectParent(pop, fitnesses) {
+    let bestIdx = Math.floor(Math.random() * pop.length);
+    for (let i = 1; i < tournamentSize; i++) {
+      const idx = Math.floor(Math.random() * pop.length);
+      if (fitnesses[idx] < fitnesses[bestIdx]) {
+        bestIdx = idx;
+      }
+    }
+    return pop[bestIdx];
+  }
+
+  function crossover(parentA, parentB) {
+    const size = parentA.length;
+    const child = Array(size).fill(null);
+    const start = Math.floor(Math.random() * size);
+    const end = Math.floor(Math.random() * (size - start)) + start;
+
+    for (let i = start; i <= end; i++) {
+      child[i] = parentA[i];
+    }
+
+    let childIdx = (end + 1) % size;
+    for (let i = 0; i < size; i++) {
+      const item = parentB[(end + 1 + i) % size];
+      if (!child.includes(item)) {
+        child[childIdx] = item;
+        childIdx = (childIdx + 1) % size;
+      }
+    }
+    return child;
+  }
+
+  function mutate(individual) {
+    if (Math.random() < mutationRate) {
+      const idxA = Math.floor(Math.random() * individual.length);
+      let idxB = Math.floor(Math.random() * individual.length);
+      while (idxA === idxB && individual.length > 1) {
+        idxB = Math.floor(Math.random() * individual.length);
+      }
+      [individual[idxA], individual[idxB]] = [individual[idxB], individual[idxA]];
+    }
+  }
+
+  // Generation Loop
+  for (let gen = 0; gen < generations; gen++) {
+    const fitnesses = population.map(ind => evaluatePermutation(ind));
+    let minChanges = Infinity;
+    let bestIdx = 0;
+    fitnesses.forEach((fit, idx) => {
+      if (fit < minChanges) {
+        minChanges = fit;
+        bestIdx = idx;
+      }
+    });
+
+    const bestInd = population[bestIdx];
+    const nextPop = [bestInd]; // Elitism
+    while (nextPop.length < popSize) {
+      const parentA = selectParent(population, fitnesses);
+      const parentB = selectParent(population, fitnesses);
+      let child = crossover(parentA, parentB);
+      mutate(child);
+      nextPop.push(child);
+    }
+    population = nextPop;
+  }
+
+  const finalFitnesses = population.map(ind => evaluatePermutation(ind));
+  let minChanges = Infinity;
+  let bestIdx = 0;
+  finalFitnesses.forEach((fit, idx) => {
+    if (fit < minChanges) {
+      minChanges = fit;
+      bestIdx = idx;
+    }
+  });
+
+  return population[bestIdx];
+}
+
+function sequenceStepsRL(stepsList, initialMagazine, magazineSize, listToToolsMap) {
+  if (stepsList.length <= 1) return stepsList;
+
+  // Pre-calculate timestamps and normalize them
+  const times = stepsList.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times);
+  const timeRange = maxTime - minTime || 1;
+
+  function evaluateSeq(sequence) {
+    let currentMag = [...initialMagazine];
+    let changes = 0;
+    sequence.forEach(s => {
+      const tools = listToToolsMap[s.MatchedListNr] || [];
+      const loadTools = tools.filter(t => !currentMag.includes(t));
+      changes += loadTools.length;
+
+      const newMagazine = [...currentMag];
+      loadTools.forEach(tNr => {
+        while (newMagazine.length >= magazineSize) {
+          const candidates = newMagazine.filter(mNr => !tools.includes(mNr));
+          if (candidates.length === 0) break;
+          const victim = candidates[0];
+          const idx = newMagazine.indexOf(victim);
+          newMagazine.splice(idx, 1);
+        }
+        newMagazine.push(tNr);
+      });
+      currentMag = newMagazine;
+    });
+
+    let penalty = 0;
+    const N = sequence.length;
+    sequence.forEach((s, idx) => {
+      const t = new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime();
+      const norm = (t - minTime) / timeRange;
+      penalty += (N - 1 - idx) * norm;
+    });
+
+    const scaledPenalty = N > 1 ? (penalty / (N * N)) * 0.45 : 0;
+    return changes + scaledPenalty;
+  }
+
+  // Optimize policy weights: [w_setup, w_time]
+  let bestWeights = [1.0, 0.5];
+  let bestScore = Infinity;
+  let bestSequence = null;
+
+  const episodes = 100;
+  for (let episode = 0; episode < episodes; episode++) {
+    let w_setup, w_time;
+    if (episode === 0) {
+      w_setup = bestWeights[0];
+      w_time = bestWeights[1];
+    } else {
+      // Explore parameter space (direct policy search)
+      w_setup = Math.max(0.1, bestWeights[0] + (Math.random() - 0.5) * 0.5);
+      w_time = Math.max(0.01, bestWeights[1] + (Math.random() - 0.5) * 0.5);
+    }
+
+    let remaining = [...stepsList];
+    let currentMag = [...initialMagazine];
+    const sequence = [];
+    
+    // Linear epsilon decay from 0.25 down to 0.01 (exploration vs exploitation)
+    const eps = Math.max(0.01, 0.25 * (1 - episode / episodes));
+
+    while (remaining.length > 0) {
+      // Evaluate all remaining candidate steps (actions)
+      const candidates = remaining.map((step, idx) => {
+        const tools = listToToolsMap[step.MatchedListNr] || [];
+        const misses = tools.filter(t => !currentMag.includes(t)).length;
+        const t = new Date(step.StartDate || step.DeliveryDate || '9999-12-31').getTime();
+        const normTime = (t - minTime) / timeRange;
+        
+        // Q-value score: higher score is better.
+        // We want to minimize misses and minimize normTime, so we use negative weights.
+        const qValue = - (w_setup * misses + w_time * normTime);
+        return { step, idx, qValue };
+      });
+
+      let chosenCandidate;
+      if (Math.random() < eps) {
+        // Exploit random action (exploration)
+        chosenCandidate = candidates[Math.floor(Math.random() * candidates.length)];
+      } else {
+        // Exploit best action based on Q-values (exploitation)
+        let bestIdx = 0;
+        let maxQ = -Infinity;
+        for (let i = 0; i < candidates.length; i++) {
+          if (candidates[i].qValue > maxQ) {
+            maxQ = candidates[i].qValue;
+            bestIdx = i;
+          }
+        }
+        chosenCandidate = candidates[bestIdx];
+      }
+
+      remaining.splice(chosenCandidate.idx, 1);
+      sequence.push(chosenCandidate.step);
+      const tools = listToToolsMap[chosenCandidate.step.MatchedListNr] || [];
+      currentMag = Array.from(new Set([...currentMag, ...tools])).slice(-magazineSize);
+    }
+
+    const score = evaluateSeq(sequence);
+    if (score < bestScore) {
+      bestScore = score;
+      bestSequence = sequence;
+      bestWeights = [w_setup, w_time];
+    }
+  }
+
+  return bestSequence || stepsList;
+}
+
 // MIP / Exact Branch and Bound sequencing (for small step sizes)
 function sequenceStepsMIP(stepsList, initialMagazine, magazineSize, listToToolsMap) {
   if (stepsList.length <= 1) return stepsList;
@@ -1413,6 +1753,47 @@ function sequenceStepsMIP(stepsList, initialMagazine, magazineSize, listToToolsM
   return bestSequence || stepsList;
 }
 
+function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMap) {
+  if (sequence.length <= 1) return 0;
+  let currentMag = [...initialMagazine];
+  let changes = 0;
+  
+  const times = sequence.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times);
+  const timeRange = maxTime - minTime || 1;
+
+  sequence.forEach(s => {
+    const tools = listToToolsMap[s.MatchedListNr] || [];
+    const loadTools = tools.filter(t => !currentMag.includes(t));
+    changes += loadTools.length;
+
+    const newMagazine = [...currentMag];
+    loadTools.forEach(tNr => {
+      while (newMagazine.length >= magazineSize) {
+        const candidates = newMagazine.filter(mNr => !tools.includes(mNr));
+        if (candidates.length === 0) break;
+        const victim = candidates[0];
+        const idx = newMagazine.indexOf(victim);
+        newMagazine.splice(idx, 1);
+      }
+      newMagazine.push(tNr);
+    });
+    currentMag = newMagazine;
+  });
+
+  let penalty = 0;
+  const N = sequence.length;
+  sequence.forEach((s, idx) => {
+    const t = new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime();
+    const norm = (t - minTime) / timeRange;
+    penalty += (N - 1 - idx) * norm;
+  });
+
+  const scaledPenalty = N > 1 ? (penalty / (N * N)) * 0.45 : 0;
+  return changes + scaledPenalty;
+}
+
 // Helper to sequence steps using selected algorithm and simulate magazine transition
 function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap, algo = 'greedy') {
   if (stepsList.length === 0) {
@@ -1422,6 +1803,61 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
   let ordered = [];
   if (algo === 'ga') {
     ordered = sequenceStepsGA(stepsList, currentMagazine, magazineSize, listToToolsMap);
+  } else if (algo === 'rl') {
+    ordered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap);
+  } else if (algo === 'hybrid') {
+    // 1. Run Greedy
+    let remaining = [...stepsList];
+    let magazine = [...currentMagazine];
+    let greedyOrdered = [];
+    while (remaining.length > 0) {
+      let bestIdx = -1;
+      let minMisses = Infinity;
+      for (let i = 0; i < remaining.length; i++) {
+        const step = remaining[i];
+        const tools = listToToolsMap[step.MatchedListNr] || [];
+        const misses = tools.filter(tNr => !magazine.includes(tNr));
+        if (misses.length < minMisses) {
+          minMisses = misses.length;
+          bestIdx = i;
+        } else if (misses.length === minMisses && bestIdx !== -1) {
+          const dateCurrent = new Date(step.StartDate || step.DeliveryDate || '9999-12-31').getTime();
+          const dateBest = new Date(remaining[bestIdx].StartDate || remaining[bestIdx].DeliveryDate || '9999-12-31').getTime();
+          if (dateCurrent < dateBest) {
+            bestIdx = i;
+          }
+        }
+      }
+      const chosen = remaining.splice(bestIdx, 1)[0];
+      greedyOrdered.push(chosen);
+      const tools = listToToolsMap[chosen.MatchedListNr] || [];
+      magazine = Array.from(new Set([...magazine, ...tools])).slice(-magazineSize);
+    }
+
+    // 2. Run Hybrid GA
+    const hybridOrdered = sequenceStepsHybrid(stepsList, currentMagazine, magazineSize, listToToolsMap);
+
+    // 3. Run Reinforcement Learning
+    const rlOrdered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap);
+
+    // 4. Evaluate and choose the best sequence
+    const greedyScore = evaluateSequence(greedyOrdered, currentMagazine, magazineSize, listToToolsMap);
+    const hybridScore = evaluateSequence(hybridOrdered, currentMagazine, magazineSize, listToToolsMap);
+    const rlScore = evaluateSequence(rlOrdered, currentMagazine, magazineSize, listToToolsMap);
+
+    console.log(`[Hybrid Selection] Greedy Score: ${greedyScore.toFixed(4)}, GA/Hybrid Score: ${hybridScore.toFixed(4)}, RL Score: ${rlScore.toFixed(4)}`);
+    
+    let best = greedyOrdered;
+    let minScore = greedyScore;
+    if (hybridScore < minScore) {
+      minScore = hybridScore;
+      best = hybridOrdered;
+    }
+    if (rlScore < minScore) {
+      minScore = rlScore;
+      best = rlOrdered;
+    }
+    ordered = best;
   } else if (algo === 'mip') {
     ordered = sequenceStepsMIP(stepsList, currentMagazine, magazineSize, listToToolsMap);
   } else if (algo === 'none') {
@@ -1532,14 +1968,17 @@ app.get('/api/planning', async (req, res) => {
     }
 
     const { startDate, optimize, algo } = req.query;
-    let { steps, listToToolsMap, toolsDetails } = cachedSetupData;
+    let { steps, listToToolsMap, toolsDetails, listToMachineMap } = cachedSetupData;
 
-    // Build machine id -> name lookup map
+    // Build machine id -> name lookup map and pool id -> name lookup map
     const machineMap = {};
+    const poolMap = {};
     if (cachedMachines) {
       cachedMachines.forEach(m => {
         if (m.type === 'machine' && m.dbId) {
           machineMap[m.dbId] = m.name || m.number;
+        } else if (m.type === 'pool' && m.dbId) {
+          poolMap[m.dbId] = m.name || m.number;
         }
       });
     }
@@ -1570,7 +2009,10 @@ app.get('/api/planning', async (req, res) => {
     const startStr = startDate || defaultStartStr;
     const planningDays = getNext5WorkingDays(startStr);
 
-    const machinesList = ['Brother', 'chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2'];
+    const machinesList = [
+      'Brother', 'Chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2',
+      'Laser', 'Messmaschine', 'Montage', 'Montage UR5', 'Prüfplanung', 'Versand', 'Entgraten'
+    ];
 
     // Load initial magazines for the machines in parallel to optimize performance!
     const machineMagazines = {};
@@ -1585,12 +2027,15 @@ app.get('/api/planning', async (req, res) => {
     // Fetch capacities from tPPS_MASTA in D4
     const machineIdMap = {
       'Brother': 8,
-      'chiron': 21,
+      'Chiron': 21,
       'C400': 2,
       'C40': 4,
       'C42': 25,
       'RS2_1': 5,
-      'RS2_2': 6
+      'RS2_2': 6,
+      'Laser': 16,
+      'Messmaschine': 17,
+      'Montage UR5': 15
     };
 
     let capacities = {};
@@ -1606,7 +2051,7 @@ app.get('/api/planning', async (req, res) => {
                MS_KAPAZITAET_ZEIT_MINUTEN_SA,
                MS_KAPAZITAET_ZEIT_MINUTEN_SO
         FROM [D4].[dbo].[tPPS_MASTA]
-        WHERE ID IN (2, 4, 5, 6, 8, 21, 25)
+        WHERE ID IN (2, 4, 5, 6, 8, 15, 16, 17, 21, 25)
       `);
       capResult.recordset.forEach(row => {
         const id = parseInt(row.ID);
@@ -1645,6 +2090,18 @@ app.get('/api/planning', async (req, res) => {
     // List to hold pool steps that need dynamic distribution
     const poolSteps = [];
 
+    const getVirtualMachineForStep = (step) => {
+      const desc = (step.StepDesc || '').toLowerCase();
+      if (step.MachineId === 15 || desc.includes('ur5')) return 'Montage UR5';
+      if (step.MachineId === 16 || desc.includes('laser')) return 'Laser';
+      if (step.MachineId === 17 || desc.includes('messmaschine') || desc.includes('zeiss') || desc.includes('kmg')) return 'Messmaschine';
+      if (desc.includes('versand') || desc.includes('verpacken') || desc.includes('etikett')) return 'Versand';
+      if (desc.includes('montage') || desc.includes('gewindeeinsatz') || desc.includes('zapfen brechen')) return 'Montage';
+      if (desc.includes('prüf') || desc.includes('abnahme') || desc.includes('serienprüfung') || desc.includes('stempeln')) return 'Prüfplanung';
+      if (desc.includes('entgrat')) return 'Entgraten';
+      return null;
+    };
+
     // Populate steps
     greenSteps.forEach(step => {
       const stepDate = step.StartDate || step.DeliveryDate;
@@ -1661,11 +2118,18 @@ app.get('/api/planning', async (req, res) => {
         return;
       }
 
+      // Check if it belongs to a deburring/assembly/laser virtual column
+      const virtualM = getVirtualMachineForStep(step);
+      if (virtualM) {
+        board[virtualM][stepDateStr].push(step);
+        return;
+      }
+
       // Check if the step has a specific machine assignment
       if (step.MachineId === 8) {
         board['Brother'][stepDateStr].push(step);
       } else if (step.MachineId === 21) {
-        board['chiron'][stepDateStr].push(step);
+        board['Chiron'][stepDateStr].push(step);
       } else if (step.MachineId === 2) {
         board['C400'][stepDateStr].push(step);
       } else if (step.MachineId === 4) {
@@ -1677,9 +2141,34 @@ app.get('/api/planning', async (req, res) => {
       } else if (step.MachineId === 6) {
         board['RS2_2'][stepDateStr].push(step);
       } else if (!step.MachineId || step.MachineId === 0) {
-        // Pool assignment step - save to list to distribute dynamically after baseline load
-        if (step.MachinePoolId === 13 || step.MachinePoolId === 9 || step.MachinePoolId === 12) {
-          poolSteps.push({ step, dateStr: stepDateStr });
+        let assignedMachine = null;
+        if (step.MatchedListNr && listToMachineMap[step.MatchedListNr] !== undefined) {
+          const wtMachine = String(listToMachineMap[step.MatchedListNr]);
+          
+          if (step.MachinePoolId === 13) {
+            // Pool C40-C42
+            if (wtMachine === '17') {
+              assignedMachine = 'C40';
+            } else if (wtMachine === '18') {
+              assignedMachine = 'C42';
+            }
+          } else if (step.MachinePoolId === 9 || step.MachinePoolId === 12) {
+            // Pool RS2_1-RS2_2
+            if (wtMachine === '17') {
+              assignedMachine = 'RS2_1';
+            } else if (wtMachine === '18') {
+              assignedMachine = 'RS2_2';
+            }
+          }
+        }
+
+        if (assignedMachine) {
+          board[assignedMachine][stepDateStr].push(step);
+        } else {
+          // Pool assignment step - save to list to distribute dynamically after baseline load
+          if (step.MachinePoolId === 13 || step.MachinePoolId === 9 || step.MachinePoolId === 12) {
+            poolSteps.push({ step, dateStr: stepDateStr });
+          }
         }
       }
     });
@@ -1715,115 +2204,159 @@ app.get('/api/planning', async (req, res) => {
     const dailyCapacities = {};
 
     machinesList.forEach(mName => {
-      finalBoard[mName] = {};
-      dailyCapacities[mName] = {};
-      let runningMagazine = [...machineMagazines[mName].magazine];
-      const mSize = machineMagazines[mName].size;
-      let overflowQueue = [];
+      // Define a local helper to run the entire 5-day scheduling loop for a single algorithm
+      function runMachineScheduling(algorithm) {
+        const dayScheduledMap = {};
+        const dailyCap = {};
+        let runningMagazine = [...machineMagazines[mName].magazine];
+        const mSize = machineMagazines[mName].size;
+        let overflowQueue = [];
+        let totalChanges = 0;
 
-      // We optimize chronologically Day 1 -> Day 2 -> ... -> Day 5
-      planningDays.forEach(day => {
-        const dayCapacity = getCapacityForDay(mName, day);
-        dailyCapacities[mName][day] = dayCapacity;
-
-        const dayCandidates = [...overflowQueue, ...board[mName][day]];
-        let sequencedSteps = [];
-
-        if (dayCandidates.length > 0) {
-          if (shouldOptimize && optimizeNightRun) {
-            // Night-run optimization: split into normal and night-run steps
-            const nightSteps = dayCandidates.filter(s => s.isNightRunCapable);
-            const normalSteps = dayCandidates.filter(s => !s.isNightRunCapable);
-
-            let currentMag = [...runningMagazine];
-            const isChironOrBrother = mName === 'chiron' || mName === 'Brother';
-
-            if (isChironOrBrother) {
-              // For Chiron and Brother, prioritize night-run tasks first
-              if (nightSteps.length > 0) {
-                const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, activeAlgo);
-                sequencedSteps = sequencedSteps.concat(sequenced);
-                currentMag = finalMagazine;
-              }
-              if (normalSteps.length > 0) {
-                const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, activeAlgo);
-                sequencedSteps = sequencedSteps.concat(sequenced);
-                currentMag = finalMagazine;
-              }
-            } else {
-              // Standard night-run optimization: normal steps first, night-run steps last
-              if (normalSteps.length > 0) {
-                const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, activeAlgo);
-                sequencedSteps = sequencedSteps.concat(sequenced);
-                currentMag = finalMagazine;
-              }
-              if (nightSteps.length > 0) {
-                const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, activeAlgo);
-                sequencedSteps = sequencedSteps.concat(sequenced);
-                currentMag = finalMagazine;
-              }
-            }
-
-            runningMagazine = currentMag;
-          } else {
-            // Standard sequencing (whole list together)
-            const { sequenced, finalMagazine } = sequenceSteps(dayCandidates, runningMagazine, mSize, listToToolsMap, activeAlgo);
-            sequencedSteps = sequenced;
-            runningMagazine = finalMagazine;
-          }
-        }
-
-        // Apply capacity constraint scheduling
-        let totalLoad = 0;
-        let dayScheduled = [];
-        let nextDayOverflow = [];
-
-        sequencedSteps.forEach(s => {
-          const stepDuration = (s.SetupTime || 0) + (s.prodTime || 0);
-          const canBypassCapacity = s.isNightRunCapable && s.loadTools && s.loadTools.length === 0;
-          const currentLimit = canBypassCapacity ? 1440 : dayCapacity;
-          const dayRemaining = currentLimit - totalLoad;
-
-          if (stepDuration <= dayRemaining) {
-            // Fits completely on the current day!
-            dayScheduled.push(s);
-            totalLoad += stepDuration;
-          } else {
-            // Does not fit completely. Can we fit at least the SetupTime plus some production?
-            if (dayRemaining > (s.SetupTime || 0)) {
-              const fittedProdTime = Math.max(0, dayRemaining - (s.SetupTime || 0));
-              const remainingProdTime = (s.prodTime || 0) - fittedProdTime;
-
-              dayScheduled.push({
-                ...s,
-                prodTime: fittedProdTime,
-                isSplit: true,
-                splitPart: s.splitPart || 1,
-                originalStepId: s.originalStepId || s.StepId
-              });
-              totalLoad = currentLimit;
-
-              if (remainingProdTime > 0) {
-                nextDayOverflow.push({
-                  ...s,
-                  SetupTime: 0, // setup is done
-                  prodTime: remainingProdTime,
-                  isSplit: true,
-                  splitPart: (s.splitPart || 1) + 1,
-                  originalStepId: s.originalStepId || s.StepId
-                });
-              }
-            } else {
-              // Cannot even fit setup time. Overflow the entire task to the next day!
-              nextDayOverflow.push(s);
-            }
-          }
+        // Shallow clone candidate steps to prevent state contamination between runs
+        const tempBoard = {};
+        planningDays.forEach(d => {
+          tempBoard[d] = board[mName][d].map(s => ({ ...s }));
         });
 
-        overflowQueue = nextDayOverflow;
+        planningDays.forEach(day => {
+          const dayCapacity = getCapacityForDay(mName, day);
+          dailyCap[day] = dayCapacity;
 
-        // Enrich step details for response
-        finalBoard[mName][day] = dayScheduled.map(s => {
+          const dayCandidates = [...overflowQueue, ...tempBoard[day]];
+          let sequencedSteps = [];
+
+          if (dayCandidates.length > 0) {
+            if (shouldOptimize && optimizeNightRun) {
+              const nightSteps = dayCandidates.filter(s => s.isNightRunCapable);
+              const normalSteps = dayCandidates.filter(s => !s.isNightRunCapable);
+
+              let currentMag = [...runningMagazine];
+              const isChironOrBrother = mName === 'Chiron' || mName === 'Brother';
+
+              if (isChironOrBrother) {
+                if (nightSteps.length > 0) {
+                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm);
+                  sequencedSteps = sequencedSteps.concat(sequenced);
+                  currentMag = finalMagazine;
+                }
+                if (normalSteps.length > 0) {
+                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm);
+                  sequencedSteps = sequencedSteps.concat(sequenced);
+                  currentMag = finalMagazine;
+                }
+              } else {
+                if (normalSteps.length > 0) {
+                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm);
+                  sequencedSteps = sequencedSteps.concat(sequenced);
+                  currentMag = finalMagazine;
+                }
+                if (nightSteps.length > 0) {
+                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm);
+                  sequencedSteps = sequencedSteps.concat(sequenced);
+                  currentMag = finalMagazine;
+                }
+              }
+              runningMagazine = currentMag;
+            } else {
+              const { sequenced, finalMagazine } = sequenceSteps(dayCandidates, runningMagazine, mSize, listToToolsMap, algorithm);
+              sequencedSteps = sequenced;
+              runningMagazine = finalMagazine;
+            }
+          }
+
+          // Apply capacity constraint scheduling
+          let totalLoad = 0;
+          let dayScheduled = [];
+          let nextDayOverflow = [];
+
+          sequencedSteps.forEach(s => {
+            const stepDuration = (s.SetupTime || 0) + (s.prodTime || 0);
+            const canBypassCapacity = s.isNightRunCapable && s.loadTools && s.loadTools.length === 0;
+            const currentLimit = canBypassCapacity ? 1440 : dayCapacity;
+            const dayRemaining = currentLimit - totalLoad;
+            const stepLimit = (s.MaxProdTag && s.MaxProdTag > 0) ? s.MaxProdTag : currentLimit;
+
+            if (stepDuration <= stepLimit && stepDuration <= dayRemaining) {
+              dayScheduled.push(s);
+              totalLoad += stepDuration;
+            } else {
+              const maxAllocated = Math.min(dayRemaining, stepLimit);
+              if (maxAllocated > (s.SetupTime || 0)) {
+                const fittedProdTime = Math.max(0, maxAllocated - (s.SetupTime || 0));
+                const remainingProdTime = (s.prodTime || 0) - fittedProdTime;
+                dayScheduled.push({
+                  ...s,
+                  prodTime: fittedProdTime,
+                  isSplit: true,
+                  splitPart: s.splitPart || 1,
+                  originalStepId: s.originalStepId || s.StepId
+                });
+                totalLoad += maxAllocated;
+                if (remainingProdTime > 0) {
+                  nextDayOverflow.push({
+                    ...s,
+                    SetupTime: 0,
+                    prodTime: remainingProdTime,
+                    isSplit: true,
+                    splitPart: (s.splitPart || 1) + 1,
+                    originalStepId: s.originalStepId || s.StepId
+                  });
+                }
+              } else {
+                nextDayOverflow.push(s);
+              }
+            }
+          });
+
+          overflowQueue = nextDayOverflow;
+          dayScheduledMap[day] = dayScheduled;
+
+          // Compute tool changes changes count for this day
+          dayScheduled.forEach(s => {
+            totalChanges += (s.missesCount || 0);
+          });
+        });
+
+        dayScheduledMap['Überlauf'] = overflowQueue;
+        overflowQueue.forEach(s => {
+          totalChanges += (s.missesCount || 0);
+        });
+
+        return {
+          dayScheduledMap,
+          dailyCap,
+          totalChanges
+        };
+      }
+
+      let selectedResult;
+      if (activeAlgo === 'hybrid') {
+        const greedyRes = runMachineScheduling('greedy');
+        const gaRes = runMachineScheduling('ga');
+        const rlRes = runMachineScheduling('rl');
+
+        console.log(`[Global Machine Selection - ${mName}] Greedy: ${greedyRes.totalChanges} changes, GA: ${gaRes.totalChanges} changes, RL: ${rlRes.totalChanges} changes`);
+
+        let bestRes = greedyRes;
+        if (gaRes.totalChanges < bestRes.totalChanges) {
+          bestRes = gaRes;
+        }
+        if (rlRes.totalChanges < bestRes.totalChanges) {
+          bestRes = rlRes;
+        }
+        selectedResult = bestRes;
+      } else {
+        selectedResult = runMachineScheduling(activeAlgo);
+      }
+
+      dailyCapacities[mName] = selectedResult.dailyCap;
+      finalBoard[mName] = {};
+
+      const daysToMap = [...planningDays, 'Überlauf'];
+      daysToMap.forEach(day => {
+        const daySteps = selectedResult.dayScheduledMap[day] || [];
+        finalBoard[mName][day] = daySteps.map(s => {
           const tools = listToToolsMap[s.MatchedListNr] || [];
           const originalDate = s.StartDate || s.DeliveryDate;
           const originalDateStr = originalDate ? new Date(originalDate).toISOString().substring(0, 10) : '';
@@ -1831,7 +2364,16 @@ app.get('/api/planning', async (req, res) => {
 
           const entireArbeitsplan = (ordersMap[s.OrderId] || [])
             .map(planStep => {
-              const machineName = machineMap[planStep.MachineId] || (planStep.MachineId ? `Maschine #${planStep.MachineId}` : 'Unbekannt');
+              let machineName = 'Sonstige/Extern';
+              if (planStep.MachineId && machineMap[planStep.MachineId]) {
+                machineName = machineMap[planStep.MachineId];
+              } else if (planStep.MachinePoolId && poolMap[planStep.MachinePoolId]) {
+                machineName = poolMap[planStep.MachinePoolId];
+              } else if (planStep.MachineId) {
+                machineName = `Maschine #${planStep.MachineId}`;
+              } else if (planStep.MachinePoolId) {
+                machineName = `Pool #${planStep.MachinePoolId}`;
+              }
               return {
                 stepId: planStep.StepId,
                 stepPos: planStep.StepPos,
@@ -1866,8 +2408,8 @@ app.get('/api/planning', async (req, res) => {
             matchedListIdent: s.MatchedListIdent || null,
             color: s.color,
             entireArbeitsplan,
-            missesCount: s.loadTools.length,
-            loadTools: s.loadTools.map(tNr => {
+            missesCount: s.loadTools ? s.loadTools.length : 0,
+            loadTools: (s.loadTools || []).map(tNr => {
               const details = toolsDetails[tNr];
               return {
                 nr: tNr,
@@ -1876,7 +2418,7 @@ app.get('/api/planning', async (req, res) => {
                 len: details ? details.len : null
               };
             }),
-            unloadTools: s.unloadTools.map(tNr => {
+            unloadTools: (s.unloadTools || []).map(tNr => {
               const details = toolsDetails[tNr];
               return {
                 nr: tNr,
@@ -1888,74 +2430,6 @@ app.get('/api/planning', async (req, res) => {
             toolsCount: tools.length
           };
         });
-      });
-
-      // After Day 5, any remaining overflow goes to the 'Überlauf' column
-      dailyCapacities[mName]['Überlauf'] = 99999;
-      finalBoard[mName]['Überlauf'] = overflowQueue.map(s => {
-        const tools = listToToolsMap[s.MatchedListNr] || [];
-        const originalDate = s.StartDate || s.DeliveryDate;
-        const originalDateStr = originalDate ? new Date(originalDate).toISOString().substring(0, 10) : '';
-        const isConflict = originalDateStr && (originalDateStr < planningDays[0]);
-
-        const entireArbeitsplan = (ordersMap[s.OrderId] || [])
-          .map(planStep => {
-            const machineName = machineMap[planStep.MachineId] || (planStep.MachineId ? `Maschine #${planStep.MachineId}` : 'Unbekannt');
-            return {
-              stepId: planStep.StepId,
-              stepPos: planStep.StepPos,
-              stepDesc: (planStep.StepDesc || '').trim(),
-              color: planStep.color || 'Yellow',
-              setupTime: planStep.SetupTime || 0,
-              prodTime: planStep.prodTime || 0,
-              isCompleted: planStep.SPKO === 4,
-              isExecuting: planStep.SPKO === 2,
-              machineName: machineName
-            };
-          });
-
-        return {
-          stepId: s.StepId,
-          orderId: s.OrderId,
-          contractNumber: s.ContractNumber || null,
-          stepPos: s.StepPos || null,
-          articleId: s.ArticleId,
-          orderDesc: s.OrderDesc,
-          stepDesc: s.StepDesc.trim(),
-          setupTime: s.SetupTime,
-          prodTime: s.prodTime || 0,
-          isNightRunCapable: s.isNightRunCapable || false,
-          isConflict: isConflict || false,
-          originalStartDate: originalDateStr || null,
-          isSplit: s.isSplit || false,
-          splitPart: s.splitPart || null,
-          isExecuting: s.SPKO === 2,
-          ncProgram: s.NCProgram || null,
-          matchedListNr: s.MatchedListNr || null,
-          matchedListIdent: s.MatchedListIdent || null,
-          color: s.color,
-          entireArbeitsplan,
-          missesCount: s.loadTools.length,
-          loadTools: s.loadTools.map(tNr => {
-            const details = toolsDetails[tNr];
-            return {
-              nr: tNr,
-              desc: details ? details.desc : 'Unbekannt',
-              dia: details ? details.dia : null,
-              len: details ? details.len : null
-            };
-          }),
-          unloadTools: s.unloadTools.map(tNr => {
-            const details = toolsDetails[tNr];
-            return {
-              nr: tNr,
-              desc: details ? details.desc : 'Unbekannt',
-              dia: details ? details.dia : null,
-              len: details ? details.len : null
-            };
-          }),
-          toolsCount: tools.length
-        };
       });
     });
 
@@ -2093,10 +2567,22 @@ app.get('/api/setup-reduction', async (req, res) => {
       const dbId = parseInt(parts[1]); // ID as integer
       if (!isNaN(dbId)) {
         filteredSteps = filteredSteps.filter(step => {
+          let effMachineId = step.MachineId;
+          if ((!effMachineId || effMachineId === 0) && step.MatchedListNr && cachedSetupData.listToMachineMap && cachedSetupData.listToMachineMap[step.MatchedListNr] !== undefined) {
+            const wtMachine = String(cachedSetupData.listToMachineMap[step.MatchedListNr]);
+            if (step.MachinePoolId === 13) {
+              if (wtMachine === '17') effMachineId = 4; // C40
+              else if (wtMachine === '18') effMachineId = 25; // C42
+            } else if (step.MachinePoolId === 9 || step.MachinePoolId === 12) {
+              if (wtMachine === '17') effMachineId = 5; // RS2_1
+              else if (wtMachine === '18') effMachineId = 6; // RS2_2
+            }
+          }
+
           if (type === 'pool') {
             return step.MachinePoolId === dbId;
           } else {
-            return step.MachineId === dbId;
+            return effMachineId === dbId;
           }
         });
       }

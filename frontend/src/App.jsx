@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
   Database, 
@@ -24,7 +24,9 @@ import {
   ArrowRight,
   RefreshCw,
   Server,
-  Moon
+  Moon,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -264,7 +266,15 @@ export default function App() {
               onClick={() => setActiveTab('planning')}
             >
               <Layers size={18} />
-              <span>Planung</span>
+              <span>Planung Maschinen</span>
+            </div>
+
+            <div 
+              className={`nav-item ${activeTab === 'planning_deburring' ? 'active' : ''}`}
+              onClick={() => setActiveTab('planning_deburring')}
+            >
+              <CalendarRange size={18} />
+              <span>Planung Entgraten/Montieren</span>
             </div>
           </nav>
         </div>
@@ -287,6 +297,7 @@ export default function App() {
               {activeTab === 'simulation' && 'Rüstzeit-Optimierungs-Simulator'}
               {activeTab === 'machines' && 'Maschinen-Werkzeugbedarf'}
               {activeTab === 'planning' && 'Kanban-Maschinenbelegungsplanung'}
+              {activeTab === 'planning_deburring' && 'Kanban-Belegungsplanung Entgraten/Montieren'}
             </h2>
           </div>
 
@@ -344,7 +355,8 @@ export default function App() {
           {activeTab === 'demand' && <DemandTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'simulation' && <SimulationTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'machines' && <MachinesTab startDate={globalStartDate} endDate={globalEndDate} />}
-          {activeTab === 'planning' && <PlanningTab />}
+          {activeTab === 'planning' && <PlanningTab mode="machining" />}
+          {activeTab === 'planning_deburring' && <PlanningTab mode="deburring" />}
         </div>
       </main>
     </div>
@@ -484,6 +496,7 @@ function ExplorerTab({ startDate, endDate }) {
   const [activeToolListNr, setActiveToolListNr] = useState(null);
   const [toolListDetails, setToolListDetails] = useState(null);
   const [loadingToolList, setLoadingToolList] = useState(false);
+  const [tableFullscreen, setTableFullscreen] = useState(false);
 
   useEffect(() => {
     fetchArticles();
@@ -697,8 +710,48 @@ function ExplorerTab({ startDate, endDate }) {
         </div>
 
         {/* Column 2: Production Orders / Contracts */}
-        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-          <h3 style={{ marginBottom: '0.75rem', fontWeight: 600 }}>Produktionsaufträge</h3>
+        <div 
+          className="glass-card" 
+          style={tableFullscreen ? {
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            background: '#090d16',
+            zIndex: 9999,
+            padding: '1.5rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1rem',
+            borderRadius: 0
+          } : {
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100%',
+            overflow: 'hidden'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <h3 style={{ margin: 0, fontWeight: 600 }}>Produktionsaufträge</h3>
+            {selectedArticle && (
+              <button
+                className="btn-secondary"
+                onClick={() => setTableFullscreen(!tableFullscreen)}
+                style={{ 
+                  fontSize: '0.8rem', 
+                  padding: '0.35rem 0.75rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem'
+                }}
+                title={tableFullscreen ? "Vollbild beenden" : "Tabelle maximieren"}
+              >
+                {tableFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                <span>{tableFullscreen ? 'Normalbild' : 'Vollbild'}</span>
+              </button>
+            )}
+          </div>
           {selectedArticle ? (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
               <span style={{ color: '#94a3b8', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
@@ -2418,6 +2471,7 @@ function SimulationTab({ startDate, endDate }) {
   const [simData, setSimData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [viewDetails, setViewDetails] = useState(false);
+  const [tableFullscreen, setTableFullscreen] = useState(false);
   const [componentFilter, setComponentFilter] = useState('');
   const [expandedToolNrs, setExpandedToolNrs] = useState(new Set());
   const [stammSubTab, setStammSubTab] = useState('tools'); // 'tools' or 'components'
@@ -2549,8 +2603,8 @@ function SimulationTab({ startDate, endDate }) {
   });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'calc(100vh - 120px)', overflowY: 'auto' }}>
-      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: '2rem', alignItems: 'center', padding: '1.5rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: 'calc(100vh - 84px)', overflowY: 'auto' }}>
+      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: '1.5rem', alignItems: 'center', padding: '0.65rem 1rem' }}>
         <div>
           <span style={{ fontSize: '0.75rem', color: '#3b82f6', fontWeight: 600, textTransform: 'uppercase' }}>Simulationseinstellungen</span>
           <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '0.25rem' }}>Werkzeugstamm</h3>
@@ -2630,8 +2684,8 @@ function SimulationTab({ startDate, endDate }) {
               background: 'rgba(59, 130, 246, 0.08)',
               border: '1px solid rgba(59, 130, 246, 0.25)',
               borderRadius: '12px',
-              padding: '0.75rem 1.25rem',
-              marginBottom: '1.25rem',
+              padding: '0.5rem 1rem',
+              marginBottom: '0.75rem',
               display: 'flex',
               alignItems: 'center',
               gap: '0.75rem',
@@ -2645,7 +2699,7 @@ function SimulationTab({ startDate, endDate }) {
             </div>
           )}
 
-          <div className={simData?.config.magazineSize ? "grid-4" : "grid-3"} style={{ marginBottom: '1.5rem' }}>
+          <div className={simData?.config.magazineSize ? "grid-4" : "grid-3"} style={{ marginBottom: '0.75rem' }}>
             <div className="glass-card metric-card" style={{ borderLeft: '4px solid #f59e0b' }}>
               <div className="metric-header">
                 <span>Original Rüstaufwand</span>
@@ -2697,16 +2751,67 @@ function SimulationTab({ startDate, endDate }) {
             <div className="glass-card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <h3 style={{ fontWeight: 600 }}>Rüsteinsparungen nach Arbeitsgang (Soll/Ist)</h3>
-                <button 
-                  className="btn-secondary" onClick={() => setViewDetails(!viewDetails)}
-                  style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
-                >
-                  {viewDetails ? 'Erklärung anzeigen' : 'Alle Schritte auflisten'}
-                </button>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <button 
+                    className="btn-secondary" onClick={() => setViewDetails(!viewDetails)}
+                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                  >
+                    {viewDetails ? 'Erklärung anzeigen' : 'Alle Schritte auflisten'}
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      if (!tableFullscreen) {
+                        setViewDetails(true);
+                      }
+                      setTableFullscreen(!tableFullscreen);
+                    }}
+                    style={{ 
+                      fontSize: '0.8rem', 
+                      padding: '0.35rem 0.75rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.35rem'
+                    }}
+                    title={tableFullscreen ? "Vollbild beenden" : "Tabelle maximieren"}
+                  >
+                    {tableFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                    <span>{tableFullscreen ? 'Normalbild' : 'Vollbild'}</span>
+                  </button>
+                </div>
               </div>
 
               {viewDetails ? (
-                <div className="table-wrapper" style={{ maxHeight: '400px' }}>
+                <div style={tableFullscreen ? {
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  width: '100vw',
+                  height: '100vh',
+                  background: '#090d16',
+                  zIndex: 9999,
+                  padding: '1.5rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1rem'
+                } : {
+                  display: 'flex',
+                  flexDirection: 'column'
+                }}>
+                  {tableFullscreen && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
+                      <h3 style={{ fontWeight: 700, color: '#fff', fontSize: '1.1rem', margin: 0 }}>Rüsteinsparungen nach Arbeitsgang (Soll/Ist) - Vollbild</h3>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => setTableFullscreen(false)}
+                        style={{ fontSize: '0.8rem', padding: '0.45rem 1rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                      >
+                        <Minimize2 size={14} />
+                        <span>Vollbild beenden</span>
+                      </button>
+                    </div>
+                  )}
+                  <div className="table-wrapper" style={{ maxHeight: tableFullscreen ? 'calc(100vh - 100px)' : 'calc(100vh - 280px)' }}>
                   <table className="custom-table">
                     <thead>
                       <tr>
@@ -2745,7 +2850,8 @@ function SimulationTab({ startDate, endDate }) {
                     </tbody>
                   </table>
                 </div>
-              ) : (
+              </div>
+            ) : (
                 <div style={{ padding: '2rem 1rem' }}>
                   <h4 style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.5rem', color: '#94a3b8' }}>Erklärungsmodell</h4>
                   <p style={{ fontSize: '0.8rem', color: '#cbd5e1', lineHeight: '1.6' }}>
@@ -3424,7 +3530,7 @@ function MachinesTab({ startDate, endDate }) {
 }
 
 // 7. Planning Tab (Kanban Board for next 5 working days)
-function PlanningTab() {
+function PlanningTab({ mode = 'machining' }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -3438,6 +3544,50 @@ function PlanningTab() {
   const [expandedCards, setExpandedCards] = useState({});
   const [fullRoutingSteps, setFullRoutingSteps] = useState([]);
   const [loadingRouting, setLoadingRouting] = useState(false);
+  const [weeklyToolsModal, setWeeklyToolsModal] = useState(null);
+  const [kanbanFullscreen, setKanbanFullscreen] = useState(false);
+  const [highlightRobotFlow, setHighlightRobotFlow] = useState(false);
+  const abortControllerRef = useRef(null);
+
+  const cancelPlanningCalculation = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
+  const isFollowedByRobot = (step) => {
+    if (!step || !step.entireArbeitsplan) return false;
+    const plan = step.entireArbeitsplan;
+    const currIdx = plan.findIndex(p => p.stepPos === step.stepPos);
+    if (currIdx !== -1) {
+      for (let i = currIdx + 1; i < plan.length; i++) {
+        const nextStep = plan[i];
+        const isMachineStep = nextStep.machineName && 
+                              !nextStep.machineName.includes('Sonstige') && 
+                              !nextStep.machineName.includes('Extern') && 
+                              !nextStep.machineName.includes('Unbekannt') &&
+                              nextStep.machineName.trim() !== '';
+        if (isMachineStep) {
+          const nameUpper = nextStep.machineName.toUpperCase();
+          return nameUpper.includes('RS2') || 
+                 nameUpper.includes('ROBO') || 
+                 (nameUpper.includes('C40') && !nameUpper.includes('C400')) || 
+                 nameUpper.includes('C42');
+        }
+      }
+    }
+    return false;
+  };
 
   const toggleCardDetails = (e, stepId) => {
     e.stopPropagation();
@@ -3485,6 +3635,11 @@ function PlanningTab() {
   }, [activeModalStep]);
 
   const fetchPlanningData = async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     setLoading(true);
     setError(null);
     try {
@@ -3492,7 +3647,7 @@ function PlanningTab() {
       if (startDate) {
         url += `&startDate=${startDate}`;
       }
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: abortControllerRef.current.signal });
       if (!res.ok) {
         throw new Error(`Fehler beim Laden: ${res.statusText}`);
       }
@@ -3502,10 +3657,16 @@ function PlanningTab() {
         setStartDate(json.days[0]);
       }
     } catch (err) {
+      if (err.name === 'AbortError') {
+        console.log('Planning fetch aborted by user.');
+        return;
+      }
       console.error('Error fetching planning data:', err);
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (abortControllerRef.current && !abortControllerRef.current.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
@@ -3526,6 +3687,26 @@ function PlanningTab() {
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', gap: '1rem', color: '#94a3b8' }}>
         <RefreshCw className="animate-spin" size={32} />
         <span>Planungsdaten werden berechnet & rüstoptimiert...</span>
+        <button
+          onClick={cancelPlanningCalculation}
+          className="btn btn-secondary"
+          style={{
+            marginTop: '0.5rem',
+            background: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.2)',
+            color: '#ef4444',
+            fontSize: '0.75rem',
+            padding: '0.35rem 0.85rem',
+            borderRadius: '8px',
+            cursor: 'pointer',
+            fontWeight: 600,
+            transition: 'all 0.2s'
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.35)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.2)'; }}
+        >
+          Berechnung abbrechen
+        </button>
       </div>
     );
   }
@@ -3541,7 +3722,10 @@ function PlanningTab() {
     );
   }
 
-  const { days = [], machines = [], board = {}, capacities = {} } = data || {};
+  const { days = [], machines: rawMachines = [], board = {}, capacities = {} } = data || {};
+  const machines = mode === 'deburring'
+    ? ['Entgraten', 'Laser', 'Messmaschine', 'Montage', 'Montage UR5', 'Prüfplanung', 'Versand']
+    : ['Brother', 'Chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2'];
 
   const getDayName = (dateStr) => {
     if (dateStr === 'Überlauf') return 'Überlauf';
@@ -3624,8 +3808,22 @@ function PlanningTab() {
                   onChange={(e) => setHideExecuting(e.target.checked)}
                   style={{ width: '16px', height: '16px', accentColor: '#10b981' }}
                 />
-                <span style={{ color: '#a7f3d0' }}>⚡ Laufende ausblenden</span>
+                <span style={{ color: '#a7f3d0' }}>⚡ Laufende verblassen</span>
               </label>
+
+              {(selectedMachine === 'Chiron' || selectedMachine === 'Brother') && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={highlightRobotFlow}
+                    onChange={(e) => setHighlightRobotFlow(e.target.checked)}
+                    style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                  />
+                  <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    🤖 Nur Roboter-Folgeschritte
+                  </span>
+                </label>
+              )}
             </div>
             <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
               Sortiert nach Werkzeugüberschneidung. Die Nachtlauf-Optimierung erkennt historische Nachtlauf-Kompatibilität und priorisiert diese entsprechend.
@@ -3642,10 +3840,22 @@ function PlanningTab() {
                     Greedy (NN)
                   </button>
                   <button
+                    onClick={() => setAlgo('hybrid')}
+                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'hybrid' ? '#ec4899' : 'rgba(255,255,255,0.03)', border: algo === 'hybrid' ? '1px solid #ec4899' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                  >
+                    Hybrid (Greedy+GA+RL)
+                  </button>
+                  <button
                     onClick={() => setAlgo('ga')}
                     style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'ga' ? '#10b981' : 'rgba(255,255,255,0.03)', border: algo === 'ga' ? '1px solid #10b981' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
                   >
                     Genetisch (GA)
+                  </button>
+                  <button
+                    onClick={() => setAlgo('rl')}
+                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'rl' ? '#06b6d4' : 'rgba(255,255,255,0.03)', border: algo === 'rl' ? '1px solid #06b6d4' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                  >
+                    Lernen (RL)
                   </button>
                   <button
                     onClick={() => setAlgo('mip')}
@@ -3665,7 +3875,7 @@ function PlanningTab() {
             className={`pill ${selectedMachine === 'All' ? 'active' : ''}`}
             onClick={() => setSelectedMachine('All')}
           >
-            Alle Maschinen (Übersicht)
+            {mode === 'deburring' ? 'Alle Arbeitsschritte (Übersicht)' : 'Alle Maschinen (Übersicht)'}
           </button>
           {machines.map(m => (
             <button
@@ -3692,72 +3902,73 @@ function PlanningTab() {
 
         if (!activeSavings || activeSavings.savedChanges <= 0) return null;
 
-        const algoLabel = algo === 'ga' ? 'Genetischer Algorithmus (GA)' : algo === 'mip' ? 'Exakter Solver (MIP)' : 'Greedy Nearest Neighbor';
+        const algoLabel = algo === 'ga' ? 'Genetischer Algorithmus (GA)' : algo === 'rl' ? 'Reinforcement Learning (RL)' : algo === 'hybrid' ? 'Hybrid (Greedy + GA + RL)' : algo === 'mip' ? 'Exakter Solver (MIP)' : 'Greedy Nearest Neighbor';
         const scopeLabel = selectedMachine === 'All' ? 'alle Maschinen' : `Maschine ${selectedMachine}`;
 
         return (
           <div style={{
-            background: 'radial-gradient(100% 100% at 0% 0%, rgba(16, 185, 129, 0.08) 0%, rgba(8, 12, 20, 0.4) 100%)',
-            border: '1px solid rgba(16, 185, 129, 0.25)',
-            borderRadius: '16px',
-            padding: '1.25rem 1.5rem',
+            background: 'radial-gradient(100% 100% at 0% 0%, rgba(16, 185, 129, 0.06) 0%, rgba(8, 12, 20, 0.4) 100%)',
+            border: '1px solid rgba(16, 185, 129, 0.2)',
+            borderRadius: '10px',
+            padding: '0.45rem 1rem',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.15)',
-            marginBottom: '1rem',
+            boxShadow: '0 4px 20px 0 rgba(0, 0, 0, 0.1)',
+            marginBottom: '0.2rem',
             animation: 'slide-in 0.3s ease-out'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
               <div style={{
                 background: 'rgba(16, 185, 129, 0.15)',
                 border: '1px solid rgba(16, 185, 129, 0.3)',
                 color: '#34d399',
-                width: '42px',
-                height: '42px',
-                borderRadius: '12px',
+                width: '32px',
+                height: '32px',
+                borderRadius: '8px',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center'
+                justifyContent: 'center',
+                flexShrink: 0
               }}>
-                <TrendingDown size={22} />
+                <TrendingDown size={18} />
               </div>
               <div>
-                <h4 style={{ color: '#fff', fontSize: '1rem', fontWeight: 700, margin: '0 0 0.15rem 0' }}>
+                <h4 style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 700, margin: 0 }}>
                   Effizienzgewinn durch Rüstoptimierung ({algoLabel})
                 </h4>
-                <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: 0 }}>
+                <p style={{ color: '#64748b', fontSize: '0.72rem', margin: 0 }}>
                   Gerechneter Optimierungs-Erfolg für <strong>{scopeLabel}</strong> über den gesamten Planungszeitraum.
                 </p>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '2rem' }}>
+            <div style={{ display: 'flex', gap: '1.25rem' }}>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Eingesparte Rüstzeit</div>
-                <div style={{ fontSize: '1.4rem', color: '#10b981', fontWeight: 800 }}>
+                <div style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Eingesparte Rüstzeit</div>
+                <div style={{ fontSize: '1.15rem', color: '#10b981', fontWeight: 800 }}>
                   {formatMinutes(activeSavings.savedMinutes)}
                 </div>
               </div>
               {activeSavings.originalSetupTime > 0 && (
-                <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '2rem' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstzeit-Ersparnis</div>
-                  <div style={{ fontSize: '1.4rem', color: '#10b981', fontWeight: 800 }}>
+                <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '1.25rem' }}>
+                  <div style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstzeit-Ersparnis</div>
+                  <div style={{ fontSize: '1.15rem', color: '#10b981', fontWeight: 800 }}>
                     -{activeSavings.originalSetupTime ? Math.round((activeSavings.savedMinutes / activeSavings.originalSetupTime) * 100) : 0}%
                   </div>
-                  <div style={{ fontSize: '0.7rem', color: '#64748b' }}>von {formatMinutes(activeSavings.originalSetupTime)} gepl.</div>
+                  <div style={{ fontSize: '0.65rem', color: '#64748b' }}>von {formatMinutes(activeSavings.originalSetupTime)} gepl.</div>
                 </div>
               )}
-              <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '2rem' }}>
-                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstwechsel vermieden</div>
-                <div style={{ fontSize: '1.4rem', color: '#38bdf8', fontWeight: 800 }}>
-                  -{activeSavings.savedChanges} <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: 600 }}>Tools</span>
+              <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '1.25rem' }}>
+                <div style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstwechsel vermieden</div>
+                <div style={{ fontSize: '1.15rem', color: '#38bdf8', fontWeight: 800 }}>
+                  -{activeSavings.savedChanges} <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Tools</span>
                 </div>
               </div>
-              <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '2rem' }}>
-                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstwechsel (Vorher / Nachher)</div>
-                <div style={{ fontSize: '1.05rem', color: '#fff', fontWeight: 700, marginTop: '0.2rem' }}>
+              <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '1.25rem' }}>
+                <div style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstwechsel (Vorher / Nachher)</div>
+                <div style={{ fontSize: '0.95rem', color: '#fff', fontWeight: 700 }}>
                   <span style={{ textDecoration: 'line-through', color: '#ef4444' }}>{activeSavings.originalChanges}</span>
-                  <span style={{ color: '#64748b', margin: '0 0.25rem' }}>→</span>
+                  <span style={{ color: '#64748b', margin: '0 0.2rem' }}>→</span>
                   <span style={{ color: '#10b981', fontWeight: 800 }}>{activeSavings.optimizedChanges}</span>
                 </div>
               </div>
@@ -3766,19 +3977,211 @@ function PlanningTab() {
         );
       })()}
 
+      {/* Fullscreen Button Block (unconditionally rendered under the banner area) */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '-0.15rem', marginBottom: '0.15rem', flexShrink: 0 }}>
+        <button
+          className="btn-secondary"
+          onClick={() => setKanbanFullscreen(!kanbanFullscreen)}
+          style={{ 
+            fontSize: '0.75rem', 
+            padding: '0.25rem 0.6rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.25rem'
+          }}
+          title={kanbanFullscreen ? "Vollbild beenden" : "Kanban maximieren"}
+        >
+          {kanbanFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+          <span>{kanbanFullscreen ? 'Normalbild' : 'Vollbild'}</span>
+        </button>
+      </div>
+
       {loading && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.9rem', padding: '0.5rem' }}>
-          <RefreshCw size={16} className="animate-spin" />
-          <span>Optimiere Sequenz...</span>
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          background: 'rgba(8, 12, 20, 0.75)',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
+          zIndex: 9999,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <style>{`
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+            @keyframes loadingProgress {
+              0% { transform: translateX(-100%); }
+              50% { transform: translateX(0%); }
+              100% { transform: translateX(100%); }
+            }
+          `}</style>
+          <div style={{
+            background: 'radial-gradient(100% 100% at 0% 0%, rgba(59, 130, 246, 0.1) 0%, rgba(8, 12, 20, 0.95) 100%)',
+            border: '1px solid rgba(59, 130, 246, 0.2)',
+            borderRadius: '24px',
+            padding: '2.5rem 3rem',
+            textAlign: 'center',
+            maxWidth: '480px',
+            width: '90%',
+            boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.05)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '1.25rem'
+          }}>
+            {/* Animated Milling / Gear Circle */}
+            <div style={{
+              position: 'relative',
+              width: '80px',
+              height: '80px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <div style={{
+                position: 'absolute',
+                width: '100%',
+                height: '100%',
+                borderRadius: '50%',
+                border: '3px solid rgba(59, 130, 246, 0.1)',
+                borderTopColor: '#38bdf8',
+                animation: 'spin 1s linear infinite'
+              }} />
+              <div style={{
+                position: 'absolute',
+                width: '70%',
+                height: '70%',
+                borderRadius: '50%',
+                border: '3px solid rgba(168, 85, 247, 0.1)',
+                borderBottomColor: '#a855f7',
+                animation: 'spin 1.5s linear infinite reverse'
+              }} />
+              <Wrench size={32} style={{ color: '#38bdf8', filter: 'drop-shadow(0 0 8px #38bdf8)' }} />
+            </div>
+
+            <div>
+              <h3 style={{ color: '#fff', fontSize: '1.25rem', fontWeight: 800, margin: '0 0 0.5rem 0' }}>
+                Belegungsplan wird optimiert
+              </h3>
+              <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: 0, lineHeight: 1.5 }}>
+                {algo === 'ga' && 'Der Genetische Algorithmus kreuzt und mutiert Auftragssequenzen, um Werkzeugwechsel auf Chiron & Brother zu minimieren.'}
+                {algo === 'mip' && 'Der exakte Branch-and-Bound-Solver berechnet die mathematisch rüstzeitminimale Belegungsreihenfolge.'}
+                {algo === 'greedy' && 'Die Rüstoptimierung ordnet alle Jobs nach dem Greedy-Nearest-Neighbor-Prinzip für kürzeste Rüstwege.'}
+              </p>
+            </div>
+
+            {/* Custom Fake Progress Bar */}
+            <div style={{ width: '100%', background: 'rgba(255,255,255,0.05)', height: '4px', borderRadius: '2px', overflow: 'hidden', marginTop: '0.5rem', position: 'relative' }}>
+              <div style={{
+                height: '100%',
+                background: 'linear-gradient(90deg, #38bdf8, #a855f7)',
+                width: '100%',
+                animation: 'loadingProgress 2s ease-in-out infinite'
+              }} />
+            </div>
+            
+            <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Systemdaten & Magazin-Setups werden abgeglichen...
+            </span>
+
+            <button
+              onClick={cancelPlanningCalculation}
+              style={{
+                marginTop: '0.5rem',
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.2)',
+                color: '#ef4444',
+                fontSize: '0.75rem',
+                padding: '0.35rem 0.85rem',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem'
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.35)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.2)'; }}
+            >
+              <X size={12} /> Berechnung abbrechen
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Kanban Board */}
-      {selectedMachine !== 'All' ? (
-        // Detailed Single Machine Kanban Board (5 columns)
-        <div className="kanban-board">
+      {/* Kanban Board Container */}
+      <div 
+        style={kanbanFullscreen ? {
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          background: '#080c14',
+          zIndex: 9999,
+          padding: '1.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1rem',
+          overflowY: 'auto'
+        } : {
+          display: 'flex',
+          flexDirection: 'column',
+          flexGrow: 1,
+          minHeight: 0
+        }}
+      >
+        {kanbanFullscreen && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem', flexShrink: 0 }}>
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+              <h3 style={{ fontWeight: 700, color: '#fff', fontSize: '1.1rem', margin: 0 }}>
+                Belegungsplanung Kanban-Board - Vollbild
+              </h3>
+              <div className="machine-pills" style={{ marginBottom: 0 }}>
+                <button
+                  className={`pill ${selectedMachine === 'All' ? 'active' : ''}`}
+                  onClick={() => setSelectedMachine('All')}
+                  style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
+                >
+                  Alle Maschinen (Übersicht)
+                </button>
+                {machines.map(m => (
+                  <button
+                    key={m}
+                    className={`pill ${selectedMachine === m ? 'active' : ''}`}
+                    onClick={() => setSelectedMachine(m)}
+                    style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button
+              className="btn-secondary"
+              onClick={() => setKanbanFullscreen(false)}
+              style={{ fontSize: '0.8rem', padding: '0.45rem 1rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              <Minimize2 size={14} />
+              <span>Vollbild beenden</span>
+            </button>
+          </div>
+        )}
+
+        {selectedMachine !== 'All' ? (
+          // Detailed Single Machine Kanban Board (5 columns)
+          <div className="kanban-board">
           {days.map(day => {
-            const daySteps = (board[selectedMachine]?.[day] || []).filter(s => !hideExecuting || !s.isExecuting);
+            const daySteps = board[selectedMachine]?.[day] || [];
             const totalSetupTime = daySteps.reduce((acc, s) => acc + s.setupTime, 0);
             const totalProdTime = daySteps.reduce((acc, s) => acc + s.prodTime, 0);
             const totalWorkloadTime = totalSetupTime + totalProdTime;
@@ -3824,14 +4227,36 @@ function PlanningTab() {
                   {daySteps.length === 0 ? (
                     <div className="empty-column-state">Keine Aufträge geplant</div>
                   ) : (
-                    daySteps.map((step, idx) => (
-                      <div key={step.stepId} className={`kanban-card ${step.isExecuting ? 'executing' : ''}`} onClick={() => setActiveModalStep(step)} style={{ cursor: 'pointer', padding: '0.65rem' }}>
-                        {/* Header Row */}
-                        <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
-                          <span className="card-order-id" style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f1f5f9' }}>
-                            {step.contractNumber || `Auftrag #${step.orderId}`}
-                          </span>
-                          <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    daySteps.map((step, idx) => {
+                      const isNonRobot = highlightRobotFlow && (selectedMachine === 'Chiron' || selectedMachine === 'Brother') && !isFollowedByRobot(step);
+                      const isBlurryExecuting = hideExecuting && step.isExecuting;
+                      return (
+                        <div 
+                          key={step.stepId} 
+                          className={`kanban-card ${step.isExecuting ? 'executing' : ''}`} 
+                          onClick={() => setActiveModalStep(step)} 
+                          style={{
+                            cursor: 'pointer',
+                            padding: '0.65rem',
+                            transition: 'opacity 0.25s, filter 0.25s, border-color 0.25s',
+                            opacity: isBlurryExecuting ? 0.6 : (isNonRobot ? 0.6 : 1),
+                            filter: isBlurryExecuting ? 'blur(1px) grayscale(20%)' : (isNonRobot ? 'blur(0.8px) grayscale(15%)' : 'none'),
+                            border: highlightRobotFlow && !isNonRobot ? '1.5px solid #a855f7' : undefined,
+                            boxShadow: highlightRobotFlow && !isNonRobot ? '0 0 12px rgba(168, 85, 247, 0.2)' : undefined,
+                            pointerEvents: isBlurryExecuting ? 'none' : undefined
+                          }}
+                        >
+                          {/* Header Row */}
+                          <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                            <span className="card-order-id" style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f1f5f9' }}>
+                              {step.contractNumber || `Auftrag #${step.orderId}`}
+                            </span>
+                            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                              {highlightRobotFlow && !isNonRobot && (
+                                <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.58rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 700 }}>
+                                  🤖 ROBOTER-FLOW
+                                </span>
+                              )}
                             {step.isExecuting && (
                               <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 700 }}>
                                 ⚡ AKTIV
@@ -3972,7 +4397,8 @@ function PlanningTab() {
                           </div>
                         )}
                       </div>
-                    ))
+                    );
+                  })
                   )}
                 </div>
               </div>
@@ -3995,15 +4421,77 @@ function PlanningTab() {
             </div>
 
             {/* Content Rows */}
-            {machines.map(mName => (
-              <div key={mName} className="grid-row content-row">
-                <div className="grid-cell machine-cell" onClick={() => setSelectedMachine(mName)}>
-                  <div className="machine-title">{mName}</div>
-                  <div className="machine-click-hint">Kanban-Ansicht</div>
-                </div>
+            {machines.map(mName => {
+              const weeklyLoadTools = [];
+              const weeklyUnloadTools = [];
+              days.forEach(day => {
+                const daySteps = board[mName]?.[day] || [];
+                daySteps.forEach(s => {
+                  if (s.loadTools) {
+                    s.loadTools.forEach(t => {
+                      if (!weeklyLoadTools.some(x => x.nr === t.nr)) {
+                        weeklyLoadTools.push(t);
+                      }
+                    });
+                  }
+                  if (s.unloadTools) {
+                    s.unloadTools.forEach(t => {
+                      if (!weeklyUnloadTools.some(x => x.nr === t.nr)) {
+                        weeklyUnloadTools.push(t);
+                      }
+                    });
+                  }
+                });
+              });
+
+              return (
+                <div key={mName} className="grid-row content-row">
+                  <div className="grid-cell machine-cell" onClick={() => setSelectedMachine(mName)}>
+                    <div className="machine-title">{mName}</div>
+                    <div className="machine-click-hint">Kanban-Ansicht</div>
+
+                    {(weeklyLoadTools.length > 0 || weeklyUnloadTools.length > 0) && (
+                      <div 
+                        style={{ 
+                          marginTop: '0.4rem', 
+                          background: 'rgba(56, 189, 248, 0.05)', 
+                          border: '1px dashed rgba(56, 189, 248, 0.25)', 
+                          borderRadius: '6px', 
+                          padding: '0.25rem 0.4rem', 
+                          fontSize: '0.65rem', 
+                          color: '#38bdf8', 
+                          display: 'flex', 
+                          flexDirection: 'column', 
+                          gap: '0.1rem',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                          textAlign: 'left'
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(56, 189, 248, 0.1)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(56, 189, 248, 0.05)'; }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setWeeklyToolsModal({
+                            machineName: mName,
+                            loadTools: weeklyLoadTools,
+                            unloadTools: weeklyUnloadTools
+                          });
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, display: 'flex', justifyContent: 'space-between', color: '#38bdf8' }}>
+                          <span>Wochen-Rüsten:</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.4rem', color: '#cbd5e1' }}>
+                          <span style={{ color: '#34d399', fontWeight: 700 }}>+{weeklyLoadTools.length} rein</span>
+                          <span style={{ color: '#f87171', fontWeight: 700 }}>-{weeklyUnloadTools.length} raus</span>
+                        </div>
+                        <span style={{ color: '#64748b', fontSize: '0.58rem', textDecoration: 'underline' }}>Details anzeigen</span>
+                      </div>
+                    )}
+                  </div>
                 
                 {days.map(day => {
-                  const daySteps = (board[mName]?.[day] || []).filter(s => !hideExecuting || !s.isExecuting);
+                  const daySteps = board[mName]?.[day] || [];
                   const totalSetupTime = daySteps.reduce((acc, s) => acc + s.setupTime, 0);
                   const totalProdTime = daySteps.reduce((acc, s) => acc + s.prodTime, 0);
                   const totalWorkloadTime = totalSetupTime + totalProdTime;
@@ -4049,11 +4537,21 @@ function PlanningTab() {
                             </span>
                           )}
                           <div className="grid-steps-preview">
-                            {daySteps.slice(0, 2).map(s => (
-                              <div key={s.stepId} className="preview-item">
-                                {s.ncProgram || s.stepDesc.substring(0, 15)}...
-                              </div>
-                            ))}
+                            {daySteps.slice(0, 2).map(s => {
+                              const isBlurryExecuting = hideExecuting && s.isExecuting;
+                              return (
+                                <div 
+                                  key={s.stepId} 
+                                  className="preview-item"
+                                  style={{
+                                    opacity: isBlurryExecuting ? 0.6 : 1,
+                                    filter: isBlurryExecuting ? 'blur(0.3px) grayscale(20%)' : 'none'
+                                  }}
+                                >
+                                  {s.ncProgram || s.stepDesc.substring(0, 15)}...
+                                </div>
+                              );
+                            })}
                             {daySteps.length > 2 && (
                               <div className="preview-more">+{daySteps.length - 2} weitere</div>
                             )}
@@ -4064,10 +4562,12 @@ function PlanningTab() {
                   );
                 })}
               </div>
-            ))}
+            );
+          })}
           </div>
         </div>
       )}
+      </div>
 
       {/* Modal for Detailed Step Information */}
       {activeModalStep && (
@@ -4367,6 +4867,201 @@ function PlanningTab() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal for Weekly Setup Tools Detail */}
+      {weeklyToolsModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(4, 6, 10, 0.85)',
+          backdropFilter: 'blur(10px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 10000,
+          padding: '1.5rem',
+          animation: 'fadeIn 0.15s ease-out'
+        }} onClick={() => setWeeklyToolsModal(null)}>
+          <div style={{
+            background: 'radial-gradient(100% 100% at 0% 0%, var(--bg-card-glow) 0%, var(--bg-card) 100%)',
+            border: '1px solid var(--border-glow)',
+            borderRadius: '20px',
+            width: '90%',
+            maxWidth: '750px',
+            maxHeight: '85vh',
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 24px 60px rgba(0,0,0,0.6)',
+            animation: 'scaleIn 0.15s ease-out'
+          }} onClick={e => e.stopPropagation()}>
+            
+            {/* Header */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '1rem 1.25rem',
+              borderBottom: '1px solid var(--border-dim)'
+            }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                  Wochen-Rüstbedarf: {weeklyToolsModal.machineName}
+                </h3>
+                <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.15rem 0 0 0' }}>
+                  Zusammenfassung aller Rüstwechsel über den gesamten Planungszeitraum
+                </p>
+              </div>
+              <button 
+                onClick={() => setWeeklyToolsModal(null)}
+                style={{
+                  background: 'rgba(255,255,255,0.03)',
+                  border: '1px solid var(--border-dim)',
+                  borderRadius: '50%',
+                  width: '32px',
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: '#94a3b8'
+                }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Scrollable Content */}
+            <div style={{
+              padding: '1.25rem',
+              overflowY: 'auto',
+              flexGrow: 1,
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '1.5rem',
+              minHeight: '250px'
+            }}>
+              {/* Load Tools Column (Rein) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <h4 style={{ 
+                  fontSize: '0.85rem', 
+                  fontWeight: 700, 
+                  color: '#34d399', 
+                  margin: 0, 
+                  paddingBottom: '0.4rem', 
+                  borderBottom: '2px solid rgba(52, 211, 153, 0.2)',
+                  display: 'flex',
+                  justifyContent: 'space-between'
+                }}>
+                  <span>Einzuwechseln (Rein)</span>
+                  <span style={{ background: 'rgba(52, 211, 153, 0.1)', color: '#34d399', padding: '0.05rem 0.35rem', borderRadius: '4px', fontSize: '0.75rem' }}>
+                    +{weeklyToolsModal.loadTools.length}
+                  </span>
+                </h4>
+                {weeklyToolsModal.loadTools.length === 0 ? (
+                  <div style={{ color: '#64748b', fontSize: '0.75rem', padding: '1rem', textAlign: 'center', fontStyle: 'italic' }}>
+                    Keine Werkzeuge zum Einwechseln geplant.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', overflowY: 'auto', maxHeight: '450px' }}>
+                    {weeklyToolsModal.loadTools.map((t, idx) => (
+                      <div key={idx} style={{ 
+                        background: 'rgba(52, 211, 153, 0.03)', 
+                        border: '1px solid rgba(52, 211, 153, 0.1)', 
+                        borderRadius: '6px', 
+                        padding: '0.45rem 0.6rem',
+                        fontSize: '0.75rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', overflow: 'hidden' }}>
+                          <span style={{ color: '#34d399', fontWeight: 700, fontFamily: 'monospace' }}>T{t.nr}</span>
+                          <span style={{ color: '#fff', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.desc}>
+                            {t.desc}
+                          </span>
+                        </div>
+                        {t.dia && (
+                          <span style={{ color: '#38bdf8', fontSize: '0.7rem', fontWeight: 600, fontFamily: 'monospace' }}>
+                            Ø{t.dia}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Unload Tools Column (Raus) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <h4 style={{ 
+                  fontSize: '0.85rem', 
+                  fontWeight: 700, 
+                  color: '#f87171', 
+                  margin: 0, 
+                  paddingBottom: '0.4rem', 
+                  borderBottom: '2px solid rgba(248, 113, 113, 0.2)',
+                  display: 'flex',
+                  justifyContent: 'space-between'
+                }}>
+                  <span>Auszuwechseln (Raus)</span>
+                  <span style={{ background: 'rgba(248, 113, 113, 0.1)', color: '#f87171', padding: '0.05rem 0.35rem', borderRadius: '4px', fontSize: '0.75rem' }}>
+                    -{weeklyToolsModal.unloadTools.length}
+                  </span>
+                </h4>
+                {weeklyToolsModal.unloadTools.length === 0 ? (
+                  <div style={{ color: '#64748b', fontSize: '0.75rem', padding: '1rem', textAlign: 'center', fontStyle: 'italic' }}>
+                    Keine Werkzeuge zum Auswechseln geplant.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', overflowY: 'auto', maxHeight: '450px' }}>
+                    {weeklyToolsModal.unloadTools.map((t, idx) => (
+                      <div key={idx} style={{ 
+                        background: 'rgba(248, 113, 113, 0.03)', 
+                        border: '1px solid rgba(248, 113, 113, 0.1)', 
+                        borderRadius: '6px', 
+                        padding: '0.45rem 0.6rem',
+                        fontSize: '0.75rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', overflow: 'hidden' }}>
+                          <span style={{ color: '#f87171', fontWeight: 700, fontFamily: 'monospace' }}>T{t.nr}</span>
+                          <span style={{ color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.desc}>
+                            {t.desc}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div style={{
+              padding: '0.75rem 1.25rem',
+              borderTop: '1px solid var(--border-dim)',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              background: 'rgba(0,0,0,0.1)'
+            }}>
+              <button 
+                className="btn-primary" 
+                onClick={() => setWeeklyToolsModal(null)}
+                style={{ padding: '0.4rem 1.25rem', fontSize: '0.8rem' }}
+              >
+                Schließen
+              </button>
             </div>
           </div>
         </div>

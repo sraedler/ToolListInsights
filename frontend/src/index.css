@@ -135,12 +135,12 @@ body {
 
 /* Top Navigation Bar */
 .top-bar {
-  height: 70px;
+  height: 52px;
   border-bottom: 1px solid var(--border-dim);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 2rem;
+  padding: 0 1.25rem;
   background: rgba(8, 12, 20, 0.5);
   backdrop-filter: blur(10px);
   z-index: 10;
@@ -191,7 +191,7 @@ body {
 .content-body {
   flex-grow: 1;
   overflow-y: auto;
-  padding: 2rem;
+  padding: 1rem 1.25rem;
 }
 
 /* Premium Card Panels (Glassmorphism) */
@@ -201,7 +201,7 @@ body {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-radius: 16px;
-  padding: 1.5rem;
+  padding: 1rem;
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25);
   transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
@@ -313,19 +313,19 @@ body {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
-  font-size: 0.9rem;
+  font-size: 0.825rem;
 }
 
 .custom-table th {
   background: rgba(13, 20, 35, 0.8);
-  padding: 1rem;
+  padding: 0.5rem 0.75rem;
   color: #94a3b8;
-  font-weight: 500;
+  font-weight: 600;
   border-bottom: 1px solid var(--border-dim);
 }
 
 .custom-table td {
-  padding: 1rem;
+  padding: 0.4rem 0.75rem;
   border-bottom: 1px solid var(--border-dim);
   color: #cbd5e1;
   transition: background 0.15s ease;
@@ -516,7 +516,7 @@ body {
 .planning-tab {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 0.5rem;
   height: 100%;
 }
 

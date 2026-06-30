@@ -2,7 +2,7 @@ const http = require('http');
 
 function testHttp() {
   console.log('Testing /api/planning endpoint via http...');
-  http.get('http://localhost:5000/api/planning?optimize=true&optimizeNightRun=true', (res) => {
+  http.get('http://localhost:5000/api/planning?optimize=true&optimizeNightRun=true&algo=hybrid', (res) => {
     console.log('Status:', res.statusCode);
     let body = '';
     res.on('data', chunk => body += chunk);

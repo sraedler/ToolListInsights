@@ -8,26 +8,36 @@ const configD4 = {
 async function main() {
   try {
     const pool = await mssql.connect(configD4);
-    const orderId = 111090;
-
-    console.log(`\n--- All columns in tSK_KALP for KK_IDBEBP = ${orderId} ---`);
-    const tskRes = await pool.request()
-      .input('orderId', mssql.Int, orderId)
+    
+    console.log('--- Finding Order P202675738 ---');
+    const orderRes = await pool.request()
+      .input('num', mssql.VarChar, 'P202675738')
       .query(`
-        SELECT p.*
-        FROM tSK_KALP p
-        INNER JOIN tSK_KALK k ON p.KP_IDSKKK = k.ID
-        WHERE k.KK_IDBEBP = @orderId
-        ORDER BY p.KP_POSITION_NUMMER
+        SELECT b.ID as BelpId, b.BP_POSITION_NUMMER, bk.BK_BKBE_NUMMER, k.ID as KalkId
+        FROM tbe_Belp b
+        INNER JOIN tBE_BELK_BKBE bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
+        LEFT JOIN tPPS_SKKALK k ON k.PSK_IDBEBP = b.ID
+        WHERE bk.BK_BKBE_NUMMER = @num
       `);
-    console.table(tskRes.recordset.map(r => ({
-      ID: r.ID,
-      Pos: r.KP_POSITION_NUMMER,
-      Bezeichnung: r.KP_BEZEICHNUNG,
-      Typ: r.KP_TYP_POSITION,
-      Machine: r.KP_IDMS
-    })));
+    console.log('Order:', orderRes.recordset);
 
+    if (orderRes.recordset.length > 0) {
+      const orderId = orderRes.recordset[0].BelpId;
+      console.log(`\n--- Steps in tPPS_SKKALP for orderId = ${orderId} ---`);
+      const stepsRes = await pool.request()
+        .input('orderId', mssql.Int, orderId)
+        .query(`
+          SELECT p.ID, p.PSP_POSITION_NUMMER, p.PSP_BEZEICHNUNG, p.PSP_TYP_POSITION, p.PSP_PP_STATUS_PRODUKTION,
+            COALESCE(masta.MS_BEZEICHNUNG, pool.MP_BEZEICHNUNG, masta.MS_NUMMER, '') as MachineName
+          FROM tPPS_SKKALP p
+          INNER JOIN tPPS_SKKALK k ON p.PSP_IDPSKKK = k.ID
+          LEFT JOIN tPPS_MASTA masta ON masta.ID = p.PSP_IDMS
+          LEFT JOIN tPPS_MASCHPOOL pool ON pool.ID = p.PSP_IDMP
+          WHERE k.PSK_IDBEBP = @orderId
+          ORDER BY p.PSP_POSITION_NUMMER
+        `);
+      console.table(stepsRes.recordset);
+    }
     await pool.close();
   } catch (err) {
     console.error(err);
