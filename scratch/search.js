@@ -3,7 +3,7 @@ const content = fs.readFileSync('C:/git_repos/ToolListInsights/backend/server.js
 const lines = content.split('\n');
 
 lines.forEach((line, index) => {
-  if (line.includes('extractNCPrograms')) {
+  if (line.includes('masterMatchedListNr:')) {
     console.log(`${index + 1}: ${line.trim()}`);
   }
 });

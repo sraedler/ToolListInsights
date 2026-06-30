@@ -452,6 +452,24 @@ async function cacheSetupData() {
 
     return isDeburringAssembly || isMachining;
   });
+  console.log('Loading article master routing template steps...');
+  const masterStepsResult = await poolD4.request().query(`
+    SELECT p.KP_IDAR as ArticleId, p.KP_POSITION_NUMMER as StepPos, CAST(p.KP_BEZEICHNUNG AS VARCHAR(8000)) as StepDesc
+    FROM [D4].[dbo].[tSK_KALP] p
+    INNER JOIN [D4].[dbo].[tSK_KALK] k ON p.KP_IDSKKK = k.ID
+    WHERE (k.KK_IDBEBP IS NULL OR k.KK_IDBEBP = 0)
+      AND p.KP_TYP_POSITION = 0
+  `);
+  
+  const masterStepsMap = {};
+  masterStepsResult.recordset.forEach(row => {
+    if (row.ArticleId) {
+      const key = `${row.ArticleId}_${(row.StepPos || '').trim()}`;
+      masterStepsMap[key] = row.StepDesc || '';
+    }
+  });
+  console.log(`Loaded ${masterStepsResult.recordset.length} master template steps.`);
+
   console.log(`Matching NC programs for ${steps.length} setup steps...`);
   const matchCache = {};
   steps.forEach((step, idx) => {
@@ -467,7 +485,9 @@ async function cacheSetupData() {
         if (matches.length > 0) {
           matchCache[prog] = {
             Nr: matches[0].Nr,
-            Ident: matches[0].Ident
+            Ident: matches[0].Ident,
+            matchType: matches[0].matchType,
+            score: matches[0].score
           };
         } else {
           matchCache[prog] = null;
@@ -478,7 +498,43 @@ async function cacheSetupData() {
       if (match) {
         step.MatchedListNr = match.Nr;
         step.MatchedListIdent = match.Ident;
+        step.MatchedType = match.matchType;
+        step.MatchedScore = match.score;
       }
+      step.fixture = extractFixture(step.StepDesc);
+    }
+
+    // Match master routing template step
+    const cleanPos = (step.StepPos || '').trim();
+    const masterDesc = masterStepsMap[`${step.ArticleId}_${cleanPos}`];
+    if (masterDesc) {
+      const masterProgs = extractNCPrograms(masterDesc);
+      if (masterProgs.length > 0) {
+        const masterProg = masterProgs[0];
+        step.masterNcProgram = masterProg;
+        const masterMatches = findMatches(masterProg, cachedToolLists, 0.6);
+        if (masterMatches.length > 0) {
+          step.masterMatchedListNr = masterMatches[0].Nr;
+          step.masterMatchedListIdent = masterMatches[0].Ident;
+          step.masterMatchedType = masterMatches[0].matchType;
+          step.masterMatchedScore = masterMatches[0].score;
+        } else {
+          step.masterMatchedListNr = null;
+          step.masterMatchedListIdent = null;
+          step.masterMatchedType = null;
+          step.masterMatchedScore = null;
+        }
+      } else {
+        step.masterNcProgram = null;
+        step.masterMatchedListNr = null;
+        step.masterMatchedType = null;
+        step.masterMatchedScore = null;
+      }
+    } else {
+      step.masterNcProgram = null;
+      step.masterMatchedListNr = null;
+      step.masterMatchedType = null;
+      step.masterMatchedScore = null;
     }
   });
   console.log('NC program matching completed.');
@@ -1238,47 +1294,11 @@ async function getCurrentToolsForMachine(machineName) {
 }
 
 // Genetic Algorithm sequencing
-function sequenceStepsGA(stepsList, initialMagazine, magazineSize, listToToolsMap) {
+function sequenceStepsGA(stepsList, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false) {
   if (stepsList.length <= 1) return stepsList;
 
-  // Pre-calculate timestamps and normalize them for tie-breaking
-  const times = stepsList.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
-  const minTime = Math.min(...times);
-  const maxTime = Math.max(...times);
-  const timeRange = maxTime - minTime || 1;
-
   function evaluatePermutation(permutation) {
-    let currentMag = [...initialMagazine];
-    let changes = 0;
-    permutation.forEach(s => {
-      const tools = listToToolsMap[s.MatchedListNr] || [];
-      const loadTools = tools.filter(t => !currentMag.includes(t));
-      changes += loadTools.length;
-
-      const newMagazine = [...currentMag];
-      loadTools.forEach(tNr => {
-        while (newMagazine.length >= magazineSize) {
-          const candidates = newMagazine.filter(mNr => !tools.includes(mNr));
-          if (candidates.length === 0) break;
-          const victim = candidates[0];
-          const idx = newMagazine.indexOf(victim);
-          newMagazine.splice(idx, 1);
-        }
-        newMagazine.push(tNr);
-      });
-      currentMag = newMagazine;
-    });
-
-    let penalty = 0;
-    const N = permutation.length;
-    permutation.forEach((s, idx) => {
-      const t = new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime();
-      const norm = (t - minTime) / timeRange;
-      penalty += (N - 1 - idx) * norm;
-    });
-
-    const scaledPenalty = N > 1 ? (penalty / (N * N)) * 0.45 : 0;
-    return changes + scaledPenalty;
+    return evaluateSequence(permutation, initialMagazine, magazineSize, listToToolsMap, optimizeFixture);
   }
 
   const popSize = 40;
@@ -1399,47 +1419,11 @@ function sequenceStepsGA(stepsList, initialMagazine, magazineSize, listToToolsMa
   return population[bestIdx];
 }
 
-function sequenceStepsHybrid(stepsList, initialMagazine, magazineSize, listToToolsMap) {
+function sequenceStepsHybrid(stepsList, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false) {
   if (stepsList.length <= 1) return stepsList;
 
-  // Pre-calculate timestamps and normalize them for tie-breaking
-  const times = stepsList.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
-  const minTime = Math.min(...times);
-  const maxTime = Math.max(...times);
-  const timeRange = maxTime - minTime || 1;
-
   function evaluatePermutation(permutation) {
-    let currentMag = [...initialMagazine];
-    let changes = 0;
-    permutation.forEach(s => {
-      const tools = listToToolsMap[s.MatchedListNr] || [];
-      const loadTools = tools.filter(t => !currentMag.includes(t));
-      changes += loadTools.length;
-
-      const newMagazine = [...currentMag];
-      loadTools.forEach(tNr => {
-        while (newMagazine.length >= magazineSize) {
-          const candidates = newMagazine.filter(mNr => !tools.includes(mNr));
-          if (candidates.length === 0) break;
-          const victim = candidates[0];
-          const idx = newMagazine.indexOf(victim);
-          newMagazine.splice(idx, 1);
-        }
-        newMagazine.push(tNr);
-      });
-      currentMag = newMagazine;
-    });
-
-    let penalty = 0;
-    const N = permutation.length;
-    permutation.forEach((s, idx) => {
-      const t = new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime();
-      const norm = (t - minTime) / timeRange;
-      penalty += (N - 1 - idx) * norm;
-    });
-
-    const scaledPenalty = N > 1 ? (penalty / (N * N)) * 0.45 : 0;
-    return changes + scaledPenalty;
+    return evaluateSequence(permutation, initialMagazine, magazineSize, listToToolsMap, optimizeFixture);
   }
 
   const popSize = 40;
@@ -1589,48 +1573,17 @@ function sequenceStepsHybrid(stepsList, initialMagazine, magazineSize, listToToo
   return population[bestIdx];
 }
 
-function sequenceStepsRL(stepsList, initialMagazine, magazineSize, listToToolsMap) {
+function sequenceStepsRL(stepsList, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false) {
   if (stepsList.length <= 1) return stepsList;
 
-  // Pre-calculate timestamps and normalize them
+  function evaluateSeq(sequence) {
+    return evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMap, optimizeFixture);
+  }
+
   const times = stepsList.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
   const minTime = Math.min(...times);
   const maxTime = Math.max(...times);
   const timeRange = maxTime - minTime || 1;
-
-  function evaluateSeq(sequence) {
-    let currentMag = [...initialMagazine];
-    let changes = 0;
-    sequence.forEach(s => {
-      const tools = listToToolsMap[s.MatchedListNr] || [];
-      const loadTools = tools.filter(t => !currentMag.includes(t));
-      changes += loadTools.length;
-
-      const newMagazine = [...currentMag];
-      loadTools.forEach(tNr => {
-        while (newMagazine.length >= magazineSize) {
-          const candidates = newMagazine.filter(mNr => !tools.includes(mNr));
-          if (candidates.length === 0) break;
-          const victim = candidates[0];
-          const idx = newMagazine.indexOf(victim);
-          newMagazine.splice(idx, 1);
-        }
-        newMagazine.push(tNr);
-      });
-      currentMag = newMagazine;
-    });
-
-    let penalty = 0;
-    const N = sequence.length;
-    sequence.forEach((s, idx) => {
-      const t = new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime();
-      const norm = (t - minTime) / timeRange;
-      penalty += (N - 1 - idx) * norm;
-    });
-
-    const scaledPenalty = N > 1 ? (penalty / (N * N)) * 0.45 : 0;
-    return changes + scaledPenalty;
-  }
 
   // Optimize policy weights: [w_setup, w_time]
   let bestWeights = [1.0, 0.5];
@@ -1652,6 +1605,7 @@ function sequenceStepsRL(stepsList, initialMagazine, magazineSize, listToToolsMa
     let remaining = [...stepsList];
     let currentMag = [...initialMagazine];
     const sequence = [];
+    let lastFixture = null;
     
     // Linear epsilon decay from 0.25 down to 0.01 (exploration vs exploitation)
     const eps = Math.max(0.01, 0.25 * (1 - episode / episodes));
@@ -1664,9 +1618,14 @@ function sequenceStepsRL(stepsList, initialMagazine, magazineSize, listToToolsMa
         const t = new Date(step.StartDate || step.DeliveryDate || '9999-12-31').getTime();
         const normTime = (t - minTime) / timeRange;
         
+        let fixturePenalty = 0;
+        if (optimizeFixture && lastFixture !== null && step.fixture !== null && step.fixture !== lastFixture) {
+          fixturePenalty = 1.5;
+        }
+
         // Q-value score: higher score is better.
         // We want to minimize misses and minimize normTime, so we use negative weights.
-        const qValue = - (w_setup * misses + w_time * normTime);
+        const qValue = - (w_setup * (misses + fixturePenalty) + w_time * normTime);
         return { step, idx, qValue };
       });
 
@@ -1689,6 +1648,9 @@ function sequenceStepsRL(stepsList, initialMagazine, magazineSize, listToToolsMa
 
       remaining.splice(chosenCandidate.idx, 1);
       sequence.push(chosenCandidate.step);
+      if (chosenCandidate.step.fixture !== null) {
+        lastFixture = chosenCandidate.step.fixture;
+      }
       const tools = listToToolsMap[chosenCandidate.step.MatchedListNr] || [];
       currentMag = Array.from(new Set([...currentMag, ...tools])).slice(-magazineSize);
     }
@@ -1763,10 +1725,12 @@ function sequenceStepsMIP(stepsList, initialMagazine, magazineSize, listToToolsM
   return bestSequence || stepsList;
 }
 
-function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMap) {
+function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false) {
   if (sequence.length <= 1) return 0;
   let currentMag = [...initialMagazine];
   let changes = 0;
+  let lastFixture = null;
+  let fixtureChanges = 0;
   
   const times = sequence.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
   const minTime = Math.min(...times);
@@ -1774,6 +1738,13 @@ function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMa
   const timeRange = maxTime - minTime || 1;
 
   sequence.forEach(s => {
+    if (optimizeFixture && lastFixture !== null && s.fixture !== null && s.fixture !== lastFixture) {
+      fixtureChanges++;
+    }
+    if (s.fixture !== null) {
+      lastFixture = s.fixture;
+    }
+
     const tools = listToToolsMap[s.MatchedListNr] || [];
     const loadTools = tools.filter(t => !currentMag.includes(t));
     changes += loadTools.length;
@@ -1801,36 +1772,148 @@ function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMa
   });
 
   const scaledPenalty = N > 1 ? (penalty / (N * N)) * 0.45 : 0;
-  return changes + scaledPenalty;
+  return changes + scaledPenalty + (optimizeFixture ? fixtureChanges * 1.5 : 0);
+}
+
+function getFremdleistungType(desc) {
+  if (!desc) return 'None';
+  const lower = desc.toLowerCase();
+  
+  if (lower.includes('härte') || lower.includes('vakuumhärten') || lower.includes('nitrier')) {
+    return 'Härten';
+  }
+  if (lower.includes('elox') || lower.includes('anod')) {
+    return 'Eloxieren';
+  }
+  if (lower.includes('verzink') || lower.includes('zink')) {
+    return 'Verzinken';
+  }
+  if (lower.includes('brünier') || lower.includes('schwarz')) {
+    return 'Brünieren';
+  }
+  if (lower.includes('schleif') || lower.includes('rundschleif')) {
+    return 'Schleifen';
+  }
+  if (lower.includes('beschicht') || lower.includes('pulver')) {
+    return 'Beschichten';
+  }
+  if (lower.includes('fremd') || lower.includes('extern')) {
+    const match = lower.match(/(?:fremdleistung|extern)\s+([a-zA-ZäöüÄÖÜß]+)/);
+    if (match) return match[1];
+    return 'Fremd';
+  }
+  return 'None';
+}
+
+function sequenceNonMachining(stepsList, orderStepsMap) {
+  if (stepsList.length === 0) {
+    return { sequenced: [], finalMagazine: [] };
+  }
+  if (stepsList.length === 1) {
+    return { sequenced: stepsList.map(s => ({ ...s, loadTools: [], unloadTools: [] })), finalMagazine: [] };
+  }
+
+  const isMachiningCenter = (mId) => {
+    return [2, 4, 5, 6, 8, 21, 25].includes(mId);
+  };
+
+  const hasSubsequentMilling = (step) => {
+    const oId = step.OrderId;
+    const allOrderSteps = orderStepsMap[oId] || [];
+    return allOrderSteps.some(os => os.StepPos > step.StepPos && isMachiningCenter(os.MachineId));
+  };
+
+  stepsList.forEach(s => {
+    s.hasSubsequentMilling = hasSubsequentMilling(s);
+    s.fremdType = getFremdleistungType(s.StepDesc);
+  });
+
+  const times = stepsList.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times);
+  const timeRange = maxTime - minTime || 1;
+
+  let remaining = [...stepsList];
+  let ordered = [];
+  let lastFremdType = 'None';
+
+  while (remaining.length > 0) {
+    let bestIdx = -1;
+    let minScore = Infinity;
+
+    for (let i = 0; i < remaining.length; i++) {
+      const step = remaining[i];
+      const t = new Date(step.StartDate || step.DeliveryDate || '9999-12-31').getTime();
+      const normTime = (t - minTime) / timeRange;
+
+      let score = normTime;
+      if (step.hasSubsequentMilling) {
+        score -= 0.5;
+      }
+      if (lastFremdType !== 'None' && step.fremdType === lastFremdType) {
+        score -= 0.8;
+      }
+
+      if (score < minScore) {
+        minScore = score;
+        bestIdx = i;
+      }
+    }
+
+    const chosen = remaining.splice(bestIdx, 1)[0];
+    ordered.push(chosen);
+    if (chosen.fremdType !== 'None') {
+      lastFremdType = chosen.fremdType;
+    } else {
+      lastFremdType = 'None';
+    }
+  }
+
+  const sequenced = ordered.map(chosen => {
+    return {
+      ...chosen,
+      loadTools: [],
+      unloadTools: []
+    };
+  });
+
+  return { sequenced, finalMagazine: [] };
 }
 
 // Helper to sequence steps using selected algorithm and simulate magazine transition
-function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap, algo = 'greedy') {
+function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap, algo = 'greedy', optimizeFixture = false) {
   if (stepsList.length === 0) {
     return { sequenced: [], finalMagazine: currentMagazine };
   }
 
   let ordered = [];
   if (algo === 'ga') {
-    ordered = sequenceStepsGA(stepsList, currentMagazine, magazineSize, listToToolsMap);
+    ordered = sequenceStepsGA(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
   } else if (algo === 'rl') {
-    ordered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap);
+    ordered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
   } else if (algo === 'hybrid') {
     // 1. Run Greedy
     let remaining = [...stepsList];
     let magazine = [...currentMagazine];
     let greedyOrdered = [];
+    let lastFixture = null;
     while (remaining.length > 0) {
       let bestIdx = -1;
-      let minMisses = Infinity;
+      let minScore = Infinity;
       for (let i = 0; i < remaining.length; i++) {
         const step = remaining[i];
         const tools = listToToolsMap[step.MatchedListNr] || [];
         const misses = tools.filter(tNr => !magazine.includes(tNr));
-        if (misses.length < minMisses) {
-          minMisses = misses.length;
+        
+        let score = misses.length;
+        if (optimizeFixture && lastFixture !== null && step.fixture !== null && step.fixture !== lastFixture) {
+          score += 1.5;
+        }
+
+        if (score < minScore) {
+          minScore = score;
           bestIdx = i;
-        } else if (misses.length === minMisses && bestIdx !== -1) {
+        } else if (score === minScore && bestIdx !== -1) {
           const dateCurrent = new Date(step.StartDate || step.DeliveryDate || '9999-12-31').getTime();
           const dateBest = new Date(remaining[bestIdx].StartDate || remaining[bestIdx].DeliveryDate || '9999-12-31').getTime();
           if (dateCurrent < dateBest) {
@@ -1840,20 +1923,23 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
       }
       const chosen = remaining.splice(bestIdx, 1)[0];
       greedyOrdered.push(chosen);
+      if (chosen.fixture !== null) {
+        lastFixture = chosen.fixture;
+      }
       const tools = listToToolsMap[chosen.MatchedListNr] || [];
       magazine = Array.from(new Set([...magazine, ...tools])).slice(-magazineSize);
     }
 
     // 2. Run Hybrid GA
-    const hybridOrdered = sequenceStepsHybrid(stepsList, currentMagazine, magazineSize, listToToolsMap);
+    const hybridOrdered = sequenceStepsHybrid(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
 
     // 3. Run Reinforcement Learning
-    const rlOrdered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap);
+    const rlOrdered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
 
     // 4. Evaluate and choose the best sequence
-    const greedyScore = evaluateSequence(greedyOrdered, currentMagazine, magazineSize, listToToolsMap);
-    const hybridScore = evaluateSequence(hybridOrdered, currentMagazine, magazineSize, listToToolsMap);
-    const rlScore = evaluateSequence(rlOrdered, currentMagazine, magazineSize, listToToolsMap);
+    const greedyScore = evaluateSequence(greedyOrdered, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    const hybridScore = evaluateSequence(hybridOrdered, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    const rlScore = evaluateSequence(rlOrdered, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
 
     console.log(`[Hybrid Selection] Greedy Score: ${greedyScore.toFixed(4)}, GA/Hybrid Score: ${hybridScore.toFixed(4)}, RL Score: ${rlScore.toFixed(4)}`);
     
@@ -1876,17 +1962,25 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
     // Default: greedy Nearest Neighbor
     let remaining = [...stepsList];
     let magazine = [...currentMagazine];
+    let greedyOrdered = [];
+    let lastFixture = null;
     while (remaining.length > 0) {
       let bestIdx = -1;
-      let minMisses = Infinity;
+      let minScore = Infinity;
       for (let i = 0; i < remaining.length; i++) {
         const step = remaining[i];
         const tools = listToToolsMap[step.MatchedListNr] || [];
         const misses = tools.filter(tNr => !magazine.includes(tNr));
-        if (misses.length < minMisses) {
-          minMisses = misses.length;
+        
+        let score = misses.length;
+        if (optimizeFixture && lastFixture !== null && step.fixture !== null && step.fixture !== lastFixture) {
+          score += 1.5;
+        }
+
+        if (score < minScore) {
+          minScore = score;
           bestIdx = i;
-        } else if (misses.length === minMisses && bestIdx !== -1) {
+        } else if (score === minScore && bestIdx !== -1) {
           // Tie-breaker: prefer the step with the older StartDate / DeliveryDate (more in the past)
           const dateCurrent = new Date(step.StartDate || step.DeliveryDate || '9999-12-31').getTime();
           const dateBest = new Date(remaining[bestIdx].StartDate || remaining[bestIdx].DeliveryDate || '9999-12-31').getTime();
@@ -1896,10 +1990,14 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
         }
       }
       const chosen = remaining.splice(bestIdx, 1)[0];
-      ordered.push(chosen);
+      greedyOrdered.push(chosen);
+      if (chosen.fixture !== null) {
+        lastFixture = chosen.fixture;
+      }
       const tools = listToToolsMap[chosen.MatchedListNr] || [];
       magazine = Array.from(new Set([...magazine, ...tools])).slice(-magazineSize);
     }
+    ordered = greedyOrdered;
   }
 
   // Now simulate magazine transitions over the determined sequence
@@ -1994,8 +2092,17 @@ app.get('/api/planning', async (req, res) => {
       await cacheSetupData();
     }
 
-    const { startDate, optimize, algo } = req.query;
+    const { startDate, optimize, algo, optimizeFixture } = req.query;
+    const shouldOptimizeFixture = optimizeFixture === 'true';
     let { steps, listToToolsMap, toolsDetails, listToMachineMap } = cachedSetupData;
+
+    const orderStepsMap = {};
+    steps.forEach(s => {
+      if (!orderStepsMap[s.OrderId]) {
+        orderStepsMap[s.OrderId] = [];
+      }
+      orderStepsMap[s.OrderId].push(s);
+    });
 
     // Build machine id -> name lookup map and pool id -> name lookup map
     const machineMap = {};
@@ -2253,8 +2360,13 @@ app.get('/api/planning', async (req, res) => {
           const dayCandidates = [...overflowQueue, ...tempBoard[day]];
           let sequencedSteps = [];
 
+          const isNonMachining = ['Entgraten', 'Montage', 'Montage UR5', 'Laser', 'Messmaschine', 'Prüfplanung', 'Versand'].includes(mName);
+
           if (dayCandidates.length > 0) {
-            if (shouldOptimize && optimizeNightRun) {
+            if (isNonMachining) {
+              const { sequenced } = sequenceNonMachining(dayCandidates, orderStepsMap);
+              sequencedSteps = sequenced;
+            } else if (shouldOptimize && optimizeNightRun) {
               const nightSteps = dayCandidates.filter(s => s.isNightRunCapable);
               const normalSteps = dayCandidates.filter(s => !s.isNightRunCapable);
 
@@ -2263,30 +2375,30 @@ app.get('/api/planning', async (req, res) => {
 
               if (isChironOrBrother) {
                 if (nightSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm);
+                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
                 if (normalSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm);
+                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
               } else {
                 if (normalSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm);
+                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
                 if (nightSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm);
+                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
               }
               runningMagazine = currentMag;
             } else {
-              const { sequenced, finalMagazine } = sequenceSteps(dayCandidates, runningMagazine, mSize, listToToolsMap, algorithm);
+              const { sequenced, finalMagazine } = sequenceSteps(dayCandidates, runningMagazine, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
               sequencedSteps = sequenced;
               runningMagazine = finalMagazine;
             }
@@ -2433,6 +2545,13 @@ app.get('/api/planning', async (req, res) => {
             ncProgram: s.NCProgram || null,
             matchedListNr: s.MatchedListNr || null,
             matchedListIdent: s.MatchedListIdent || null,
+            matchedType: s.MatchedType || null,
+            matchedScore: s.MatchedScore || null,
+            masterNcProgram: s.masterNcProgram || null,
+            masterMatchedListNr: s.masterMatchedListNr || null,
+            masterMatchedListIdent: s.masterMatchedListIdent || null,
+            masterMatchedType: s.masterMatchedType || null,
+            masterMatchedScore: s.masterMatchedScore || null,
             color: s.color,
             fixture: extractFixture(s.StepDesc),
             entireArbeitsplan,

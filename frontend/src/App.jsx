@@ -276,6 +276,18 @@ export default function App() {
               <CalendarRange size={18} />
               <span>Planung Entgraten/Montieren</span>
             </div>
+
+            <div 
+              className={`nav-item ${activeTab === 'missing_data' ? 'active' : ''}`}
+              onClick={() => setActiveTab('missing_data')}
+              style={{ 
+                borderLeft: activeTab === 'missing_data' ? '3px solid #ef4444' : 'none',
+                background: activeTab === 'missing_data' ? 'rgba(239, 68, 68, 0.05)' : 'transparent'
+              }}
+            >
+              <AlertTriangle size={18} style={{ color: activeTab === 'missing_data' ? '#ef4444' : '#94a3b8' }} />
+              <span style={{ color: activeTab === 'missing_data' ? '#ef4444' : '#cbd5e1' }}>Datenvollständigkeit</span>
+            </div>
           </nav>
         </div>
 
@@ -298,6 +310,7 @@ export default function App() {
               {activeTab === 'machines' && 'Maschinen-Werkzeugbedarf'}
               {activeTab === 'planning' && 'Kanban-Maschinenbelegungsplanung'}
               {activeTab === 'planning_deburring' && 'Kanban-Belegungsplanung Entgraten/Montieren'}
+              {activeTab === 'missing_data' && 'Datenvollständigkeit: Fehlende NC / Vorrichtungen'}
             </h2>
           </div>
 
@@ -357,6 +370,7 @@ export default function App() {
           {activeTab === 'machines' && <MachinesTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'planning' && <PlanningTab mode="machining" />}
           {activeTab === 'planning_deburring' && <PlanningTab mode="deburring" />}
+          {activeTab === 'missing_data' && <MissingDataTab />}
         </div>
       </main>
     </div>
@@ -3529,6 +3543,376 @@ function MachinesTab({ startDate, endDate }) {
   );
 }
 
+// 8. Missing Data Tab (Datenvollständigkeit)
+function MissingDataTab() {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [expandedOrders, setExpandedOrders] = useState({});
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await fetch(`${API_BASE}/planning`);
+      if (!res.ok) throw new Error('Fehler beim Laden der Planungsdaten');
+      const json = await res.json();
+      
+      const allSteps = [];
+      if (json.board) {
+        const validMachines = ['Brother', 'Chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2'];
+        Object.keys(json.board).forEach(machine => {
+          if (!validMachines.includes(machine)) {
+            return;
+          }
+          Object.keys(json.board[machine]).forEach(day => {
+            json.board[machine][day].forEach(step => {
+              allSteps.push({ ...step, machine, dayScheduled: day });
+            });
+          });
+        });
+      }
+      
+      const filtered = allSteps.filter(s => !s.ncProgram || (s.ncProgram && !s.matchedListNr) || (s.ncProgram && s.matchedType === 'fuzzy') || !s.fixture);
+      setData(filtered);
+    } catch (err) {
+      console.error(err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const [filterType, setFilterType] = useState('all'); // 'all', 'nc', 'stamm', 'fixture'
+  const [filterMachine, setFilterMachine] = useState('all'); // 'all', 'Brother', etc.
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const toggleOrder = (order) => {
+    setExpandedOrders(prev => ({
+      ...prev,
+      [order]: !prev[order]
+    }));
+  };
+
+  const filteredData = React.useMemo(() => {
+    return data.filter(s => {
+      // Machine filter
+      if (filterMachine !== 'all' && s.machine !== filterMachine) return false;
+      
+      // Type filter
+      if (filterType === 'nc') return !s.ncProgram;
+      if (filterType === 'stamm') return s.ncProgram && (!s.matchedListNr || s.matchedType === 'fuzzy');
+      if (filterType === 'stamm_p_auftrag') {
+        const hasGap = s.ncProgram && (!s.matchedListNr || s.matchedType === 'fuzzy');
+        const masterOk = s.masterNcProgram && s.masterMatchedListNr && s.masterMatchedType === 'exact';
+        return hasGap && masterOk;
+      }
+      if (filterType === 'stamm_artikel') {
+        const hasGap = s.ncProgram && (!s.matchedListNr || s.matchedType === 'fuzzy');
+        const masterNotOk = !s.masterNcProgram || !s.masterMatchedListNr || s.masterMatchedType === 'fuzzy';
+        return hasGap && masterNotOk;
+      }
+      if (filterType === 'fixture') return !s.fixture;
+      
+      return true;
+    });
+  }, [data, filterType, filterMachine]);
+
+  const groupedData = React.useMemo(() => {
+    const groups = {};
+    filteredData.forEach(s => {
+      const pNum = s.contractNumber || 'Keine P-Nummer';
+      const artKey = `${s.articleId || 'Unbekannt'} - ${s.orderDesc || 'Keine Bezeichnung'}`;
+      if (!groups[pNum]) {
+        groups[pNum] = {};
+      }
+      if (!groups[pNum][artKey]) {
+        groups[pNum][artKey] = [];
+      }
+      groups[pNum][artKey].push(s);
+    });
+    return groups;
+  }, [filteredData]);
+
+  const handleExpandAll = () => {
+    const next = {};
+    Object.keys(groupedData).forEach(pNum => {
+      next[pNum] = true;
+    });
+    setExpandedOrders(next);
+  };
+
+  const handleCollapseAll = () => {
+    setExpandedOrders({});
+  };
+
+  const ncMissingCount = data.filter(s => !s.ncProgram).length;
+  const stammMissingCount = data.filter(s => s.ncProgram && (!s.matchedListNr || s.matchedType === 'fuzzy')).length;
+  const fixtureMissingCount = data.filter(s => !s.fixture).length;
+
+  return (
+    <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', height: '100%', overflowY: 'auto' }}>
+      
+      {/* Stats Cards Row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem' }}>
+        <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem 1.25rem', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', padding: '0.6rem', borderRadius: '10px' }}>
+            <AlertTriangle size={24} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Betroffene Schritte</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#fff' }}>{data.length}</div>
+          </div>
+        </div>
+
+        <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem 1.25rem', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', padding: '0.6rem', borderRadius: '10px' }}>
+            <Database size={24} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>NC-Programm fehlt</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#f87171' }}>{ncMissingCount}</div>
+          </div>
+        </div>
+
+        <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem 1.25rem', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ background: 'rgba(168, 85, 247, 0.1)', color: '#a855f7', padding: '0.6rem', borderRadius: '10px' }}>
+            <Wrench size={24} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Vorrichtung fehlt</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#c084fc' }}>{fixtureMissingCount}</div>
+          </div>
+        </div>
+
+        <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem 1.25rem', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ background: 'rgba(249, 115, 22, 0.1)', color: '#f97316', padding: '0.6rem', borderRadius: '10px' }}>
+            <Layers size={24} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Im Stamm fehlt</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#fb923c' }}>{stammMissingCount}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter Toolbar */}
+      <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.85rem 1.25rem', borderRadius: '12px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Fehlertyp:</span>
+          <select 
+            value={filterType} 
+            onChange={(e) => setFilterType(e.target.value)}
+            style={{ background: 'rgba(13, 20, 35, 0.4)', border: '1px solid var(--border-dim)', borderRadius: '6px', color: '#fff', fontSize: '0.8rem', padding: '0.25rem 0.5rem', outline: 'none' }}
+          >
+            <option value="all">Alle Fehler</option>
+            <option value="nc">NC-Programm fehlt (ERP)</option>
+            <option value="stamm">Stamm fehlt (WinTool - Gesamt)</option>
+            <option value="stamm_p_auftrag">Stamm fehlt (nur P-Auftrag)</option>
+            <option value="stamm_artikel">Stamm fehlt (auch Artikel-AP)</option>
+            <option value="fixture">Vorrichtung fehlt (Spannmittel)</option>
+          </select>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Maschine:</span>
+          <select 
+            value={filterMachine} 
+            onChange={(e) => setFilterMachine(e.target.value)}
+            style={{ background: 'rgba(13, 20, 35, 0.4)', border: '1px solid var(--border-dim)', borderRadius: '6px', color: '#fff', fontSize: '0.8rem', padding: '0.25rem 0.5rem', outline: 'none' }}
+          >
+            <option value="all">Alle Maschinen</option>
+            <option value="Brother">Brother</option>
+            <option value="Chiron">Chiron</option>
+            <option value="C400">C400</option>
+            <option value="C40">C40</option>
+            <option value="C42">C42</option>
+            <option value="RS2_1">RS2_1</option>
+            <option value="RS2_2">RS2_2</option>
+          </select>
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', padding: '4rem 0', color: '#94a3b8' }}>
+          <RefreshCw size={28} className="animate-spin" style={{ color: '#38bdf8' }} />
+          <span style={{ fontSize: '0.9rem' }}>Scanne Belegungsplan nach Datenvollständigkeit...</span>
+        </div>
+      ) : error ? (
+        <div style={{ padding: '1.5rem', background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '12px', color: '#f87171', fontSize: '0.9rem' }}>
+          <strong>Fehler beim Laden:</strong> {error}
+        </div>
+      ) : Object.keys(groupedData).length === 0 ? (
+        <div style={{ padding: '3rem 1rem', border: '1px dashed var(--border-dim)', borderRadius: '16px', textAlign: 'center', background: 'rgba(255,255,255,0.01)' }}>
+          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🎉</div>
+          <h3 style={{ margin: 0, fontSize: '1rem', color: '#fff', fontWeight: 600 }}>Alles vollständig!</h3>
+          <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>Für alle geplanten Arbeitsschritte existieren eindeutige NC-Programme und Vorrichtungen.</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button onClick={handleExpandAll} className="btn btn-secondary btn-sm" style={{ fontSize: '0.75rem' }}>
+                Alle ausklappen
+              </button>
+              <button onClick={handleCollapseAll} className="btn btn-secondary btn-sm" style={{ fontSize: '0.75rem' }}>
+                Alle einklappen
+              </button>
+            </div>
+            <button onClick={fetchData} className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <RefreshCw size={12} /> Aktualisieren
+            </button>
+          </div>
+
+          {Object.keys(groupedData).map(pNum => {
+            const articles = groupedData[pNum];
+            const isExpanded = !!expandedOrders[pNum];
+            const articleCount = Object.keys(articles).length;
+            const totalStepsInP = Object.values(articles).reduce((sum, list) => sum + list.length, 0);
+
+            return (
+              <div 
+                key={pNum} 
+                style={{ 
+                  background: 'rgba(30, 41, 59, 0.25)', 
+                  border: '1px solid var(--border-dim)', 
+                  borderRadius: '12px', 
+                  overflow: 'hidden', 
+                  transition: 'border-color 0.2s' 
+                }}
+              >
+                {/* P-Auftrag Header Row */}
+                <div 
+                  onClick={() => toggleOrder(pNum)}
+                  style={{ 
+                    padding: '0.85rem 1.25rem', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'space-between', 
+                    cursor: 'pointer',
+                    background: isExpanded ? 'rgba(255,255,255,0.02)' : 'transparent',
+                    userSelect: 'none'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = isExpanded ? 'rgba(255,255,255,0.02)' : 'transparent'}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    {isExpanded ? <ChevronDown size={18} style={{ color: '#94a3b8' }} /> : <ChevronRight size={18} style={{ color: '#94a3b8' }} />}
+                    <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#38bdf8' }}>{pNum}</span>
+                    <span style={{ color: '#64748b', fontSize: '0.8rem' }}>|</span>
+                    <span style={{ color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 500 }}>{articleCount} {articleCount === 1 ? 'Artikel' : 'Artikel'} betroffen</span>
+                  </div>
+
+                  <span style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', padding: '0.15rem 0.6rem', borderRadius: '20px', fontSize: '0.7rem', fontWeight: 700 }}>
+                    {totalStepsInP} {totalStepsInP === 1 ? 'Schritt offen' : 'Schritte offen'}
+                  </span>
+                </div>
+
+                {/* Articles & Steps under this P-Auftrag */}
+                {isExpanded && (
+                  <div style={{ padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', borderTop: '1px solid var(--border-dim)', background: 'rgba(0,0,0,0.1)' }}>
+                    {Object.keys(articles).map(artKey => {
+                      const steps = articles[artKey];
+
+                      return (
+                        <div key={artKey} style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.03)', borderRadius: '10px', padding: '0.85rem' }}>
+                          
+                          {/* Article Title */}
+                          <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.4rem', marginBottom: '0.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span>📦 Artikel: <span style={{ color: '#a7f3d0' }}>{artKey}</span></span>
+                            <span style={{ color: '#64748b', fontSize: '0.75rem' }}>{steps.length} {steps.length === 1 ? 'Schritt' : 'Schritte'}</span>
+                          </div>
+
+                          {/* Steps Table */}
+                          <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'left' }}>
+                              <thead>
+                                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', color: '#64748b', fontWeight: 600 }}>
+                                  <th style={{ padding: '0.4rem 0.5rem' }}>Pos</th>
+                                  <th style={{ padding: '0.4rem 0.5rem' }}>Schritt</th>
+                                  <th style={{ padding: '0.4rem 0.5rem' }}>D4-ID</th>
+                                  <th style={{ padding: '0.4rem 0.5rem' }}>Maschine</th>
+                                  <th style={{ padding: '0.4rem 0.5rem' }}>Datum</th>
+                                  <th style={{ padding: '0.4rem 0.5rem' }}>NC-Programm</th>
+                                  <th style={{ padding: '0.4rem 0.5rem' }}>WinTool-Stamm</th>
+                                  <th style={{ padding: '0.4rem 0.5rem' }}>Vorrichtung</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {steps.map((s, idx) => (
+                                  <tr key={idx} style={{ borderBottom: idx < steps.length - 1 ? '1px solid rgba(255,255,255,0.02)' : 'none', color: '#cbd5e1' }}>
+                                    <td style={{ padding: '0.5rem', color: '#38bdf8', fontWeight: 700 }}>{s.stepPos || 'N/A'}</td>
+                                    <td style={{ padding: '0.5rem', fontWeight: 500 }}>{s.stepDesc}</td>
+                                    <td style={{ padding: '0.5rem', color: '#64748b' }}>#{s.stepId}</td>
+                                    <td style={{ padding: '0.5rem' }}><span style={{ color: '#fbbf24', fontWeight: 600 }}>{s.machine}</span></td>
+                                    <td style={{ padding: '0.5rem', color: '#94a3b8' }}>{s.dayScheduled}</td>
+                                    <td style={{ padding: '0.5rem' }}>
+                                      {s.ncProgram ? (
+                                        s.matchedType === 'fuzzy' ? (
+                                          <code style={{ color: '#facc15', background: 'rgba(234, 179, 8, 0.15)', padding: '0.1rem 0.25rem', borderRadius: '4px', border: '1px dashed #eab308' }} title="Dieses NC-Programm hat keine exakte Übereinstimmung im WinTool-Stamm!">
+                                            {s.ncProgram}
+                                          </code>
+                                        ) : (
+                                          <code style={{ color: '#a7f3d0' }}>{s.ncProgram}</code>
+                                        )
+                                      ) : (
+                                        <span style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600 }}>NC fehlt</span>
+                                      )}
+                                    </td>
+                                    <td style={{ padding: '0.5rem' }}>
+                                      {s.matchedListIdent ? (
+                                        s.matchedType === 'fuzzy' ? (
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                            <span style={{ background: 'rgba(234, 179, 8, 0.1)', color: '#facc15', border: '1px solid rgba(234, 179, 8, 0.3)', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600, fontSize: '0.65rem', width: 'fit-content' }}>
+                                              ⚠️ Abweichung ({Math.round(s.matchedScore * 100)}%)
+                                            </span>
+                                            <span style={{ color: '#eab308', textDecoration: 'underline dashed' }} title={`Erwartet: ${s.ncProgram} | Gefunden: ${s.matchedListIdent}`}>
+                                              {s.matchedListIdent} {s.matchedListNr && <span style={{ color: '#cbd5e1' }}>(#{s.matchedListNr})</span>}
+                                            </span>
+                                          </div>
+                                        ) : (
+                                          <span style={{ color: '#cbd5e1' }}>{s.matchedListIdent} {s.matchedListNr && <span style={{ color: '#64748b' }}>(#{s.matchedListNr})</span>}</span>
+                                        )
+                                      ) : s.ncProgram ? (
+                                        s.masterNcProgram && s.masterMatchedListNr ? (
+                                          <span style={{ background: 'rgba(249, 115, 22, 0.1)', color: '#fb923c', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600, border: '1px solid rgba(249, 115, 22, 0.2)' }} title={`Im Artikel-Arbeitsplan ist NC ${s.masterNcProgram} hinterlegt, das passt.`}>Stamm fehlt (nur P-Auftrag)</span>
+                                        ) : (
+                                          <span style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600, border: '1px solid rgba(239, 68, 68, 0.3)' }} title="Auch im Master-Artikel-Arbeitsplan fehlt ein gültiges WinTool-Verzeichnis!">Stamm fehlt (auch Artikel-AP)</span>
+                                        )
+                                      ) : (
+                                        <span style={{ color: '#64748b' }}>—</span>
+                                      )}
+                                    </td>
+                                    <td style={{ padding: '0.5rem' }}>
+                                      {s.fixture ? (
+                                        <span style={{ color: '#e9d5ff', fontWeight: 600 }}>🛠️ {s.fixture}</span>
+                                      ) : (
+                                        <span style={{ background: 'rgba(168, 85, 247, 0.1)', color: '#d8b4fe', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600 }}>Vorrichtung fehlt</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 7. Planning Tab (Kanban Board for next 5 working days)
 function PlanningTab({ mode = 'machining' }) {
   const [data, setData] = useState(null);
@@ -3537,6 +3921,7 @@ function PlanningTab({ mode = 'machining' }) {
   const [startDate, setStartDate] = useState(() => new Date().toISOString().substring(0, 10));
   const [optimize, setOptimize] = useState(true);
   const [optimizeNightRun, setOptimizeNightRun] = useState(true);
+  const [optimizeFixture, setOptimizeFixture] = useState(true);
   const [selectedMachine, setSelectedMachine] = useState('All');
   const [activeModalStep, setActiveModalStep] = useState(null);
   const [hideExecuting, setHideExecuting] = useState(false);
@@ -3643,7 +4028,7 @@ function PlanningTab({ mode = 'machining' }) {
     setLoading(true);
     setError(null);
     try {
-      let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}`;
+      let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}&optimizeFixture=${optimizeFixture}`;
       if (startDate) {
         url += `&startDate=${startDate}`;
       }
@@ -3672,7 +4057,7 @@ function PlanningTab({ mode = 'machining' }) {
 
   useEffect(() => {
     fetchPlanningData();
-  }, [optimize, optimizeNightRun, algo]);
+  }, [optimize, optimizeNightRun, algo, optimizeFixture]);
 
   const handleDateChange = (e) => {
     setStartDate(e.target.value);
@@ -3811,94 +4196,106 @@ function PlanningTab({ mode = 'machining' }) {
             </div>
           </div>
 
-          <div className="control-group" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-            <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                <input
-                  type="checkbox"
-                  checked={optimize}
-                  onChange={(e) => setOptimize(e.target.checked)}
-                  style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
-                />
-                <span>Rüstoptimierung aktiv</span>
-              </label>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                <input
-                  type="checkbox"
-                  checked={optimizeNightRun}
-                  onChange={(e) => setOptimizeNightRun(e.target.checked)}
-                  style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
-                />
-                <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Moon size={14} /> Nachtlauf-Optimierung</span>
-              </label>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                <input
-                  type="checkbox"
-                  checked={hideExecuting}
-                  onChange={(e) => setHideExecuting(e.target.checked)}
-                  style={{ width: '16px', height: '16px', accentColor: '#10b981' }}
-                />
-                <span style={{ color: '#a7f3d0' }}>⚡ Laufende verblassen</span>
-              </label>
-
-              {(selectedMachine === 'Chiron' || selectedMachine === 'Brother') && (
+          {mode !== 'deburring' && (
+            <div className="control-group" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
                   <input
                     type="checkbox"
-                    checked={highlightRobotFlow}
-                    onChange={(e) => setHighlightRobotFlow(e.target.checked)}
+                    checked={optimize}
+                    onChange={(e) => setOptimize(e.target.checked)}
+                    style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
+                  />
+                  <span>Rüstoptimierung aktiv</span>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={optimizeNightRun}
+                    onChange={(e) => setOptimizeNightRun(e.target.checked)}
                     style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
                   />
-                  <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                    🤖 Nur Roboter-Folgeschritte
-                  </span>
+                  <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Moon size={14} /> Nachtlauf-Optimierung</span>
                 </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={optimizeFixture}
+                    onChange={(e) => setOptimizeFixture(e.target.checked)}
+                    style={{ width: '16px', height: '16px', accentColor: '#c084fc' }}
+                  />
+                  <span style={{ color: '#e9d5ff', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🔧 Vorrichtung optimieren</span>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={hideExecuting}
+                    onChange={(e) => setHideExecuting(e.target.checked)}
+                    style={{ width: '16px', height: '16px', accentColor: '#10b981' }}
+                  />
+                  <span style={{ color: '#a7f3d0' }}>⚡ Laufende verblassen</span>
+                </label>
+
+                {(selectedMachine === 'Chiron' || selectedMachine === 'Brother') && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={highlightRobotFlow}
+                      onChange={(e) => setHighlightRobotFlow(e.target.checked)}
+                      style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                    />
+                    <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                      🤖 Nur Roboter-Folgeschritte
+                    </span>
+                  </label>
+                )}
+              </div>
+              <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                Sortiert nach Werkzeugüberschneidung. Die Nachtlauf-Optimierung erkennt historische Nachtlauf-Kompatibilität und priorisiert diese entsprechend.
+              </span>
+
+              {optimize && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.35rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.75rem', borderRadius: '10px', width: 'fit-content', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Algorithmus:</span>
+                  <div style={{ display: 'flex', gap: '0.35rem' }}>
+                    <button
+                      onClick={() => setAlgo('greedy')}
+                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'greedy' ? '#3b82f6' : 'rgba(255,255,255,0.03)', border: algo === 'greedy' ? '1px solid #3b82f6' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                    >
+                      Greedy (NN)
+                    </button>
+                    <button
+                      onClick={() => setAlgo('hybrid')}
+                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'hybrid' ? '#ec4899' : 'rgba(255,255,255,0.03)', border: algo === 'hybrid' ? '1px solid #ec4899' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                    >
+                      Hybrid (Greedy+GA+RL)
+                    </button>
+                    <button
+                      onClick={() => setAlgo('ga')}
+                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'ga' ? '#10b981' : 'rgba(255,255,255,0.03)', border: algo === 'ga' ? '1px solid #10b981' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                    >
+                      Genetisch (GA)
+                    </button>
+                    <button
+                      onClick={() => setAlgo('rl')}
+                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'rl' ? '#06b6d4' : 'rgba(255,255,255,0.03)', border: algo === 'rl' ? '1px solid #06b6d4' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                    >
+                      Lernen (RL)
+                    </button>
+                    <button
+                      onClick={() => setAlgo('mip')}
+                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'mip' ? '#a855f7' : 'rgba(255,255,255,0.03)', border: algo === 'mip' ? '1px solid #a855f7' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                    >
+                      Exakt (MIP)
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
-            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-              Sortiert nach Werkzeugüberschneidung. Die Nachtlauf-Optimierung erkennt historische Nachtlauf-Kompatibilität und priorisiert diese entsprechend.
-            </span>
-
-            {optimize && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.35rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.75rem', borderRadius: '10px', width: 'fit-content', border: '1px solid rgba(255,255,255,0.05)' }}>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Algorithmus:</span>
-                <div style={{ display: 'flex', gap: '0.35rem' }}>
-                  <button
-                    onClick={() => setAlgo('greedy')}
-                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'greedy' ? '#3b82f6' : 'rgba(255,255,255,0.03)', border: algo === 'greedy' ? '1px solid #3b82f6' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                  >
-                    Greedy (NN)
-                  </button>
-                  <button
-                    onClick={() => setAlgo('hybrid')}
-                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'hybrid' ? '#ec4899' : 'rgba(255,255,255,0.03)', border: algo === 'hybrid' ? '1px solid #ec4899' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                  >
-                    Hybrid (Greedy+GA+RL)
-                  </button>
-                  <button
-                    onClick={() => setAlgo('ga')}
-                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'ga' ? '#10b981' : 'rgba(255,255,255,0.03)', border: algo === 'ga' ? '1px solid #10b981' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                  >
-                    Genetisch (GA)
-                  </button>
-                  <button
-                    onClick={() => setAlgo('rl')}
-                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'rl' ? '#06b6d4' : 'rgba(255,255,255,0.03)', border: algo === 'rl' ? '1px solid #06b6d4' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                  >
-                    Lernen (RL)
-                  </button>
-                  <button
-                    onClick={() => setAlgo('mip')}
-                    style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'mip' ? '#a855f7' : 'rgba(255,255,255,0.03)', border: algo === 'mip' ? '1px solid #a855f7' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                  >
-                    Exakt (MIP)
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+          )}
         </div>
 
         {/* Machine Tabs */}
@@ -4323,7 +4720,9 @@ function PlanningTab({ mode = 'machining' }) {
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                               <span>⏱ {step.setupTime}m / {step.prodTime}m</span>
                               <span style={{ color: 'var(--border-dim)' }}>|</span>
-                              {step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
+                              {!step.ncProgram ? (
+                                <span style={{ color: '#ef4444', fontWeight: 600 }}>NC fehlt</span>
+                              ) : step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
                                 <span style={{ color: '#10b981', fontWeight: 600 }}>✓ 0 Wechsel</span>
                               ) : (
                                 <span style={{ color: '#38bdf8', fontWeight: 600 }}>🔧 +{step.loadTools.length} / -{step.unloadTools.length}</span>
@@ -4389,7 +4788,11 @@ function PlanningTab({ mode = 'machining' }) {
                               <div style={{ fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.25rem' }}>
                                 Rüstbedarf ({step.toolsCount} Wz. gesamt)
                               </div>
-                              {step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
+                              {!step.ncProgram ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: '#ef4444', fontWeight: 600 }}>
+                                  <span>NC fehlt</span>
+                                </div>
+                              ) : step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: '#10b981' }}>
                                   <CheckCircle2 size={10} />
                                   <span>Übernahme (0 Wechsel)</span>
@@ -4750,7 +5153,9 @@ function PlanningTab({ mode = 'machining' }) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>NC-Programm</div>
-                  <div style={{ fontSize: '0.9rem', color: '#fff', fontFamily: 'monospace', fontWeight: 600 }}>{activeModalStep.ncProgram || 'Kein NC-Prog.'}</div>
+                  <div style={{ fontSize: '0.9rem', color: activeModalStep.ncProgram ? '#fff' : '#ef4444', fontFamily: 'monospace', fontWeight: 600 }}>
+                    {activeModalStep.ncProgram || 'NC fehlt'}
+                  </div>
                 </div>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>WinTool-Liste</div>
