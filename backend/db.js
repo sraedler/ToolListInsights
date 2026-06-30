@@ -9,11 +9,7 @@ const sql = isWindows && !process.env.DB_FORCE_TEDIOUS
 
 const connStrD4 = process.env.DB_D4_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=D4;Trusted_Connection=yes;TrustServerCertificate=yes;';
 const connStrWT = process.env.DB_WT_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=WTDATA;Trusted_Connection=yes;TrustServerCertificate=yes;';
-const connStrTL = process.env.DB_TL_CONN || (
-  process.env.NODE_ENV === 'production'
-    ? 'Driver={ODBC Driver 17 for SQL Server};Server=192.168.100.8\\CIM4NET;Database=Toollist;Uid=werkzeug;Pwd=werkzeug;TrustServerCertificate=yes;'
-    : 'Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=Toollist;Trusted_Connection=yes;TrustServerCertificate=yes;'
-);
+const connStrTL = process.env.DB_TL_CONN || 'Driver={ODBC Driver 17 for SQL Server};Server=192.168.100.8\\CIM4NET;Database=Toollist;Uid=werkzeug;Pwd=werkzeug;TrustServerCertificate=yes;';
 
 // Build database configuration dynamically.
 // If DB_D4_SERVER / DB_WT_SERVER parameters are provided, we configure

@@ -1,3 +1,4 @@
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -1254,9 +1255,17 @@ app.get('/api/demand', (req, res) => {
 async function getCurrentToolsForMachine(machineName) {
   try {
     const poolTL = await getPoolTL();
-    const nameUpper = machineName.toUpperCase().trim();
+    
+    // Map D4 planning board machine names to Toollist DB machine names
+    let searchName = machineName;
+    if (machineName === 'RS2_1') {
+      searchName = 'RS1';
+    } else if (machineName === 'RS2_2') {
+      searchName = 'RS2';
+    }
+    
     const machineResult = await poolTL.request()
-      .input('name', sql.VarChar, `%${machineName}%`)
+      .input('name', sql.VarChar, `%${searchName}%`)
       .query('SELECT Id, Name, MagazineSize FROM Machines WHERE Name LIKE @name');
     
     if (machineResult.recordset.length === 0) {
@@ -2070,6 +2079,14 @@ function calculateToolChanges(stepsList, initialMagazine, magazineSize, listToTo
 
 function extractFixture(desc) {
   if (!desc) return null;
+  
+  // 1. Search for any VBZ identifier (e.g. VBZ4, VBZ-1, VBZ_3) first
+  const vbzMatch = desc.match(/VBZ\s*[0-9a-zA-Z_-]+/i);
+  if (vbzMatch) {
+    return vbzMatch[0].trim();
+  }
+  
+  // 2. Fallback: Search line-by-line for "Vorrichtung: <val>"
   const lines = desc.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
@@ -3754,6 +3771,300 @@ app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
   } catch (err) {
     console.error('Error running inventory simulation:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+async function fetchDrawingFromDMS(articleId, index = 0, fixture = null) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  
+  const diag = {
+    articleId,
+    loginUrl: 'https://srvdms/identityprovider/login',
+    loginStatus: null,
+    hasSessionCookie: false,
+    repositoryId: '4fd39dfc-d88d-541f-8bfb-839608941ed4',
+    searchQueriesAttempted: [],
+    detailsFetch: null,
+    downloadFetch: null
+  };
+
+  const loginRes = await fetch(diag.loginUrl, {
+    headers: { 'Authorization': 'Basic ' + Buffer.from('rr\\simon:88171').toString('base64') }
+  });
+  diag.loginStatus = loginRes.status;
+  
+  if (loginRes.status !== 204) {
+    throw new Error(`DMS Login failed with status ${loginRes.status} (expected 204). Check your password.`);
+  }
+  
+  const allCookies = loginRes.headers.getSetCookie();
+  let authSessionId = null;
+  for (let c of allCookies) {
+    if (c && c.includes('AuthSessionId=')) {
+      authSessionId = c.match(/AuthSessionId=([^;]+)/)[1];
+      break;
+    }
+  }
+  
+  if (!authSessionId) {
+    throw new Error('DMS Login succeeded but AuthSessionId cookie was not returned.');
+  }
+  diag.hasSessionCookie = true;
+  
+  const propParam = JSON.stringify({ "5": [articleId] });
+  let docId = null;
+  const docTypes = ['DADZ', 'DARTD'];
+  
+  for (let type of docTypes) {
+    const objdefParam = JSON.stringify([type]);
+    const searchUrl = `https://srvdms/dms/r/${diag.repositoryId}/sr/?properties=${encodeURIComponent(propParam)}&objectdefinitionids=${encodeURIComponent(objdefParam)}`;
+    
+    const searchRes = await fetch(searchUrl, {
+      headers: {
+        'Accept': 'application/hal+json, application/json',
+        'Cookie': `AuthSessionId=${authSessionId}`
+      }
+    });
+    
+    const queryLog = {
+      type,
+      url: searchUrl,
+      status: searchRes.status,
+      itemsFound: 0,
+      rawResponse: null
+    };
+    
+    if (searchRes.status === 200) {
+      const searchData = await searchRes.json();
+      queryLog.itemsFound = (searchData.items || []).length;
+      queryLog.rawResponse = searchData;
+      if (searchData.items && searchData.items.length > 0) {
+        let items = searchData.items;
+        if (fixture) {
+          const cleanFixture = fixture.trim().toLowerCase();
+          const matches = items.filter(item => (item.caption || '').toLowerCase().includes(cleanFixture));
+          const nonMatches = items.filter(item => !(item.caption || '').toLowerCase().includes(cleanFixture));
+          items = [...matches, ...nonMatches];
+        }
+        const targetIndex = Math.min(Math.max(0, index), items.length - 1);
+        docId = items[targetIndex].id;
+        diag.searchQueriesAttempted.push(queryLog);
+        break;
+      }
+    } else {
+      try {
+        queryLog.rawResponse = await searchRes.text();
+      } catch (e) {}
+    }
+    diag.searchQueriesAttempted.push(queryLog);
+  }
+  
+  if (!docId) {
+    const err = new Error('Keine Zeichnung im DMS gefunden');
+    err.diagnostics = diag;
+    throw err;
+  }
+  
+  const detailsUrl = `https://srvdms/dms/r/${diag.repositoryId}/o2/${docId}`;
+  const detailsRes = await fetch(detailsUrl, {
+    headers: {
+      'Accept': 'application/hal+json, application/json',
+      'Cookie': `AuthSessionId=${authSessionId}`
+    }
+  });
+  
+  diag.detailsFetch = {
+    url: detailsUrl,
+    status: detailsRes.status
+  };
+  
+  if (detailsRes.status !== 200) {
+    const err = new Error(`DMS Details fetch failed with status ${detailsRes.status}`);
+    err.diagnostics = diag;
+    throw err;
+  }
+  
+  const detailsData = await detailsRes.json();
+  
+  let pdfUri = null;
+  if (detailsData.pdfInlineUri) {
+    pdfUri = detailsData.pdfInlineUri;
+  } else if (detailsData._links && detailsData._links.mainblobcontent && detailsData._links.mainblobcontent.href) {
+    pdfUri = detailsData._links.mainblobcontent.href;
+  } else if (detailsData._links && detailsData._links.blobs && detailsData._links.blobs.href) {
+    pdfUri = detailsData._links.blobs.href;
+  }
+  
+  if (!pdfUri) {
+    const err = new Error('DMS Document has no download or preview link');
+    err.diagnostics = diag;
+    throw err;
+  }
+  
+  const downloadUrl = `https://srvdms${pdfUri}`;
+  const downloadRes = await fetch(downloadUrl, {
+    headers: { 'Cookie': `AuthSessionId=${authSessionId}` }
+  });
+  
+  diag.downloadFetch = {
+    url: downloadUrl,
+    status: downloadRes.status
+  };
+  
+  if (downloadRes.status !== 200) {
+    const err = new Error(`DMS PDF download failed with status ${downloadRes.status}`);
+    err.diagnostics = diag;
+    throw err;
+  }
+  
+  const buffer = await downloadRes.arrayBuffer();
+  return Buffer.from(buffer);
+}
+
+async function getArticleNumberById(articleId) {
+  if (!articleId) return articleId;
+  if (isNaN(articleId)) {
+    return articleId;
+  }
+  
+  try {
+    const poolD4 = await getPoolD4();
+    const result = await poolD4.request()
+      .input('id', sql.Int, parseInt(articleId, 10))
+      .query('SELECT AR_NUMMER FROM [D4].[dbo].[tARST] WHERE ID = @id');
+    
+    if (result.recordset && result.recordset.length > 0) {
+      return result.recordset[0].AR_NUMMER.trim();
+    }
+  } catch (err) {
+    console.error('Error fetching AR_NUMMER for articleId:', articleId, err);
+  }
+  return articleId;
+}
+
+app.get('/api/dms/drawing/:articleId/meta', async (req, res) => {
+  try {
+    const { articleId } = req.params;
+    if (!articleId) {
+      return res.status(400).json({ error: 'articleId parameter is required' });
+    }
+    
+    const resolvedNumber = await getArticleNumberById(articleId);
+    
+    // Login to DMS
+    const loginUrl = 'https://srvdms/identityprovider/login';
+    const loginRes = await fetch(loginUrl, {
+      headers: { 'Authorization': 'Basic ' + Buffer.from('rr\\simon:88171').toString('base64') }
+    });
+    
+    if (loginRes.status !== 204) {
+      return res.status(500).json({ error: 'DMS login failed' });
+    }
+    
+    const allCookies = loginRes.headers.getSetCookie();
+    let authSessionId = null;
+    for (let c of allCookies) {
+      if (c && c.includes('AuthSessionId=')) {
+        authSessionId = c.match(/AuthSessionId=([^;]+)/)[1];
+        break;
+      }
+    }
+    
+    const repoId = '4fd39dfc-d88d-541f-8bfb-839608941ed4';
+    const propParam = JSON.stringify({ "5": [resolvedNumber] });
+    
+    let allDocuments = [];
+    const docTypes = ['DADZ', 'DARTD'];
+    
+    for (let type of docTypes) {
+      const objdefParam = JSON.stringify([type]);
+      const searchUrl = `https://srvdms/dms/r/${repoId}/sr/?properties=${encodeURIComponent(propParam)}&objectdefinitionids=${encodeURIComponent(objdefParam)}`;
+      
+      const searchRes = await fetch(searchUrl, {
+        headers: {
+          'Accept': 'application/hal+json, application/json',
+          'Cookie': `AuthSessionId=${authSessionId}`
+        }
+      });
+      
+      if (searchRes.status === 200) {
+        const searchData = await searchRes.json();
+        if (searchData.items && searchData.items.length > 0) {
+          searchData.items.forEach(item => {
+            allDocuments.push({
+              id: item.id,
+              caption: item.caption,
+              lastModified: item.lastModified,
+              mimeType: item.mimeType,
+              type
+            });
+          });
+        }
+      }
+    }
+    
+    const { fixture } = req.query;
+    if (fixture) {
+      const cleanFixture = fixture.trim().toLowerCase();
+      const matches = allDocuments.filter(doc => (doc.caption || '').toLowerCase().includes(cleanFixture));
+      const nonMatches = allDocuments.filter(doc => !(doc.caption || '').toLowerCase().includes(cleanFixture));
+      allDocuments = [...matches, ...nonMatches];
+    }
+    
+    res.json({
+      resolvedArticleNumber: resolvedNumber,
+      fixture: fixture || null,
+      count: allDocuments.length,
+      documents: allDocuments
+    });
+  } catch (err) {
+    console.error('Error fetching DMS metadata:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/dms/drawing/:articleId', async (req, res) => {
+  try {
+    const { articleId } = req.params;
+    const { mode, index, fixture } = req.query; // 'proxy' or 'direct', index (default 0), fixture
+    
+    if (!articleId) {
+      return res.status(400).json({ error: 'articleId parameter is required' });
+    }
+    
+    const resolvedNumber = await getArticleNumberById(articleId);
+    const docIndex = index ? parseInt(index, 10) : 0;
+    console.log(`DMS Drawing Request for Article: ${articleId} -> ${resolvedNumber} (mode: ${mode || 'direct'}, index: ${docIndex}, fixture: ${fixture || 'none'})`);
+    
+    const repoId = '4fd39dfc-d88d-541f-8bfb-839608941ed4';
+    const propParam = JSON.stringify({ "5": [resolvedNumber] });
+    const objdefParam = JSON.stringify(["DADZ"]);
+    
+    // Direct client redirect (Default)
+    if (mode !== 'proxy') {
+      const directUrl = `https://srvdms/dms/r/${repoId}/s/?properties=${encodeURIComponent(propParam)}&objectdefinitionids=${encodeURIComponent(objdefParam)}&showresultlist=true`;
+      return res.redirect(directUrl);
+    }
+    
+    // Proxy download mode (if explicitly requested)
+    const pdfBuffer = await fetchDrawingFromDMS(resolvedNumber, docIndex, fixture);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="drawing_${resolvedNumber}_${docIndex}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error(`Error in /api/dms/drawing:`, err);
+    const resolvedNumber = await getArticleNumberById(req.params.articleId);
+    const docIndex = req.query.index ? parseInt(req.query.index, 10) : 0;
+    if (err.diagnostics) {
+      res.status(404).json({
+        error: err.message,
+        resolvedArticleNumber: resolvedNumber,
+        docIndex,
+        diagnostics: err.diagnostics
+      });
+    } else {
+      res.status(500).json({ error: err.message, resolvedArticleNumber: resolvedNumber, docIndex });
+    }
   }
 });
 

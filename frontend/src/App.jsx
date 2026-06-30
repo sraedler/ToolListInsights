@@ -512,6 +512,7 @@ function ExplorerTab({ startDate, endDate }) {
   const [loadingToolList, setLoadingToolList] = useState(false);
   const [tableFullscreen, setTableFullscreen] = useState(false);
 
+
   useEffect(() => {
     fetchArticles();
   }, [search, page]);
@@ -3822,7 +3823,49 @@ function MissingDataTab() {
                           
                           {/* Article Title */}
                           <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.4rem', marginBottom: '0.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span>📦 Artikel: <span style={{ color: '#a7f3d0' }}>{artKey}</span></span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span>📦 Artikel: <span style={{ color: '#a7f3d0' }}>{artKey}</span></span>
+                              {steps[0] && steps[0].articleId && (
+                                <button 
+                                  onClick={() => {
+                                    const list = [];
+                                    const seen = new Set();
+                                    Object.keys(groupedMissing).forEach(pNum => {
+                                      const articlesList = groupedMissing[pNum].articles;
+                                      Object.keys(articlesList).forEach(ak => {
+                                        const stepsList = articlesList[ak];
+                                        if (stepsList[0] && stepsList[0].articleId && !seen.has(stepsList[0].articleId)) {
+                                          seen.add(stepsList[0].articleId);
+                                          list.push({
+                                            articleId: stepsList[0].articleId,
+                                            articleName: ak
+                                          });
+                                        }
+                                      });
+                                    });
+                                    const fixture = steps.find(s => s.fixture)?.fixture || null;
+                                    openDmsSlider(steps[0].articleId, artKey, list, fixture);
+                                  }}
+                                  style={{ 
+                                    background: 'rgba(56, 189, 248, 0.1)', 
+                                    color: '#38bdf8', 
+                                    border: '1px solid rgba(56, 189, 248, 0.2)', 
+                                    padding: '0.15rem 0.45rem', 
+                                    borderRadius: '4px', 
+                                    fontSize: '0.65rem', 
+                                    cursor: 'pointer',
+                                    fontWeight: 600, 
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    transition: 'all 0.2s'
+                                  }}
+                                  title="Zeichnung im DMS Slider öffnen"
+                                >
+                                  📐 Zeichnung
+                                </button>
+                              )}
+                            </span>
                             <span style={{ color: '#64748b', fontSize: '0.75rem' }}>{steps.length} {steps.length === 1 ? 'Schritt' : 'Schritte'}</span>
                           </div>
 
@@ -3931,6 +3974,66 @@ function PlanningTab({ mode = 'machining' }) {
   const [loadingRouting, setLoadingRouting] = useState(false);
   const [weeklyToolsModal, setWeeklyToolsModal] = useState(null);
   const [kanbanFullscreen, setKanbanFullscreen] = useState(false);
+
+  // d.velop DMS Drawing Slider States
+  const [dmsSliderOpen, setDmsSliderOpen] = useState(false);
+  const [dmsSliderList, setDmsSliderList] = useState([]);
+  const [dmsSliderIndex, setDmsSliderIndex] = useState(0);
+
+  // Sub-documents per article states
+  const [dmsSubDocs, setDmsSubDocs] = useState([]);
+  const [dmsSubIndex, setDmsSubIndex] = useState(0);
+  const [loadingDmsMeta, setLoadingDmsMeta] = useState(false);
+
+  const [dmsSliderFixture, setDmsSliderFixture] = useState(null);
+
+  const openDmsSlider = (articleId, articleName, customList = null, fixture = null) => {
+    setDmsSliderFixture(fixture || null);
+    if (customList && customList.length > 0) {
+      setDmsSliderList(customList);
+      const idx = customList.findIndex(item => item.articleId === articleId);
+      setDmsSliderIndex(idx >= 0 ? idx : 0);
+    } else {
+      setDmsSliderList([{ articleId, articleName }]);
+      setDmsSliderIndex(0);
+    }
+    setDmsSliderOpen(true);
+  };
+
+  const fetchDmsMetadata = async (articleId, fixture = null) => {
+    try {
+      setLoadingDmsMeta(true);
+      setDmsSubDocs([]);
+      setDmsSubIndex(0);
+      
+      let url = `${API_BASE}/dms/drawing/${encodeURIComponent(articleId)}/meta`;
+      if (fixture) {
+        url += `?fixture=${encodeURIComponent(fixture)}`;
+      }
+      
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.documents) {
+          setDmsSubDocs(data.documents);
+        }
+      }
+    } catch (err) {
+      console.error("Error loading DMS sub documents:", err);
+    } finally {
+      setLoadingDmsMeta(false);
+    }
+  };
+
+  useEffect(() => {
+    if (dmsSliderOpen && dmsSliderList.length > 0) {
+      const currentItem = dmsSliderList[dmsSliderIndex];
+      if (currentItem && currentItem.articleId) {
+        fetchDmsMetadata(currentItem.articleId, dmsSliderFixture);
+      }
+    }
+  }, [dmsSliderOpen, dmsSliderList, dmsSliderIndex, dmsSliderFixture]);
+
   const [highlightRobotFlow, setHighlightRobotFlow] = useState(false);
   const abortControllerRef = useRef(null);
 
@@ -5010,27 +5113,29 @@ function PlanningTab({ mode = 'machining' }) {
           position: 'fixed',
           top: 0,
           left: 0,
-          right: 0,
-          bottom: 0,
+          width: dmsSliderOpen ? '45%' : '100%',
+          height: '100%',
           background: 'rgba(4, 6, 10, 0.85)',
           backdropFilter: 'blur(10px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           zIndex: 9999,
-          padding: '2rem'
+          padding: dmsSliderOpen ? '1rem' : '2rem',
+          transition: 'all 0.3s ease'
         }} onClick={() => setActiveModalStep(null)}>
           <div style={{
             background: 'var(--bg-card)',
             border: '1px solid var(--border-dim)',
             borderRadius: '16px',
             width: '100%',
-            maxWidth: '650px',
+            maxWidth: dmsSliderOpen ? '95%' : '650px',
             maxHeight: '90vh',
             overflowY: 'auto',
-            padding: '2.25rem',
+            padding: dmsSliderOpen ? '1.5rem' : '2.25rem',
             boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)',
-            position: 'relative'
+            position: 'relative',
+            transition: 'all 0.3s ease'
           }} onClick={e => e.stopPropagation()}>
             
             {/* Close Button */}
@@ -5120,7 +5225,33 @@ function PlanningTab({ mode = 'machining' }) {
               <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
                 <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Artikel (Teil)</div>
                 <div style={{ fontSize: '0.95rem', color: '#fff', fontWeight: 600 }}>{activeModalStep.orderDesc}</div>
-                <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>Artikel-ID: {activeModalStep.articleId}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>Artikel-ID: {activeModalStep.articleId}</div>
+                  {activeModalStep.articleId && (
+                    <button 
+                      onClick={() => {
+                        openDmsSlider(activeModalStep.articleId, activeModalStep.orderDesc, null, activeModalStep.fixture);
+                      }}
+                      style={{ 
+                        background: 'rgba(56, 189, 248, 0.1)', 
+                        color: '#38bdf8', 
+                        border: '1px solid rgba(56, 189, 248, 0.2)', 
+                        padding: '0.2rem 0.6rem', 
+                        borderRadius: '6px', 
+                        fontSize: '0.7rem', 
+                        cursor: 'pointer',
+                        fontWeight: 600, 
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        transition: 'all 0.2s'
+                      }}
+                      title="Zeichnung im DMS Slider öffnen"
+                    >
+                      📐 Zeichnung öffnen
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Row 3: Arbeitsplan-Schritt */}
@@ -5290,29 +5421,83 @@ function PlanningTab({ mode = 'machining' }) {
                 )}
               </div>
 
-              {/* Row 6: Rüstbedarf (Werkzeuge zu laden) */}
-              <div>
-                <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <span>Werkzeug-Rüstbedarf</span>
-                  <span style={{ fontSize: '0.7rem', background: 'rgba(255,255,255,0.04)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#94a3b8' }}>
-                    {activeModalStep.loadTools ? activeModalStep.loadTools.length : 0} neu zu laden
-                  </span>
+              {/* Row 6: Rüstbedarf (Werkzeuge laden & entladen) */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', borderTop: '1px solid var(--border-dim)', paddingTop: '1.25rem' }}>
+                {/* Tools to Load */}
+                <div>
+                  <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <span style={{ color: '#f59e0b' }}>Einwechseln (Rein)</span>
+                    <span style={{ fontSize: '0.7rem', background: 'rgba(245, 158, 11, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#f59e0b', fontWeight: 600 }}>
+                      +{activeModalStep.loadTools ? activeModalStep.loadTools.length : 0}
+                    </span>
+                  </div>
+                  {activeModalStep.loadTools && activeModalStep.loadTools.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                      {activeModalStep.loadTools.map((t, tIdx) => (
+                        <div key={tIdx} style={{ 
+                          display: 'flex', 
+                          flexDirection: 'column', 
+                          gap: '0.15rem', 
+                          background: 'rgba(245, 158, 11, 0.03)', 
+                          border: '1px solid rgba(245, 158, 11, 0.12)', 
+                          padding: '0.45rem 0.75rem', 
+                          borderRadius: '6px', 
+                          fontSize: '0.8rem' 
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: '#fff', fontWeight: 700 }}>T{t.nr}</span>
+                            {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span>}
+                          </div>
+                          <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
+                            {t.desc}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ color: '#10b981', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500 }}>
+                      ✓ Bereits im Magazin gerüstet!
+                    </div>
+                  )}
                 </div>
-                {activeModalStep.loadTools && activeModalStep.loadTools.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem' }}>
-                    {activeModalStep.loadTools.map((t, tIdx) => (
-                      <div key={tIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(245, 158, 11, 0.05)', border: '1px solid rgba(245, 158, 11, 0.12)', padding: '0.4rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem' }}>
-                        <span style={{ color: '#fff', fontWeight: 600 }}>Wz #{t.nr}</span>
-                        <span style={{ color: '#94a3b8', fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>{t.desc}</span>
-                        {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace' }}>D={t.dia}</span>}
-                      </div>
-                    ))}
+
+                {/* Tools to Unload */}
+                <div>
+                  <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <span style={{ color: '#f87171' }}>Auswechseln (Raus)</span>
+                    <span style={{ fontSize: '0.7rem', background: 'rgba(239, 68, 68, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#f87171', fontWeight: 600 }}>
+                      -{activeModalStep.unloadTools ? activeModalStep.unloadTools.length : 0}
+                    </span>
                   </div>
-                ) : (
-                  <div style={{ color: '#10b981', fontSize: '0.8rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500 }}>
-                    ✓ Alle benötigten Werkzeuge sind bereits im Magazin gerüstet! (Kein Rüstwechsel erforderlich)
-                  </div>
-                )}
+                  {activeModalStep.unloadTools && activeModalStep.unloadTools.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                      {activeModalStep.unloadTools.map((t, tIdx) => (
+                        <div key={tIdx} style={{ 
+                          display: 'flex', 
+                          flexDirection: 'column', 
+                          gap: '0.15rem', 
+                          background: 'rgba(239, 68, 68, 0.03)', 
+                          border: '1px solid rgba(239, 68, 68, 0.12)', 
+                          padding: '0.45rem 0.75rem', 
+                          borderRadius: '6px', 
+                          fontSize: '0.8rem' 
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: '#f87171', fontWeight: 700 }}>T{t.nr}</span>
+                            {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span>}
+                          </div>
+                          <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
+                            {t.desc}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ color: '#64748b', fontSize: '0.75rem', border: '1px solid var(--border-dim)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontStyle: 'italic' }}>
+                      Keine Werkzeuge zum Auswechseln.
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -5513,6 +5698,197 @@ function PlanningTab({ mode = 'machining' }) {
           </div>
         </div>
       )}
+      {/* d.velop DMS Drawing Slider Drawer */}
+      {dmsSliderOpen && dmsSliderList.length > 0 && (() => {
+        const currentItem = dmsSliderList[dmsSliderIndex];
+        let iframeSrc = `${API_BASE}/dms/drawing/${encodeURIComponent(currentItem.articleId)}?mode=proxy&index=${dmsSubIndex}`;
+        if (dmsSliderFixture) {
+          iframeSrc += `&fixture=${encodeURIComponent(dmsSliderFixture)}`;
+        }
+        
+        return (
+          <>
+            <style>{`
+              @keyframes slideIn {
+                from { transform: translateX(100%); }
+                to { transform: translateX(0); }
+              }
+            `}</style>
+            <div style={{
+              position: 'fixed',
+              top: 0,
+              right: 0,
+            width: '55%',
+            height: '100%',
+            background: '#0f172a',
+            borderLeft: '1px solid rgba(255,255,255,0.1)',
+            boxShadow: '-10px 0 30px rgba(0,0,0,0.5)',
+            zIndex: 99999,
+            display: 'flex',
+            flexDirection: 'column',
+            animation: 'slideIn 0.25s ease-out'
+          }}>
+            {/* Header */}
+            <div style={{
+              padding: '1rem 1.5rem',
+              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: '#1e293b'
+            }}>
+              <div>
+                <span style={{ fontSize: '0.7rem', color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  d.velop DMS Zeichnungs-Explorer
+                </span>
+                <h4 style={{ color: '#fff', margin: '0.1rem 0 0 0', fontSize: '1.05rem', fontWeight: 600 }}>
+                  {currentItem.articleName}
+                </h4>
+              </div>
+              <button 
+                onClick={() => setDmsSliderOpen(false)}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  color: '#f87171',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                  padding: '0.4rem 0.8rem',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
+              >
+                Schließen
+              </button>
+            </div>
+            
+            {/* Slider Controls */}
+            {dmsSliderList.length > 1 && (
+              <div style={{
+                padding: '0.75rem 1.5rem',
+                background: '#1e293b',
+                borderBottom: '1px solid rgba(255,255,255,0.05)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <button
+                  disabled={dmsSliderIndex === 0}
+                  onClick={() => setDmsSliderIndex(prev => prev - 1)}
+                  style={{
+                    background: dmsSliderIndex === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(56,189,248,0.1)',
+                    color: dmsSliderIndex === 0 ? '#64748b' : '#38bdf8',
+                    border: '1px solid rgba(56,189,248,0.15)',
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '6px',
+                    cursor: dmsSliderIndex === 0 ? 'not-allowed' : 'pointer',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  ◀ Vorherige
+                </button>
+                <span style={{ color: '#94a3b8', fontSize: '0.8rem', fontWeight: 600 }}>
+                  Zeichnung {dmsSliderIndex + 1} von {dmsSliderList.length}
+                </span>
+                <button
+                  disabled={dmsSliderIndex === dmsSliderList.length - 1}
+                  onClick={() => setDmsSliderIndex(prev => prev + 1)}
+                  style={{
+                    background: dmsSliderIndex === dmsSliderList.length - 1 ? 'rgba(255,255,255,0.02)' : 'rgba(56,189,248,0.1)',
+                    color: dmsSliderIndex === dmsSliderList.length - 1 ? '#64748b' : '#38bdf8',
+                    border: '1px solid rgba(56,189,248,0.15)',
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '6px',
+                    cursor: dmsSliderIndex === dmsSliderList.length - 1 ? 'not-allowed' : 'pointer',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  Nächste ▶
+                </button>
+              </div>
+            )}
+            
+            {/* Sub-documents / multiple files selector (Pfeile für Revisionen/weitere Dateien) */}
+            {dmsSubDocs && dmsSubDocs.length > 1 && (
+              <div style={{
+                padding: '0.6rem 1.5rem',
+                background: '#0f172a',
+                borderBottom: '1px solid rgba(255,255,255,0.06)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <button
+                  disabled={dmsSubIndex === 0}
+                  onClick={() => setDmsSubIndex(prev => prev - 1)}
+                  style={{
+                    background: dmsSubIndex === 0 ? 'rgba(255,255,255,0.01)' : 'rgba(16,185,129,0.1)',
+                    color: dmsSubIndex === 0 ? '#475569' : '#34d399',
+                    border: '1px solid rgba(16,185,129,0.15)',
+                    padding: '0.25rem 0.6rem',
+                    borderRadius: '4px',
+                    cursor: dmsSubIndex === 0 ? 'not-allowed' : 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  ◀ Vorheriges Dok.
+                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', overflow: 'hidden', padding: '0 0.5rem' }}>
+                  <span style={{ color: '#e2e8f0', fontSize: '0.75rem', fontWeight: 600 }}>
+                    Dokument {dmsSubIndex + 1} von {dmsSubDocs.length}
+                  </span>
+                  {dmsSubDocs[dmsSubIndex] && (
+                    <span style={{ color: '#64748b', fontSize: '0.65rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '350px' }} title={dmsSubDocs[dmsSubIndex].caption}>
+                      {dmsSubDocs[dmsSubIndex].caption}
+                    </span>
+                  )}
+                </div>
+                <button
+                  disabled={dmsSubIndex === dmsSubDocs.length - 1}
+                  onClick={() => setDmsSubIndex(prev => prev + 1)}
+                  style={{
+                    background: dmsSubIndex === dmsSubDocs.length - 1 ? 'rgba(255,255,255,0.01)' : 'rgba(16,185,129,0.1)',
+                    color: dmsSubIndex === dmsSubDocs.length - 1 ? '#475569' : '#34d399',
+                    border: '1px solid rgba(16,185,129,0.15)',
+                    padding: '0.25rem 0.6rem',
+                    borderRadius: '4px',
+                    cursor: dmsSubIndex === dmsSubDocs.length - 1 ? 'not-allowed' : 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  Nächstes Dok. ▶
+                </button>
+              </div>
+            )}
+            
+            {/* Embedded PDF iframe */}
+            <div style={{ flex: 1, position: 'relative', background: '#020617' }}>
+              <iframe
+                src={iframeSrc}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  border: 'none',
+                  background: '#020617'
+                }}
+                title="DMS PDF Viewer"
+              />
+            </div>
+          </div>
+        </>
+        );
+      })()}
     </div>
   );
 }
