@@ -382,7 +382,7 @@ function OverviewTab({ summary, loading, onRefresh }) {
             <span>Artikelstamm (ERP)</span>
             <Layers size={16} />
           </div>
-          <div className="metric-value">{summary?.totalArticles.toLocaleString()}</div>
+          <div className="metric-value">{(summary?.totalArticles ?? 0).toLocaleString()}</div>
           <div className="metric-desc">Aktive ERP-Artikel (AR_ART=0, AR_TYP=1)</div>
         </div>
 
@@ -391,7 +391,7 @@ function OverviewTab({ summary, loading, onRefresh }) {
             <span>Produktionsaufträge</span>
             <Database size={16} />
           </div>
-          <div className="metric-value">{summary?.totalOrders.toLocaleString()}</div>
+          <div className="metric-value">{(summary?.totalOrders ?? 0).toLocaleString()}</div>
           <div className="metric-desc">Gesamte Belegpositionen (tbe_Belp)</div>
         </div>
 
@@ -400,7 +400,7 @@ function OverviewTab({ summary, loading, onRefresh }) {
             <span>Gepflegte Werkzeuglisten</span>
             <Wrench size={16} />
           </div>
-          <div className="metric-value">{summary?.totalToolLists.toLocaleString()}</div>
+          <div className="metric-value">{(summary?.totalToolLists ?? 0).toLocaleString()}</div>
           <div className="metric-desc">Katalogisierte Listen in WinTool</div>
         </div>
 
@@ -409,7 +409,7 @@ function OverviewTab({ summary, loading, onRefresh }) {
             <span>Werkzeuge (Gesamt)</span>
             <Activity size={16} />
           </div>
-          <div className="metric-value">{summary?.totalTools.toLocaleString()}</div>
+          <div className="metric-value">{(summary?.totalTools ?? 0).toLocaleString()}</div>
           <div className="metric-desc">Baugruppen-Werkzeuge in WinTool</div>
         </div>
       </div>
@@ -3682,6 +3682,22 @@ function PlanningTab({ mode = 'machining' }) {
     fetchPlanningData();
   };
 
+  const handleClearCacheAndReload = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const clearRes = await fetch(`${API_BASE}/clear-cache`, { method: 'POST' });
+      if (!clearRes.ok) {
+        throw new Error('Fehler beim Löschen des Caches.');
+      }
+      await fetchPlanningData();
+    } catch (err) {
+      console.error('Error clearing cache:', err);
+      setError(err.message);
+      setLoading(false);
+    }
+  };
+
   if (loading && !data) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', gap: '1rem', color: '#94a3b8' }}>
@@ -3775,6 +3791,22 @@ function PlanningTab({ mode = 'machining' }) {
               />
               <button onClick={handleApplyDate} className="btn btn-primary btn-sm">
                 Planung laden
+              </button>
+              <button 
+                onClick={handleClearCacheAndReload} 
+                className="btn btn-secondary btn-sm"
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.4rem',
+                  background: 'rgba(239, 68, 68, 0.1)', 
+                  border: '1px solid rgba(239, 68, 68, 0.3)', 
+                  color: '#ef4444' 
+                }}
+                disabled={loading}
+              >
+                <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                <span>Cache leeren & neu laden</span>
               </button>
             </div>
           </div>
@@ -4726,6 +4758,16 @@ function PlanningTab({ mode = 'machining' }) {
                   {activeModalStep.matchedListNr && <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Liste: #{activeModalStep.matchedListNr}</div>}
                 </div>
               </div>
+
+              {/* Row 6: Vorrichtung (Fixture) */}
+              {activeModalStep.fixture && (
+                <div style={{ background: 'rgba(168, 85, 247, 0.03)', border: '1px solid rgba(168, 85, 247, 0.15)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Spannmittel / Vorrichtung</div>
+                  <div style={{ fontSize: '0.95rem', color: '#e9d5ff', fontWeight: 700 }}>
+                    🛠️ {activeModalStep.fixture}
+                  </div>
+                </div>
+              )}
 
               {/* Entire Arbeitsplan Section */}
               <div>

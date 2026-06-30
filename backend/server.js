@@ -600,6 +600,16 @@ app.get('/api/status', (req, res) => {
   res.json(systemState);
 });
 
+// Clear Cache Endpoint
+app.post('/api/clear-cache', (req, res) => {
+  try {
+    cachedSetupData = null;
+    res.json({ success: true, message: 'Cache wurde erfolgreich gelöscht.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 0. Machines Catalog
 app.get('/api/machines', (req, res) => {
   if (!cachedMachines || cachedMachines.length === 0) {
@@ -1960,11 +1970,28 @@ function calculateToolChanges(stepsList, initialMagazine, magazineSize, listToTo
   return totalChanges;
 }
 
+function extractFixture(desc) {
+  if (!desc) return null;
+  const lines = desc.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const match = trimmed.match(/^[vV]orrichtung\s*:(.*)$/);
+    if (match) {
+      const val = match[1].trim();
+      if (val !== '') {
+        return val;
+      }
+    }
+  }
+  return null;
+}
+
 // 7b. Planning Tab Kanban Data Endpoint
 app.get('/api/planning', async (req, res) => {
   try {
     if (!cachedSetupData) {
-      return res.status(503).json({ error: 'Systemdaten werden noch geladen' });
+      console.log('cachedSetupData is null. Recalculating base cache dynamically...');
+      await cacheSetupData();
     }
 
     const { startDate, optimize, algo } = req.query;
@@ -2407,6 +2434,7 @@ app.get('/api/planning', async (req, res) => {
             matchedListNr: s.MatchedListNr || null,
             matchedListIdent: s.MatchedListIdent || null,
             color: s.color,
+            fixture: extractFixture(s.StepDesc),
             entireArbeitsplan,
             missesCount: s.loadTools ? s.loadTools.length : 0,
             loadTools: (s.loadTools || []).map(tNr => {
@@ -2548,7 +2576,8 @@ app.get('/api/planning', async (req, res) => {
 app.get('/api/setup-reduction', async (req, res) => {
   try {
     if (!cachedSetupData) {
-      return res.status(503).json({ error: 'Rüstdaten werden noch geladen' });
+      console.log('cachedSetupData is null. Recalculating base cache dynamically for setup reduction...');
+      await cacheSetupData();
     }
     const baseSetSize = parseInt(req.query.baseSetSize) || 20;
     const { startDate, endDate, machineId } = req.query;
@@ -2839,7 +2868,8 @@ app.get('/api/setup-reduction', async (req, res) => {
 app.get('/api/machines/:id/tools', async (req, res) => {
   try {
     if (!cachedSetupData) {
-      return res.status(503).json({ error: 'Systemdaten werden noch geladen' });
+      console.log('cachedSetupData is null. Recalculating base cache dynamically for machine tools...');
+      await cacheSetupData();
     }
     const paramId = req.params.id;
     const parts = paramId.split('_');
@@ -3541,7 +3571,8 @@ app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
     const { targetDate, optimize, unloadPrograms, loadPrograms, startDate } = req.query;
     
     if (!cachedSetupData) {
-      return res.status(503).json({ error: 'Rüstdaten werden noch geladen' });
+      console.log('cachedSetupData is null. Recalculating base cache dynamically for inventory simulation...');
+      await cacheSetupData();
     }
     
     // Save scenario globally
