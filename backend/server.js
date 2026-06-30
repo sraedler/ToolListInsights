@@ -812,9 +812,10 @@ app.get('/api/orders/:id/steps', async (req, res) => {
     const { id } = req.params;
     const poolD4 = await getPoolD4();
 
-    const request = poolD4.request();
-    request.input('orderId', sql.Int, id);
-    const result = await request.query(`
+    // 1. Fetch active planning steps from tPPS_SKKALP
+    const requestActive = poolD4.request();
+    requestActive.input('orderId', sql.Int, id);
+    const resultActive = await requestActive.query(`
       SELECT
         p.ID as StepId,
         p.PSP_POSITION_NUMMER as StepPos,
@@ -851,17 +852,70 @@ app.get('/api/orders/:id/steps', async (req, res) => {
             AND tPPS_SKKALP_PLAN.PSPP_STATUS_PLANUNG <> 1
         ) as StartDate,
         p.PSP_IDMS as MachineId,
-        p.PSP_IDMP as MachinePoolId
+        p.PSP_IDMP as MachinePoolId,
+        COALESCE(masta.MS_BEZEICHNUNG, pool.MP_BEZEICHNUNG, '') as MachineName
       FROM [D4].[dbo].[tPPS_SKKALK] k
       INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.PSP_IDPSKKK = k.ID
       LEFT JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = k.PSK_IDBEBP
       LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
       LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
+      LEFT JOIN [D4].[dbo].[tPPS_MASTA] masta ON masta.ID = p.PSP_IDMS
+      LEFT JOIN [D4].[dbo].[tPPS_MASCHPOOL] pool ON pool.ID = p.PSP_IDMP
       WHERE k.PSK_IDBEBP = @orderId
       ORDER BY p.PSP_POSITION_NUMMER
     `);
 
-    const processedSteps = result.recordset.map(step => {
+    // 2. Fetch all calculation template steps from tSK_KALP
+    const requestTsk = poolD4.request();
+    requestTsk.input('orderId', sql.Int, id);
+    const resultTsk = await requestTsk.query(`
+      SELECT
+        p.ID as StepId,
+        p.KP_POSITION_NUMMER as StepPos,
+        p.KP_TYP_POSITION as StepTyp,
+        p.KP_BEZEICHNUNG as StepDesc
+      FROM [D4].[dbo].[tSK_KALK] k
+      INNER JOIN [D4].[dbo].[tSK_KALP] p ON p.KP_IDSKKK = k.ID
+      WHERE k.KK_IDBEBP = @orderId
+      ORDER BY p.KP_POSITION_NUMMER
+    `);
+
+    // Merge active planning steps and calculation steps
+    const activeMap = {};
+    resultActive.recordset.forEach(row => {
+      activeMap[row.StepPos] = row;
+    });
+
+    const combinedSteps = [...resultActive.recordset];
+    resultTsk.recordset.forEach(tskRow => {
+      if (!activeMap[tskRow.StepPos]) {
+        combinedSteps.push({
+          StepId: tskRow.StepId,
+          StepPos: tskRow.StepPos,
+          StepTyp: tskRow.StepTyp,
+          StepDesc: tskRow.StepDesc,
+          SetupTime: 0,
+          ProdTime: 0,
+          TargetQty: 0,
+          StatusProduction: 0,
+          SPKO: 1, // Offen
+          DeliveryDate: null,
+          StartDate: null,
+          MachineId: null,
+          MachinePoolId: null,
+          MachineName: 'Sonstige/Extern'
+        });
+      }
+    });
+
+    // Re-sort combined list by step position
+    combinedSteps.sort((a, b) => {
+      const posA = parseInt(a.StepPos || 0, 10);
+      const posB = parseInt(b.StepPos || 0, 10);
+      return posA - posB;
+    });
+
+    const processedSteps = combinedSteps.map(step => {
       const stepTypName = 
         step.StepTyp === 0 ? 'Arbeitsschritt' :
         step.StepTyp === 1 ? 'Fremddienstleistung' :
@@ -1727,45 +1781,42 @@ app.get('/api/planning', async (req, res) => {
         sequencedSteps.forEach(s => {
           const stepDuration = (s.SetupTime || 0) + (s.prodTime || 0);
           const canBypassCapacity = s.isNightRunCapable && s.loadTools && s.loadTools.length === 0;
-          const fitsOnDay = (totalLoad + stepDuration <= dayCapacity) || (totalLoad === 0) || canBypassCapacity;
+          const currentLimit = canBypassCapacity ? 1440 : dayCapacity;
+          const dayRemaining = currentLimit - totalLoad;
 
-          if (fitsOnDay) {
-            // Check 24h limit (1440 mins)
-            if (totalLoad + stepDuration <= 1440) {
-              dayScheduled.push(s);
-              totalLoad += stepDuration;
-            } else {
-              // Exceeds 24h limit, split the task!
-              const dayRemaining = 1440 - totalLoad;
-              if (dayRemaining > 0) {
-                const fittedProdTime = Math.max(0, dayRemaining - (s.SetupTime || 0));
-                const remainingProdTime = (s.prodTime || 0) - fittedProdTime;
+          if (stepDuration <= dayRemaining) {
+            // Fits completely on the current day!
+            dayScheduled.push(s);
+            totalLoad += stepDuration;
+          } else {
+            // Does not fit completely. Can we fit at least the SetupTime plus some production?
+            if (dayRemaining > (s.SetupTime || 0)) {
+              const fittedProdTime = Math.max(0, dayRemaining - (s.SetupTime || 0));
+              const remainingProdTime = (s.prodTime || 0) - fittedProdTime;
 
-                dayScheduled.push({
+              dayScheduled.push({
+                ...s,
+                prodTime: fittedProdTime,
+                isSplit: true,
+                splitPart: s.splitPart || 1,
+                originalStepId: s.originalStepId || s.StepId
+              });
+              totalLoad = currentLimit;
+
+              if (remainingProdTime > 0) {
+                nextDayOverflow.push({
                   ...s,
-                  prodTime: fittedProdTime,
+                  SetupTime: 0, // setup is done
+                  prodTime: remainingProdTime,
                   isSplit: true,
-                  splitPart: s.splitPart || 1,
+                  splitPart: (s.splitPart || 1) + 1,
                   originalStepId: s.originalStepId || s.StepId
                 });
-                totalLoad = 1440;
-
-                if (remainingProdTime > 0) {
-                  nextDayOverflow.push({
-                    ...s,
-                    SetupTime: 0, // setup is done
-                    prodTime: remainingProdTime,
-                    isSplit: true,
-                    splitPart: (s.splitPart || 1) + 1,
-                    originalStepId: s.originalStepId || s.StepId
-                  });
-                }
-              } else {
-                nextDayOverflow.push(s);
               }
+            } else {
+              // Cannot even fit setup time. Overflow the entire task to the next day!
+              nextDayOverflow.push(s);
             }
-          } else {
-            nextDayOverflow.push(s);
           }
         });
 

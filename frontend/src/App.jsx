@@ -8,6 +8,8 @@ import {
   Search, 
   Activity, 
   ChevronRight, 
+  ChevronDown,
+  ChevronUp,
   X, 
   Info, 
   Clock, 
@@ -3433,6 +3435,54 @@ function PlanningTab() {
   const [activeModalStep, setActiveModalStep] = useState(null);
   const [hideExecuting, setHideExecuting] = useState(false);
   const [algo, setAlgo] = useState('greedy');
+  const [expandedCards, setExpandedCards] = useState({});
+  const [fullRoutingSteps, setFullRoutingSteps] = useState([]);
+  const [loadingRouting, setLoadingRouting] = useState(false);
+
+  const toggleCardDetails = (e, stepId) => {
+    e.stopPropagation();
+    setExpandedCards(prev => ({
+      ...prev,
+      [stepId]: !prev[stepId]
+    }));
+  };
+
+  useEffect(() => {
+    if (!activeModalStep) {
+      setFullRoutingSteps([]);
+      return;
+    }
+
+    const loadFullRouting = async () => {
+      setLoadingRouting(true);
+      try {
+        const res = await fetch(`${API_BASE}/orders/${activeModalStep.orderId}/steps`);
+        if (res.ok) {
+          const json = await res.json();
+          const mapped = json.map(op => ({
+            stepId: op.StepId,
+            stepPos: op.StepPos,
+            stepDesc: (op.StepDesc || '').trim(),
+            setupTime: op.SetupTime || 0,
+            prodTime: op.ProdTime || 0,
+            isCompleted: op.SPKO === 4,
+            isExecuting: op.SPKO === 2,
+            machineName: op.MachineName || (op.MachineId ? `Maschine #${op.MachineId}` : 'Pool'),
+            color: op.SPKO === 4 ? 'Green' : op.SPKO === 2 ? 'Yellow' : 'Blue',
+            stepTyp: op.StepTyp,
+            stepTypName: op.StepTypName
+          }));
+          setFullRoutingSteps(mapped);
+        }
+      } catch (err) {
+        console.error('Error fetching full routing steps:', err);
+      } finally {
+        setLoadingRouting(false);
+      }
+    };
+
+    loadFullRouting();
+  }, [activeModalStep]);
 
   const fetchPlanningData = async () => {
     setLoading(true);
@@ -3775,91 +3825,152 @@ function PlanningTab() {
                     <div className="empty-column-state">Keine Aufträge geplant</div>
                   ) : (
                     daySteps.map((step, idx) => (
-                      <div key={step.stepId} className={`kanban-card ${step.isExecuting ? 'executing' : ''}`} onClick={() => setActiveModalStep(step)} style={{ cursor: 'pointer' }}>
-                        <div className="card-top">
-                          <span className="card-order-id">Auftrag #{step.orderId}</span>
-                          <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+                      <div key={step.stepId} className={`kanban-card ${step.isExecuting ? 'executing' : ''}`} onClick={() => setActiveModalStep(step)} style={{ cursor: 'pointer', padding: '0.65rem' }}>
+                        {/* Header Row */}
+                        <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                          <span className="card-order-id" style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f1f5f9' }}>
+                            {step.contractNumber || `Auftrag #${step.orderId}`}
+                          </span>
+                          <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
                             {step.isExecuting && (
-                              <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 700 }}>
+                              <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 700 }}>
                                 ⚡ AKTIV
                               </span>
                             )}
                             {step.isSplit && (
-                              <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>
-                                ✂ Teil {step.splitPart}
+                              <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px' }}>
+                                ✂ T{step.splitPart}
                               </span>
                             )}
                             {step.isConflict && (
-                              <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>
-                                <AlertTriangle size={10} /> Soll: {formatDate(step.originalStartDate)}
+                              <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px' }}>
+                                ⚠ {formatDate(step.originalStartDate)}
                               </span>
                             )}
                             {step.isNightRunCapable && (
-                              <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>
-                                <Moon size={10} /> Nachtlauf
+                              <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', color: '#d8b4fe', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px' }}>
+                                🌙 Nacht
                               </span>
                             )}
-                            <span className="badge badge-success">Aktivierbar</span>
                           </div>
                         </div>
-                        <div className="card-desc" title={step.orderDesc}>{step.orderDesc}</div>
-                        <div className="card-step-desc" style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-                          Arbeitsschritt: {step.stepDesc}
-                        </div>
-                        
-                        <div className="card-badges">
-                          <span className="card-badge" title="Rüstzeit"><Clock size={12} /> Rüst: {step.setupTime} Min</span>
-                          <span className="card-badge" title="Produktionszeit" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
-                            Prod: {step.prodTime} Min
-                          </span>
-                          {step.ncProgram && (
-                            <span className="card-badge" style={{ fontFamily: 'monospace' }}>NC: {step.ncProgram}</span>
-                          )}
-                          {step.matchedListIdent && (
-                            <span className="card-badge">WinTool: {step.matchedListIdent}</span>
-                          )}
+
+                        {/* Order Description */}
+                        <div className="card-desc" title={step.orderDesc} style={{ fontSize: '0.75rem', fontWeight: 500, color: '#e2e8f0', margin: '0.25rem 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {step.orderDesc}
                         </div>
 
-                        {/* Rüstbedarf Section */}
-                        <div className="card-rustbedarf">
-                          <div className="rustbedarf-title">Rüstbedarf ({step.toolsCount} Wz. gesamt)</div>
-                          {step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
-                            <div className="rustbedarf-clean">
-                              <CheckCircle2 size={12} style={{ color: '#10b981' }} />
-                              <span>Übernahme (0 Wechsel)</span>
-                            </div>
-                          ) : (
-                            <div className="rustbedarf-changes">
-                              {step.loadTools.length > 0 && (
-                                <div className="change-list load">
-                                  <div className="change-header">Einwechseln (+{step.loadTools.length}):</div>
-                                  <div className="change-items">
-                                    {step.loadTools.map(t => (
-                                      <div key={t.nr} className="change-item">
-                                        <span className="tool-nr">T{t.nr}</span>
-                                        <span className="tool-desc" title={t.desc}>{t.desc}</span>
-                                        {t.dia && <span className="tool-dim">Ø{t.dia}</span>}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              {step.unloadTools.length > 0 && (
-                                <div className="change-list unload">
-                                  <div className="change-header">Auswechseln (-{step.unloadTools.length}):</div>
-                                  <div className="change-items">
-                                    {step.unloadTools.map(t => (
-                                      <div key={t.nr} className="change-item">
-                                        <span className="tool-nr">T{t.nr}</span>
-                                        <span className="tool-desc" title={t.desc}>{t.desc}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
+                        {/* Collapsed Compact Summary Row */}
+                        {!expandedCards[step.stepId] ? (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.35rem', fontSize: '0.68rem', color: '#64748b' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span>⏱ {step.setupTime}m / {step.prodTime}m</span>
+                              <span style={{ color: 'var(--border-dim)' }}>|</span>
+                              {step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
+                                <span style={{ color: '#10b981', fontWeight: 600 }}>✓ 0 Wechsel</span>
+                              ) : (
+                                <span style={{ color: '#38bdf8', fontWeight: 600 }}>🔧 +{step.loadTools.length} / -{step.unloadTools.length}</span>
                               )}
                             </div>
-                          )}
-                        </div>
+                            <button
+                              onClick={(e) => toggleCardDetails(e, step.stepId)}
+                              style={{
+                                background: 'rgba(255,255,255,0.03)',
+                                border: '1px solid var(--border-dim)',
+                                borderRadius: '4px',
+                                color: '#94a3b8',
+                                fontSize: '0.6rem',
+                                padding: '0.05rem 0.25rem',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.15rem'
+                              }}
+                              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#fff'; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.color = '#94a3b8'; }}
+                            >
+                              Details <ChevronDown size={8} />
+                            </button>
+                          </div>
+                        ) : (
+                          /* Expanded Details View */
+                          <div style={{ borderTop: '1px solid var(--border-dim)', paddingTop: '0.4rem', marginTop: '0.4rem', animation: 'fadeIn 0.15s ease-out' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                              <span style={{ fontSize: '0.65rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>Details</span>
+                              <button
+                                onClick={(e) => toggleCardDetails(e, step.stepId)}
+                                style={{
+                                  background: 'rgba(255,255,255,0.03)',
+                                  border: '1px solid var(--border-dim)',
+                                  borderRadius: '4px',
+                                  color: '#fff',
+                                  fontSize: '0.6rem',
+                                  padding: '0.05rem 0.25rem',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.15rem'
+                                }}
+                              >
+                                Schließen <ChevronUp size={8} />
+                              </button>
+                            </div>
+
+                            {/* Additional Information */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.4rem' }}>
+                              <div><strong>Schritt:</strong> {step.stepDesc}</div>
+                              {step.ncProgram && <div><strong>NC-Prog:</strong> <code style={{ color: '#38bdf8' }}>{step.ncProgram}</code></div>}
+                              {step.matchedListIdent && <div><strong>WinTool:</strong> {step.matchedListIdent}</div>}
+                              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.1rem' }}>
+                                <span className="card-badge" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.05rem 0.25rem', borderRadius: '3px', fontSize: '0.65rem' }}>Rüstzeit: {step.setupTime}m</span>
+                                <span className="card-badge" style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#34d399', padding: '0.05rem 0.25rem', borderRadius: '3px', fontSize: '0.65rem' }}>Prodzeit: {step.prodTime}m</span>
+                              </div>
+                            </div>
+
+                            {/* Rüstbedarf Details */}
+                            <div style={{ borderTop: '1px dotted var(--border-dim)', paddingTop: '0.35rem' }}>
+                              <div style={{ fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.25rem' }}>
+                                Rüstbedarf ({step.toolsCount} Wz. gesamt)
+                              </div>
+                              {step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: '#10b981' }}>
+                                  <CheckCircle2 size={10} />
+                                  <span>Übernahme (0 Wechsel)</span>
+                                </div>
+                              ) : (
+                                <>
+                                  {step.loadTools.length > 0 && (
+                                    <div style={{ marginBottom: '0.35rem' }}>
+                                      <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#34d399', marginBottom: '0.15rem' }}>Einwechseln (+{step.loadTools.length}):</div>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                        {step.loadTools.map(t => (
+                                          <div key={t.nr} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.62rem', background: 'rgba(255,255,255,0.01)', padding: '0.08rem 0.2rem', borderRadius: '2px' }}>
+                                            <span style={{ color: '#34d399', fontWeight: 700 }}>T{t.nr}</span>
+                                            <span style={{ color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={t.desc}>{t.desc}</span>
+                                            {t.dia && <span style={{ color: '#64748b' }}>Ø{t.dia}</span>}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {step.unloadTools.length > 0 && (
+                                    <div>
+                                      <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#f87171', marginBottom: '0.15rem' }}>Auswechseln (-{step.unloadTools.length}):</div>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                        {step.unloadTools.map(t => (
+                                          <div key={t.nr} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.62rem', background: 'rgba(255,255,255,0.01)', padding: '0.08rem 0.2rem', borderRadius: '2px' }}>
+                                            <span style={{ color: '#f87171', fontWeight: 700 }}>T{t.nr}</span>
+                                            <span style={{ color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={t.desc}>{t.desc}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))
                   )}
@@ -4121,12 +4232,17 @@ function PlanningTab() {
                 <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                   <span>Gesamter Arbeitsplan (Routing)</span>
                   <span style={{ fontSize: '0.7rem', background: 'rgba(255, 255, 255, 0.04)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#94a3b8' }}>
-                    {activeModalStep.entireArbeitsplan ? activeModalStep.entireArbeitsplan.length : 0} Operationen
+                    {loadingRouting ? 'Lade...' : `${fullRoutingSteps.length} Operationen`}
                   </span>
                 </div>
-                {activeModalStep.entireArbeitsplan && activeModalStep.entireArbeitsplan.length > 0 ? (
+                {loadingRouting ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span>Lade Arbeitsplan...</span>
+                  </div>
+                ) : fullRoutingSteps.length > 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem', border: '1px solid var(--border-dim)', padding: '0.75rem', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
-                    {activeModalStep.entireArbeitsplan.map((op, opIdx) => {
+                    {fullRoutingSteps.map((op, opIdx) => {
                       const isCurrent = op.stepId === activeModalStep.stepId;
                       const isCompleted = op.isCompleted;
                       const isExecuting = op.isExecuting;
@@ -4151,11 +4267,65 @@ function PlanningTab() {
                         statusBadge = <span style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', color: '#94a3b8', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>Offen</span>;
                       }
 
+                      let stepTypeBadge = null;
+                      if (op.stepTyp === 3) {
+                        stepTypeBadge = (
+                          <span style={{ 
+                            background: 'rgba(148, 163, 184, 0.12)', 
+                            border: '1px solid rgba(148, 163, 184, 0.25)', 
+                            color: '#94a3b8', 
+                            fontSize: '0.62rem', 
+                            padding: '0.05rem 0.25rem', 
+                            borderRadius: '3px',
+                            fontWeight: 600,
+                            marginRight: '0.35rem',
+                            flexShrink: 0
+                          }}>
+                            ℹ Info
+                          </span>
+                        );
+                      } else if (op.stepTyp === 2) {
+                        stepTypeBadge = (
+                          <span style={{ 
+                            background: 'rgba(249, 115, 22, 0.12)', 
+                            border: '1px solid rgba(249, 115, 22, 0.25)', 
+                            color: '#fdba74', 
+                            fontSize: '0.62rem', 
+                            padding: '0.05rem 0.25rem', 
+                            borderRadius: '3px',
+                            fontWeight: 600,
+                            marginRight: '0.35rem',
+                            flexShrink: 0
+                          }}>
+                            📦 Material
+                          </span>
+                        );
+                      } else if (op.stepTyp === 1) {
+                        stepTypeBadge = (
+                          <span style={{ 
+                            background: 'rgba(168, 85, 247, 0.12)', 
+                            border: '1px solid rgba(168, 85, 247, 0.25)', 
+                            color: '#c084fc', 
+                            fontSize: '0.62rem', 
+                            padding: '0.05rem 0.25rem', 
+                            borderRadius: '3px',
+                            fontWeight: 600,
+                            marginRight: '0.35rem',
+                            flexShrink: 0
+                          }}>
+                            🤝 Ext. Dienstl.
+                          </span>
+                        );
+                      }
+
                       return (
                         <div key={opIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: bgStyle, border: borderStyle, padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', transition: 'all 0.2s' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexGrow: 1, overflow: 'hidden' }}>
-                            <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px' }}>Pos {op.stepPos}</span>
-                            <span style={{ color: isCompleted ? '#64748b' : '#fff', fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={op.stepDesc}>{op.stepDesc}</span>
+                            <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px' }}>AS {op.stepPos}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexGrow: 1 }}>
+                              {stepTypeBadge}
+                              <span style={{ color: isCompleted ? '#64748b' : '#fff', fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={op.stepDesc}>{op.stepDesc}</span>
+                            </div>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
                             <span style={{ color: '#94a3b8', fontSize: '0.75rem' }} title="Zugeordnete Maschine/Pool">{op.machineName}</span>
