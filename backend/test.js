@@ -10,7 +10,8 @@ const sampleTexts = [
   'Fräsen RS2 NC-Programm:7964                VBZ1',
   'Fräsen CHIRON NC-Programm:1938-0091-SP3     Vorrichtung:1938-0091V1                VBZ4',
   'Fräsen CHIRON NC-Programm: 1938_0091_03_SP4         Vorrichtung:1938-0091V1                      VBZ3  Auf Symetrie achten!',
-  'Fräsen CHIRON NC-Programm: Dock-Lock 20-92 (für Ø48 Maß in Z46     Vorrichtung: Schraubstock                VBZ1   Fräsen Brother NC-Programm: 8488                VBZ1'
+  'Fräsen CHIRON NC-Programm: Dock-Lock 20-92 (für Ø48 Maß in Z46     Vorrichtung: Schraubstock                VBZ1   Fräsen Brother NC-Programm: 8488                VBZ1',
+  'Fräsen Programm: L093-0201-05-SP5                VBZ1'
 ];
 
 sampleTexts.forEach((text, i) => {

@@ -315,7 +315,7 @@ async function cacheSetupData() {
   const poolWT = await getPoolWT();
 
   console.log('Caching steps, tools, and night-run bookings in parallel...');
-  const [rows, mappingResult, toolsDetailResult, nightBookingsResult] = await Promise.all([
+  const [rows, mappingResult, toolsDetailResult, nightBookingsResult, fixtureLocationsResult] = await Promise.all([
     fetchActiveStepsAndMaterials(poolD4),
     poolWT.request().query('SELECT ToolListNr, ToolNr FROM [WTDATA].[dbo].[ToolList] WHERE ToolNr IS NOT NULL'),
     poolWT.request().query('SELECT Nr, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools]'),
@@ -327,8 +327,21 @@ async function cacheSetupData() {
       INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = zb.ZBU_IDPSKP
       WHERE DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) >= 22 OR DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6
       GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
+    `),
+    poolD4.request().query(`
+      SELECT ar.AR_NUMMER, lo.LO_NUMMER
+      FROM [D4].[dbo].[tARST] ar
+      INNER JOIN [D4].[dbo].[tLG_ORTE] lo ON lo.ID = ar.AR_IDLGOR
+      WHERE ar.AR_NUMMER IS NOT NULL
     `)
   ]);
+
+  const fixtureLocationMap = {};
+  fixtureLocationsResult.recordset.forEach(row => {
+    if (row.AR_NUMMER && row.LO_NUMMER) {
+      fixtureLocationMap[row.AR_NUMMER.trim().toLowerCase()] = row.LO_NUMMER.trim();
+    }
+  });
 
   const listToToolsMap = {};
   const toolUsageCounts = {};
@@ -503,6 +516,7 @@ async function cacheSetupData() {
         step.MatchedScore = match.score;
       }
       step.fixture = extractFixture(step.StepDesc);
+      step.fixtureLocation = step.fixture ? (fixtureLocationMap[step.fixture.trim().toLowerCase()] || extractLagerortFromDesc(step.StepDesc)) : null;
     }
 
     // Match master routing template step
@@ -556,7 +570,8 @@ async function cacheSetupData() {
     listToToolsMap,
     toolUsageCounts,
     toolsDetails,
-    listToMachineMap
+    listToMachineMap,
+    fixtureLocationMap
   };
   console.log('Setup reduction base data cached.');
 }
@@ -1303,11 +1318,11 @@ async function getCurrentToolsForMachine(machineName) {
 }
 
 // Genetic Algorithm sequencing
-function sequenceStepsGA(stepsList, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false) {
+function sequenceStepsGA(stepsList, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false, fixtureWeight = 1.5) {
   if (stepsList.length <= 1) return stepsList;
 
   function evaluatePermutation(permutation) {
-    return evaluateSequence(permutation, initialMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    return evaluateSequence(permutation, initialMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
   }
 
   const popSize = 40;
@@ -1428,11 +1443,11 @@ function sequenceStepsGA(stepsList, initialMagazine, magazineSize, listToToolsMa
   return population[bestIdx];
 }
 
-function sequenceStepsHybrid(stepsList, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false) {
+function sequenceStepsHybrid(stepsList, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false, fixtureWeight = 1.5) {
   if (stepsList.length <= 1) return stepsList;
 
   function evaluatePermutation(permutation) {
-    return evaluateSequence(permutation, initialMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    return evaluateSequence(permutation, initialMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
   }
 
   const popSize = 40;
@@ -1582,11 +1597,11 @@ function sequenceStepsHybrid(stepsList, initialMagazine, magazineSize, listToToo
   return population[bestIdx];
 }
 
-function sequenceStepsRL(stepsList, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false) {
+function sequenceStepsRL(stepsList, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false, fixtureWeight = 1.5) {
   if (stepsList.length <= 1) return stepsList;
 
   function evaluateSeq(sequence) {
-    return evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    return evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
   }
 
   const times = stepsList.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
@@ -1629,7 +1644,7 @@ function sequenceStepsRL(stepsList, initialMagazine, magazineSize, listToToolsMa
         
         let fixturePenalty = 0;
         if (optimizeFixture && lastFixture !== null && step.fixture !== null && step.fixture !== lastFixture) {
-          fixturePenalty = 1.5;
+          fixturePenalty = fixtureWeight;
         }
 
         // Q-value score: higher score is better.
@@ -1734,7 +1749,7 @@ function sequenceStepsMIP(stepsList, initialMagazine, magazineSize, listToToolsM
   return bestSequence || stepsList;
 }
 
-function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false) {
+function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false, fixtureWeight = 1.5) {
   if (sequence.length <= 1) return 0;
   let currentMag = [...initialMagazine];
   let changes = 0;
@@ -1781,7 +1796,7 @@ function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMa
   });
 
   const scaledPenalty = N > 1 ? (penalty / (N * N)) * 0.45 : 0;
-  return changes + scaledPenalty + (optimizeFixture ? fixtureChanges * 1.5 : 0);
+  return changes + scaledPenalty + (optimizeFixture ? fixtureChanges * fixtureWeight : 0);
 }
 
 function getFremdleistungType(desc) {
@@ -1890,16 +1905,16 @@ function sequenceNonMachining(stepsList, orderStepsMap) {
 }
 
 // Helper to sequence steps using selected algorithm and simulate magazine transition
-function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap, algo = 'greedy', optimizeFixture = false) {
+function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap, algo = 'greedy', optimizeFixture = false, fixtureWeight = 1.5) {
   if (stepsList.length === 0) {
     return { sequenced: [], finalMagazine: currentMagazine };
   }
 
   let ordered = [];
   if (algo === 'ga') {
-    ordered = sequenceStepsGA(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    ordered = sequenceStepsGA(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
   } else if (algo === 'rl') {
-    ordered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    ordered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
   } else if (algo === 'hybrid') {
     // 1. Run Greedy
     let remaining = [...stepsList];
@@ -1916,7 +1931,7 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
         
         let score = misses.length;
         if (optimizeFixture && lastFixture !== null && step.fixture !== null && step.fixture !== lastFixture) {
-          score += 1.5;
+          score += fixtureWeight;
         }
 
         if (score < minScore) {
@@ -1940,15 +1955,15 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
     }
 
     // 2. Run Hybrid GA
-    const hybridOrdered = sequenceStepsHybrid(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    const hybridOrdered = sequenceStepsHybrid(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
 
     // 3. Run Reinforcement Learning
-    const rlOrdered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    const rlOrdered = sequenceStepsRL(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
 
     // 4. Evaluate and choose the best sequence
-    const greedyScore = evaluateSequence(greedyOrdered, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
-    const hybridScore = evaluateSequence(hybridOrdered, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
-    const rlScore = evaluateSequence(rlOrdered, currentMagazine, magazineSize, listToToolsMap, optimizeFixture);
+    const greedyScore = evaluateSequence(greedyOrdered, currentMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
+    const hybridScore = evaluateSequence(hybridOrdered, currentMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
+    const rlScore = evaluateSequence(rlOrdered, currentMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
 
     console.log(`[Hybrid Selection] Greedy Score: ${greedyScore.toFixed(4)}, GA/Hybrid Score: ${hybridScore.toFixed(4)}, RL Score: ${rlScore.toFixed(4)}`);
     
@@ -1983,7 +1998,7 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
         
         let score = misses.length;
         if (optimizeFixture && lastFixture !== null && step.fixture !== null && step.fixture !== lastFixture) {
-          score += 1.5;
+          score += fixtureWeight;
         }
 
         if (score < minScore) {
@@ -2080,13 +2095,44 @@ function calculateToolChanges(stepsList, initialMagazine, magazineSize, listToTo
 function extractFixture(desc) {
   if (!desc) return null;
   
-  // 1. Search for any VBZ identifier (e.g. VBZ4, VBZ-1, VBZ_3) first
+  // 1. Search for a specific versioned fixture code first (e.g. 12359V1, M2080045V1, L254-0201V2, LTM0038-V1)
+  const specificFixtureMatch = desc.match(/\b([a-zA-Z0-9_-]*\d+-?[vV]\d+)\b/);
+  if (specificFixtureMatch) {
+    return specificFixtureMatch[1].trim();
+  }
+  
+  // 2. Search for explicit "Vorrichtung:" prefix anywhere in the text
+  const vorrichtungMatch = desc.match(/vorrichtung\s*:\s*([^\r\n\t]+)/i);
+  if (vorrichtungMatch) {
+    let val = vorrichtungMatch[1].trim();
+    // Truncate at double spaces
+    const doubleSpaceIdx = val.indexOf('  ');
+    if (doubleSpaceIdx !== -1) {
+      val = val.substring(0, doubleSpaceIdx).trim();
+    }
+    // Truncate if VBZ or Lagerort starts in the value
+    const vbzIdx = val.toLowerCase().indexOf('vbz');
+    if (vbzIdx !== -1) {
+      val = val.substring(0, vbzIdx).trim();
+    }
+    const lagerortIdx = val.toLowerCase().indexOf('lagerort');
+    if (lagerortIdx !== -1) {
+      val = val.substring(0, lagerortIdx).trim();
+    }
+    // Remove trailing semicolons/commas/dashes
+    val = val.replace(/[;,-]$/, '').trim();
+    if (val !== '') {
+      return val;
+    }
+  }
+  
+  // 3. Search for any VBZ identifier (e.g. VBZ4, VBZ-1, VBZ_3) third
   const vbzMatch = desc.match(/VBZ\s*[0-9a-zA-Z_-]+/i);
   if (vbzMatch) {
     return vbzMatch[0].trim();
   }
   
-  // 2. Fallback: Search line-by-line for "Vorrichtung: <val>"
+  // 4. Fallback line-by-line search
   const lines = desc.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
@@ -2101,6 +2147,27 @@ function extractFixture(desc) {
   return null;
 }
 
+function extractLagerortFromDesc(desc) {
+  if (!desc) return null;
+  const match = desc.match(/lagerort\s*:\s*([^\r\n\t]+)/i);
+  if (match) {
+    let val = match[1].trim();
+    const doubleSpaceIdx = val.indexOf('  ');
+    if (doubleSpaceIdx !== -1) {
+      val = val.substring(0, doubleSpaceIdx).trim();
+    }
+    const vbzIdx = val.toLowerCase().indexOf('vbz');
+    if (vbzIdx !== -1) {
+      val = val.substring(0, vbzIdx).trim();
+    }
+    val = val.replace(/[;,-]$/, '').trim();
+    if (val !== '') {
+      return val;
+    }
+  }
+  return null;
+}
+
 // 7b. Planning Tab Kanban Data Endpoint
 app.get('/api/planning', async (req, res) => {
   try {
@@ -2109,9 +2176,10 @@ app.get('/api/planning', async (req, res) => {
       await cacheSetupData();
     }
 
-    const { startDate, optimize, algo, optimizeFixture } = req.query;
+    const { startDate, optimize, algo, optimizeFixture, fixtureWeight } = req.query;
     const shouldOptimizeFixture = optimizeFixture === 'true';
-    let { steps, listToToolsMap, toolsDetails, listToMachineMap } = cachedSetupData;
+    const parsedFixtureWeight = fixtureWeight !== undefined ? parseFloat(fixtureWeight) : 1.5;
+    let { steps, listToToolsMap, toolsDetails, listToMachineMap, fixtureLocationMap } = cachedSetupData;
 
     const orderStepsMap = {};
     steps.forEach(s => {
@@ -2392,30 +2460,30 @@ app.get('/api/planning', async (req, res) => {
 
               if (isChironOrBrother) {
                 if (nightSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
+                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
                 if (normalSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
+                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
               } else {
                 if (normalSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
+                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
                 if (nightSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
+                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
               }
               runningMagazine = currentMag;
             } else {
-              const { sequenced, finalMagazine } = sequenceSteps(dayCandidates, runningMagazine, mSize, listToToolsMap, algorithm, shouldOptimizeFixture);
+              const { sequenced, finalMagazine } = sequenceSteps(dayCandidates, runningMagazine, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
               sequencedSteps = sequenced;
               runningMagazine = finalMagazine;
             }
@@ -2570,7 +2638,8 @@ app.get('/api/planning', async (req, res) => {
             masterMatchedType: s.masterMatchedType || null,
             masterMatchedScore: s.masterMatchedScore || null,
             color: s.color,
-            fixture: extractFixture(s.StepDesc),
+            fixture: s.fixture || extractFixture(s.StepDesc),
+            fixtureLocation: s.fixtureLocation || (s.fixture ? (fixtureLocationMap[s.fixture.trim().toLowerCase()] || extractLagerortFromDesc(s.StepDesc)) : null),
             entireArbeitsplan,
             missesCount: s.loadTools ? s.loadTools.length : 0,
             loadTools: (s.loadTools || []).map(tNr => {
@@ -3774,6 +3843,23 @@ app.get('/api/inventory/machine/:name/simulation', async (req, res) => {
   }
 });
 
+function getDMSCredentials() {
+  if (process.env.NODE_ENV === 'production') {
+    const domain = process.env.USERDOMAIN || 'rr';
+    const user = process.env.USERNAME || 'simon';
+    const pass = process.env.DMS_PASSWORD || '88171';
+    return {
+      username: `${domain}\\${user}`,
+      password: pass
+    };
+  } else {
+    return {
+      username: process.env.DMS_USERNAME || 'rr\\simon',
+      password: process.env.DMS_PASSWORD || '88171'
+    };
+  }
+}
+
 async function fetchDrawingFromDMS(articleId, index = 0, fixture = null) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   
@@ -3788,8 +3874,9 @@ async function fetchDrawingFromDMS(articleId, index = 0, fixture = null) {
     downloadFetch: null
   };
 
+  const { username, password } = getDMSCredentials();
   const loginRes = await fetch(diag.loginUrl, {
-    headers: { 'Authorization': 'Basic ' + Buffer.from('rr\\simon:88171').toString('base64') }
+    headers: { 'Authorization': 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64') }
   });
   diag.loginStatus = loginRes.status;
   
@@ -3953,8 +4040,9 @@ app.get('/api/dms/drawing/:articleId/meta', async (req, res) => {
     
     // Login to DMS
     const loginUrl = 'https://srvdms/identityprovider/login';
+    const { username, password } = getDMSCredentials();
     const loginRes = await fetch(loginUrl, {
-      headers: { 'Authorization': 'Basic ' + Buffer.from('rr\\simon:88171').toString('base64') }
+      headers: { 'Authorization': 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64') }
     });
     
     if (loginRes.status !== 204) {

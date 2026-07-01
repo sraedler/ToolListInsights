@@ -3874,7 +3874,7 @@ function MissingDataTab() {
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'left' }}>
                               <thead>
                                 <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', color: '#64748b', fontWeight: 600 }}>
-                                  <th style={{ padding: '0.4rem 0.5rem' }}>Pos</th>
+                                  <th style={{ padding: '0.4rem 0.5rem' }}>AS</th>
                                   <th style={{ padding: '0.4rem 0.5rem' }}>Schritt</th>
                                   <th style={{ padding: '0.4rem 0.5rem' }}>D4-ID</th>
                                   <th style={{ padding: '0.4rem 0.5rem' }}>Maschine</th>
@@ -3931,7 +3931,12 @@ function MissingDataTab() {
                                     </td>
                                     <td style={{ padding: '0.5rem' }}>
                                       {s.fixture ? (
-                                        <span style={{ color: '#e9d5ff', fontWeight: 600 }}>🛠️ {s.fixture}</span>
+                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                          <span style={{ color: '#e9d5ff', fontWeight: 600 }}>🛠️ {s.fixture}</span>
+                                          {s.fixtureLocation && (
+                                            <span style={{ fontSize: '0.7rem', color: '#a7f3d0' }}>📍 {s.fixtureLocation}</span>
+                                          )}
+                                        </div>
                                       ) : (
                                         <span style={{ background: 'rgba(168, 85, 247, 0.1)', color: '#d8b4fe', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600 }}>Vorrichtung fehlt</span>
                                       )}
@@ -3965,6 +3970,7 @@ function PlanningTab({ mode = 'machining' }) {
   const [optimize, setOptimize] = useState(true);
   const [optimizeNightRun, setOptimizeNightRun] = useState(true);
   const [optimizeFixture, setOptimizeFixture] = useState(true);
+  const [fixtureWeight, setFixtureWeight] = useState(50); // weighting slider (0 = tools only, 50 = balanced standard, 100 = fixtures only)
   const [selectedMachine, setSelectedMachine] = useState('All');
   const [activeModalStep, setActiveModalStep] = useState(null);
   const [hideExecuting, setHideExecuting] = useState(false);
@@ -4131,7 +4137,11 @@ function PlanningTab({ mode = 'machining' }) {
     setLoading(true);
     setError(null);
     try {
-      let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}&optimizeFixture=${optimizeFixture}`;
+      const calculatedWeight = (fixtureWeight <= 50 
+        ? (fixtureWeight / 50) * 1.5 
+        : 1.5 + ((fixtureWeight - 50) / 50) * 8.5
+      ).toFixed(2);
+      let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}&optimizeFixture=${optimizeFixture}&fixtureWeight=${calculatedWeight}`;
       if (startDate) {
         url += `&startDate=${startDate}`;
       }
@@ -4160,7 +4170,7 @@ function PlanningTab({ mode = 'machining' }) {
 
   useEffect(() => {
     fetchPlanningData();
-  }, [optimize, optimizeNightRun, algo, optimizeFixture]);
+  }, [optimize, optimizeNightRun, algo, optimizeFixture, fixtureWeight]);
 
   const handleDateChange = (e) => {
     setStartDate(e.target.value);
@@ -4356,6 +4366,51 @@ function PlanningTab({ mode = 'machining' }) {
                   </label>
                 )}
               </div>
+
+              {optimize && optimizeFixture && (
+                <div style={{
+                  margin: '0.25rem 0',
+                  background: 'rgba(255, 255, 255, 0.02)',
+                  border: '1px solid rgba(255, 255, 255, 0.06)',
+                  borderRadius: '8px',
+                  padding: '0.35rem 0.6rem',
+                  maxWidth: '550px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.6rem',
+                  flexWrap: 'wrap'
+                }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '0.25rem' }} title="Steuert das Verhältnis zwischen Werkzeugwechselminimierung (Wzg.) und Vorrichtungswechselminimierung (Vorr.)">
+                    ⚖️ Gewichtung:
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexGrow: 1, minWidth: '150px' }}>
+                    <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>Werkzeug</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={fixtureWeight}
+                      onChange={(e) => setFixtureWeight(parseInt(e.target.value))}
+                      className="custom-range"
+                      title={
+                        fixtureWeight === 50 ? "Ausgeglichene Gewichtung (Standard)." :
+                        fixtureWeight < 50 ? `${100 - fixtureWeight}% Werkzeug / ${fixtureWeight}% Vorrichtung (${fixtureWeight === 0 ? 'Ignoriert Vorrichtungswechsel' : 'Werkzeugfokus'})` :
+                        `${100 - fixtureWeight}% Werkzeug / ${fixtureWeight}% Vorrichtung (Vorrichtungsfokus)`
+                      }
+                      style={{
+                        flexGrow: 1,
+                        background: `linear-gradient(to right, #3b82f6 0%, #a855f7 ${fixtureWeight}%, rgba(255,255,255,0.08) ${fixtureWeight}%, rgba(255,255,255,0.08) 100%)`,
+                        height: '5px'
+                      }}
+                    />
+                    <span style={{ fontSize: '0.65rem', color: '#c084fc' }}>Vorrichtung</span>
+                  </div>
+                  <span style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 700, minWidth: '115px', textAlign: 'right' }}>
+                    {100 - fixtureWeight}% Wzg / {fixtureWeight}% Vorr
+                  </span>
+                </div>
+              )}
+
               <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
                 Sortiert nach Werkzeugüberschneidung. Die Nachtlauf-Optimierung erkennt historische Nachtlauf-Kompatibilität und priorisiert diese entsprechend.
               </span>
@@ -5297,10 +5352,17 @@ function PlanningTab({ mode = 'machining' }) {
 
               {/* Row 6: Vorrichtung (Fixture) */}
               {activeModalStep.fixture && (
-                <div style={{ background: 'rgba(168, 85, 247, 0.03)', border: '1px solid rgba(168, 85, 247, 0.15)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Spannmittel / Vorrichtung</div>
-                  <div style={{ fontSize: '0.95rem', color: '#e9d5ff', fontWeight: 700 }}>
-                    🛠️ {activeModalStep.fixture}
+                <div style={{ background: 'rgba(168, 85, 247, 0.03)', border: '1px solid rgba(168, 85, 247, 0.15)', padding: '0.75rem 1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 600, textTransform: 'uppercase' }}>Spannmittel / Vorrichtung</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.95rem', color: '#e9d5ff', fontWeight: 700 }}>
+                      🛠️ {activeModalStep.fixture}
+                    </span>
+                    {activeModalStep.fixtureLocation && (
+                      <span style={{ fontSize: '0.8rem', color: '#a7f3d0', fontWeight: 600, background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '0.15rem 0.4rem', borderRadius: '6px' }}>
+                        📍 Lagerort: {activeModalStep.fixtureLocation}
+                      </span>
+                    )}
                   </div>
                 </div>
               )}

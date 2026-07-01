@@ -11,6 +11,9 @@ services:
     environment:
       - PORT=5000
       - NODE_ENV=production
+      - USERNAME
+      - USERDOMAIN
+      - DMS_PASSWORD
       # Environment parameters for TCP connection to MS SQL Server
       - DB_D4_SERVER=srvdms\D4
       - DB_D4_DATABASE=D4

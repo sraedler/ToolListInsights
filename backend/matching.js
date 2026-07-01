@@ -5,8 +5,8 @@
 function extractNCPrograms(text) {
   if (!text) return [];
   const results = [];
-  // Regex to match "NC-Programm:" followed by the text
-  const regex = /NC-Programm:\s*([^\r\n\t]+)/gi;
+  // Regex to match "NC-Programm:" or "Programm:" followed by the text
+  const regex = /(?:NC-)?Programm:\s*([^\r\n\t]+)/gi;
   let match;
   
   while ((match = regex.exec(text)) !== null) {
