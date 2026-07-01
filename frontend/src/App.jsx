@@ -3985,6 +3985,7 @@ function PlanningTab({ mode = 'machining' }) {
   const [dmsSliderOpen, setDmsSliderOpen] = useState(false);
   const [dmsSliderList, setDmsSliderList] = useState([]);
   const [dmsSliderIndex, setDmsSliderIndex] = useState(0);
+  const [useNativePdf, setUseNativePdf] = useState(true);
 
   // Sub-documents per article states
   const [dmsSubDocs, setDmsSubDocs] = useState([]);
@@ -4004,6 +4005,11 @@ function PlanningTab({ mode = 'machining' }) {
       setDmsSliderIndex(0);
     }
     setDmsSliderOpen(true);
+  };
+
+  const closeActiveModal = () => {
+    setActiveModalStep(null);
+    setDmsSliderOpen(false);
   };
 
   const fetchDmsMetadata = async (articleId, fixture = null) => {
@@ -5178,7 +5184,7 @@ function PlanningTab({ mode = 'machining' }) {
           zIndex: 9999,
           padding: dmsSliderOpen ? '1rem' : '2rem',
           transition: 'all 0.3s ease'
-        }} onClick={() => setActiveModalStep(null)}>
+        }} onClick={closeActiveModal}>
           <div style={{
             background: 'var(--bg-card)',
             border: '1px solid var(--border-dim)',
@@ -5195,7 +5201,7 @@ function PlanningTab({ mode = 'machining' }) {
             
             {/* Close Button */}
             <button
-              onClick={() => setActiveModalStep(null)}
+              onClick={closeActiveModal}
               style={{
                 position: 'absolute',
                 top: '1.25rem',
@@ -5801,30 +5807,52 @@ function PlanningTab({ mode = 'machining' }) {
             }}>
               <div>
                 <span style={{ fontSize: '0.7rem', color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  d.velop DMS Zeichnungs-Explorer
+                  Zeichnungs-Explorer
                 </span>
                 <h4 style={{ color: '#fff', margin: '0.1rem 0 0 0', fontSize: '1.05rem', fontWeight: 600 }}>
                   {currentItem.articleName}
                 </h4>
               </div>
-              <button 
-                onClick={() => setDmsSliderOpen(false)}
-                style={{
-                  background: 'rgba(239, 68, 68, 0.1)',
-                  color: '#f87171',
-                  border: '1px solid rgba(239, 68, 68, 0.2)',
-                  padding: '0.4rem 0.8rem',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  transition: 'all 0.2s'
-                }}
-                onMouseEnter={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
-              >
-                Schließen
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button
+                  onClick={() => setUseNativePdf(prev => !prev)}
+                  style={{
+                    background: useNativePdf ? 'rgba(56, 189, 248, 0.08)' : 'rgba(16, 185, 129, 0.08)',
+                    color: useNativePdf ? '#38bdf8' : '#34d399',
+                    border: useNativePdf ? '1px solid rgba(56, 189, 248, 0.15)' : '1px solid rgba(16, 185, 129, 0.15)',
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem'
+                  }}
+                  title={useNativePdf ? "Wechseln zu integriertem HTML5 Viewer (Keine Installation nötig)" : "Wechseln zu System-Browser Viewer"}
+                >
+                  <span>{useNativePdf ? '🖥️ Browser-Viewer' : '🎨 HTML5-Viewer'}</span>
+                </button>
+                <button 
+                  onClick={() => setDmsSliderOpen(false)}
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.1)',
+                    color: '#f87171',
+                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
+                >
+                  Schließen
+                </button>
+              </div>
             </div>
             
             {/* Slider Controls */}
@@ -5936,21 +5964,188 @@ function PlanningTab({ mode = 'machining' }) {
             
             {/* Embedded PDF iframe */}
             <div style={{ flex: 1, position: 'relative', background: '#020617' }}>
-              <iframe
-                src={iframeSrc}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  border: 'none',
-                  background: '#020617'
-                }}
-                title="DMS PDF Viewer"
-              />
+              {useNativePdf ? (
+                <iframe
+                  src={iframeSrc}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    border: 'none',
+                    background: '#020617'
+                  }}
+                  title="DMS PDF Viewer"
+                />
+              ) : (
+                <PDFCanvasViewer url={iframeSrc} />
+              )}
             </div>
           </div>
         </>
         );
       })()}
+    </div>
+  );
+}
+
+function PDFCanvasViewer({ url }) {
+  const [pdf, setPdf] = useState(null);
+  const [numPages, setNumPages] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [scale, setScale] = useState(1.25);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const canvasRef = useRef(null);
+  const renderTaskRef = useRef(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    setPdf(null);
+    
+    if (!window.pdfjsLib) {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js';
+      script.onload = () => {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+        loadPdf();
+      };
+      script.onerror = () => {
+        setError('PDF.js CDN konnte nicht geladen werden.');
+        setLoading(false);
+      };
+      document.body.appendChild(script);
+    } else {
+      loadPdf();
+    }
+
+    function loadPdf() {
+      const loadingTask = window.pdfjsLib.getDocument({
+        url: url,
+        withCredentials: false
+      });
+      loadingTask.promise.then(
+        (loadedPdf) => {
+          setPdf(loadedPdf);
+          setNumPages(loadedPdf.numPages);
+          setCurrentPage(1);
+          setLoading(false);
+        },
+        (err) => {
+          console.error('Error loading PDF with PDF.js:', err);
+          setError(err.message || 'Fehler beim Laden des PDFs.');
+          setLoading(false);
+        }
+      );
+    }
+  }, [url]);
+
+  useEffect(() => {
+    if (!pdf) return;
+    
+    if (renderTaskRef.current) {
+      renderTaskRef.current.cancel();
+    }
+    
+    pdf.getPage(currentPage).then((page) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const context = canvas.getContext('2d');
+      
+      const viewport = page.getViewport({ scale: scale });
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+
+      const renderContext = {
+        canvasContext: context,
+        viewport: viewport
+      };
+      
+      const renderTask = page.render(renderContext);
+      renderTaskRef.current = renderTask;
+      
+      renderTask.promise.then(
+        () => {
+          renderTaskRef.current = null;
+        },
+        (err) => {
+          if (err.name !== 'RenderingCancelledException') {
+            console.error('Render error:', err);
+          }
+        }
+      );
+    });
+    
+    return () => {
+      if (renderTaskRef.current) {
+        renderTaskRef.current.cancel();
+      }
+    };
+  }, [pdf, currentPage, scale]);
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#94a3b8', gap: '1rem', background: '#020617' }}>
+        <div style={{ width: '30px', height: '30px', border: '3px solid rgba(56,189,248,0.1)', borderTop: '3px solid #38bdf8', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+        <style>{`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}</style>
+        <span style={{ fontSize: '0.85rem' }}>Lade Dokument mit PDF.js...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#f87171', padding: '2rem', textAlign: 'center', background: '#020617', gap: '0.75rem' }}>
+        <span>⚠️ PDF.js Fehler: {error}</span>
+        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Nutzen Sie stattdessen den Browser-Viewer im Header-Menü.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0f172a' }}>
+      {/* Viewer controls */}
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem', padding: '0.5rem', background: '#1e293b', borderBottom: '1px solid rgba(255,255,255,0.05)', flexWrap: 'wrap' }}>
+        <button 
+          disabled={currentPage <= 1} 
+          onClick={() => setCurrentPage(prev => prev - 1)}
+          style={{ background: currentPage <= 1 ? 'rgba(255,255,255,0.01)' : 'rgba(255,255,255,0.06)', color: currentPage <= 1 ? '#475569' : '#fff', border: '1px solid rgba(255,255,255,0.08)', padding: '0.25rem 0.5rem', borderRadius: '4px', cursor: currentPage <= 1 ? 'not-allowed' : 'pointer', fontSize: '0.75rem' }}
+        >
+          ◀ Zurück
+        </button>
+        <span style={{ color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 600 }}>
+          Seite {currentPage} von {numPages}
+        </span>
+        <button 
+          disabled={currentPage >= numPages} 
+          onClick={() => setCurrentPage(prev => prev + 1)}
+          style={{ background: currentPage >= numPages ? 'rgba(255,255,255,0.01)' : 'rgba(255,255,255,0.06)', color: currentPage >= numPages ? '#475569' : '#fff', border: '1px solid rgba(255,255,255,0.08)', padding: '0.25rem 0.5rem', borderRadius: '4px', cursor: currentPage >= numPages ? 'not-allowed' : 'pointer', fontSize: '0.75rem' }}
+        >
+          Weiter ▶
+        </button>
+        <div style={{ width: '1px', height: '15px', background: 'rgba(255,255,255,0.1)' }} />
+        <button 
+          onClick={() => setScale(prev => Math.max(prev - 0.25, 0.5))}
+          style={{ background: 'rgba(255,255,255,0.06)', color: '#fff', border: '1px solid rgba(255,255,255,0.08)', padding: '0.25rem 0.5rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem' }}
+        >
+          🔍 Verkleinern
+        </button>
+        <span style={{ color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 600, minWidth: '40px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
+        <button 
+          onClick={() => setScale(prev => Math.min(prev + 0.25, 3))}
+          style={{ background: 'rgba(255,255,255,0.06)', color: '#fff', border: '1px solid rgba(255,255,255,0.08)', padding: '0.25rem 0.5rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem' }}
+        >
+          Vergrößern 🔍
+        </button>
+      </div>
+      {/* Canvas container */}
+      <div style={{ flex: 1, overflow: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '1.5rem', background: '#020617' }}>
+        <canvas ref={canvasRef} style={{ boxShadow: '0 10px 30px rgba(0,0,0,0.5)', background: '#fff', borderRadius: '4px' }} />
+      </div>
     </div>
   );
 }
