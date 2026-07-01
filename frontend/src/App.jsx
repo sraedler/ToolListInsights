@@ -6109,18 +6109,18 @@ function PDFCanvasViewer({ url, dmsSliderFullscreen }) {
     pdf.getPage(currentPage).then((page) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const context = canvas.getContext('2d');
       
       const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
       const viewport = page.getViewport({ scale: scale });
       
-      canvas.width = viewport.width * pixelRatio;
-      canvas.height = viewport.height * pixelRatio;
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
-
+      // Double-buffering: Render to an off-screen canvas in the background to prevent flickering
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = viewport.width * pixelRatio;
+      tempCanvas.height = viewport.height * pixelRatio;
+      const tempContext = tempCanvas.getContext('2d');
+      
       const renderContext = {
-        canvasContext: context,
+        canvasContext: tempContext,
         viewport: viewport,
         transform: [pixelRatio, 0, 0, pixelRatio, 0, 0]
       };
@@ -6130,6 +6130,15 @@ function PDFCanvasViewer({ url, dmsSliderFullscreen }) {
       
       renderTask.promise.then(
         () => {
+          // Render finished! Draw the buffered content onto the visible canvas in a single frame
+          canvas.width = tempCanvas.width;
+          canvas.height = tempCanvas.height;
+          canvas.style.width = `${viewport.width}px`;
+          canvas.style.height = `${viewport.height}px`;
+          
+          const context = canvas.getContext('2d');
+          context.drawImage(tempCanvas, 0, 0);
+          
           renderTaskRef.current = null;
         },
         (err) => {
