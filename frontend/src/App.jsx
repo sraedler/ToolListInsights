@@ -3986,16 +3986,19 @@ function PlanningTab({ mode = 'machining' }) {
   const [dmsSliderList, setDmsSliderList] = useState([]);
   const [dmsSliderIndex, setDmsSliderIndex] = useState(0);
   const [useNativePdf, setUseNativePdf] = useState(true);
+  const [dmsSliderFullscreen, setDmsSliderFullscreen] = useState(false);
 
   // Sub-documents per article states
   const [dmsSubDocs, setDmsSubDocs] = useState([]);
   const [dmsSubIndex, setDmsSubIndex] = useState(0);
   const [loadingDmsMeta, setLoadingDmsMeta] = useState(false);
+  const [dmsResolvedArticleNumber, setDmsResolvedArticleNumber] = useState('');
 
   const [dmsSliderFixture, setDmsSliderFixture] = useState(null);
 
   const openDmsSlider = (articleId, articleName, customList = null, fixture = null) => {
     setDmsSliderFixture(fixture || null);
+    setDmsResolvedArticleNumber('');
     if (customList && customList.length > 0) {
       setDmsSliderList(customList);
       const idx = customList.findIndex(item => item.articleId === articleId);
@@ -4010,6 +4013,7 @@ function PlanningTab({ mode = 'machining' }) {
   const closeActiveModal = () => {
     setActiveModalStep(null);
     setDmsSliderOpen(false);
+    setDmsSliderFullscreen(false);
   };
 
   const fetchDmsMetadata = async (articleId, fixture = null) => {
@@ -4017,6 +4021,7 @@ function PlanningTab({ mode = 'machining' }) {
       setLoadingDmsMeta(true);
       setDmsSubDocs([]);
       setDmsSubIndex(0);
+      setDmsResolvedArticleNumber('');
       
       let url = `${API_BASE}/dms/drawing/${encodeURIComponent(articleId)}/meta`;
       if (fixture) {
@@ -4028,6 +4033,9 @@ function PlanningTab({ mode = 'machining' }) {
         const data = await res.json();
         if (data.documents) {
           setDmsSubDocs(data.documents);
+        }
+        if (data.resolvedArticleNumber) {
+          setDmsResolvedArticleNumber(data.resolvedArticleNumber);
         }
       }
     } catch (err) {
@@ -5786,10 +5794,10 @@ function PlanningTab({ mode = 'machining' }) {
               position: 'fixed',
               top: 0,
               right: 0,
-            width: '55%',
-            height: '100%',
-            background: '#0f172a',
-            borderLeft: '1px solid rgba(255,255,255,0.1)',
+              width: dmsSliderFullscreen ? '100%' : '55%',
+              height: '100%',
+              background: '#0f172a',
+              borderLeft: '1px solid rgba(255,255,255,0.1)',
             boxShadow: '-10px 0 30px rgba(0,0,0,0.5)',
             zIndex: 99999,
             display: 'flex',
@@ -5810,10 +5818,30 @@ function PlanningTab({ mode = 'machining' }) {
                   Zeichnungs-Explorer
                 </span>
                 <h4 style={{ color: '#fff', margin: '0.1rem 0 0 0', fontSize: '1.05rem', fontWeight: 600 }}>
-                  {currentItem.articleName}
+                  Artikel: {dmsResolvedArticleNumber || currentItem.articleId}
                 </h4>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button
+                  onClick={() => setDmsSliderFullscreen(prev => !prev)}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    color: '#fff',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem'
+                  }}
+                  title={dmsSliderFullscreen ? "Viewer verkleinern (55% Breite)" : "Viewer maximieren (Ganze Breite)"}
+                >
+                  <span>{dmsSliderFullscreen ? '🗗 Verkleinern' : '🗖 Maximieren'}</span>
+                </button>
                 <button
                   onClick={() => setUseNativePdf(prev => !prev)}
                   style={{
@@ -5963,7 +5991,7 @@ function PlanningTab({ mode = 'machining' }) {
             )}
             
             {/* Embedded PDF iframe */}
-            <div style={{ flex: 1, position: 'relative', background: '#020617' }}>
+            <div style={{ flex: 1, position: 'relative', background: '#020617', minHeight: 0 }}>
               {useNativePdf ? (
                 <iframe
                   src={iframeSrc}
@@ -5976,7 +6004,7 @@ function PlanningTab({ mode = 'machining' }) {
                   title="DMS PDF Viewer"
                 />
               ) : (
-                <PDFCanvasViewer url={iframeSrc} />
+                <PDFCanvasViewer url={iframeSrc} dmsSliderFullscreen={dmsSliderFullscreen} />
               )}
             </div>
           </div>
@@ -5987,15 +6015,19 @@ function PlanningTab({ mode = 'machining' }) {
   );
 }
 
-function PDFCanvasViewer({ url }) {
+function PDFCanvasViewer({ url, dmsSliderFullscreen }) {
   const [pdf, setPdf] = useState(null);
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
-  const [scale, setScale] = useState(1.25);
+  const [scale, setScale] = useState(1.0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const renderTaskRef = useRef(null);
+  
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
 
   useEffect(() => {
     setLoading(true);
@@ -6006,7 +6038,10 @@ function PDFCanvasViewer({ url }) {
       const script = document.createElement('script');
       script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js';
       script.onload = () => {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+        // Load worker script cross-origin via Blob URL to execute in a separate worker thread
+        const workerCode = `importScripts('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js');`;
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
         loadPdf();
       };
       script.onerror = () => {
@@ -6039,6 +6074,31 @@ function PDFCanvasViewer({ url }) {
     }
   }, [url]);
 
+  // Auto-fit scale to fit container height/width exactly
+  useEffect(() => {
+    if (!pdf) return;
+    
+    const timer = setTimeout(() => {
+      pdf.getPage(currentPage).then((page) => {
+        const container = containerRef.current;
+        if (!container) return;
+        
+        const viewport1 = page.getViewport({ scale: 1 });
+        const padding = 32;
+        const widthScale = (container.clientWidth - padding) / viewport1.width;
+        const heightScale = (container.clientHeight - padding) / viewport1.height;
+        
+        // Choose the smaller scale to fit the entire page
+        const fitScale = Math.min(widthScale, heightScale);
+        const clampedScale = Math.max(Math.min(fitScale, 3), 0.25);
+        
+        setScale(clampedScale);
+      });
+    }, 120); // 120ms delay to allow DOM/drawer layout transition animations to complete
+    
+    return () => clearTimeout(timer);
+  }, [pdf, dmsSliderFullscreen, currentPage]);
+
   useEffect(() => {
     if (!pdf) return;
     
@@ -6051,13 +6111,18 @@ function PDFCanvasViewer({ url }) {
       if (!canvas) return;
       const context = canvas.getContext('2d');
       
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
       const viewport = page.getViewport({ scale: scale });
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
+      
+      canvas.width = viewport.width * pixelRatio;
+      canvas.height = viewport.height * pixelRatio;
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
 
       const renderContext = {
         canvasContext: context,
-        viewport: viewport
+        viewport: viewport,
+        transform: [pixelRatio, 0, 0, pixelRatio, 0, 0]
       };
       
       const renderTask = page.render(renderContext);
@@ -6081,6 +6146,72 @@ function PDFCanvasViewer({ url }) {
       }
     };
   }, [pdf, currentPage, scale]);
+
+  // Gestures: Ctrl + Mouse Wheel Zoom
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+          setScale(prev => Math.min(prev + 0.1, 3.0));
+        } else {
+          setScale(prev => Math.max(prev - 0.1, 0.5));
+        }
+      }
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+    };
+  }, [pdf]);
+
+  // Gestures: Mouse drag to pan
+  const handleMouseDown = (e) => {
+    if (e.button !== 0) return; // Left click only
+    const container = containerRef.current;
+    if (!container) return;
+    
+    setIsDragging(true);
+    setDragStart({
+      x: e.clientX,
+      y: e.clientY,
+      scrollLeft: container.scrollLeft,
+      scrollTop: container.scrollTop
+    });
+    container.style.cursor = 'grabbing';
+    e.preventDefault();
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDragging) return;
+    const container = containerRef.current;
+    if (!container) return;
+    
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    container.scrollLeft = dragStart.scrollLeft - dx;
+    container.scrollTop = dragStart.scrollTop - dy;
+  };
+
+  const handleMouseUpOrLeave = () => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    const container = containerRef.current;
+    if (container) {
+      container.style.cursor = scale > 1 ? 'grab' : 'default';
+    }
+  };
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container) {
+      container.style.cursor = scale > 1 ? 'grab' : 'default';
+    }
+  }, [scale]);
 
   if (loading) {
     return (
@@ -6142,9 +6273,33 @@ function PDFCanvasViewer({ url }) {
           Vergrößern 🔍
         </button>
       </div>
-      {/* Canvas container */}
-      <div style={{ flex: 1, overflow: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '1.5rem', background: '#020617' }}>
-        <canvas ref={canvasRef} style={{ boxShadow: '0 10px 30px rgba(0,0,0,0.5)', background: '#fff', borderRadius: '4px' }} />
+      {/* Canvas container with drag & scroll handlers */}
+      <div 
+        ref={containerRef}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUpOrLeave}
+        onMouseLeave={handleMouseUpOrLeave}
+        style={{ 
+          flex: 1, 
+          overflow: 'auto', 
+          padding: '1.5rem', 
+          background: '#020617',
+          userSelect: 'none',
+          textAlign: 'center',
+          minHeight: 0
+        }}
+      >
+        <canvas 
+          ref={canvasRef} 
+          style={{ 
+            boxShadow: '0 10px 30px rgba(0,0,0,0.5)', 
+            background: '#fff', 
+            borderRadius: '4px',
+            display: 'inline-block',
+            margin: '0 auto'
+          }} 
+        />
       </div>
     </div>
   );
