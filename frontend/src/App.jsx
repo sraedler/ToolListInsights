@@ -3971,6 +3971,11 @@ function PlanningTab({ mode = 'machining' }) {
   const [optimizeNightRun, setOptimizeNightRun] = useState(true);
   const [optimizeFixture, setOptimizeFixture] = useState(true);
   const [fixtureWeight, setFixtureWeight] = useState(50); // weighting slider (0 = tools only, 50 = balanced standard, 100 = fixtures only)
+  const [tempFixtureWeight, setTempFixtureWeight] = useState(50);
+  const [allowLookahead, setAllowLookahead] = useState(false);
+  useEffect(() => {
+    setTempFixtureWeight(fixtureWeight);
+  }, [fixtureWeight]);
   const [selectedMachine, setSelectedMachine] = useState('All');
   const [activeModalStep, setActiveModalStep] = useState(null);
   const [hideExecuting, setHideExecuting] = useState(false);
@@ -4155,7 +4160,7 @@ function PlanningTab({ mode = 'machining' }) {
         ? (fixtureWeight / 50) * 1.5 
         : 1.5 + ((fixtureWeight - 50) / 50) * 8.5
       ).toFixed(2);
-      let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}&optimizeFixture=${optimizeFixture}&fixtureWeight=${calculatedWeight}`;
+      let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}&optimizeFixture=${optimizeFixture}&fixtureWeight=${calculatedWeight}&allowLookahead=${allowLookahead}`;
       if (startDate) {
         url += `&startDate=${startDate}`;
       }
@@ -4184,7 +4189,7 @@ function PlanningTab({ mode = 'machining' }) {
 
   useEffect(() => {
     fetchPlanningData();
-  }, [optimize, optimizeNightRun, algo, optimizeFixture, fixtureWeight]);
+  }, [optimize, optimizeNightRun, algo, optimizeFixture, fixtureWeight, allowLookahead]);
 
   const handleDateChange = (e) => {
     setStartDate(e.target.value);
@@ -4356,6 +4361,16 @@ function PlanningTab({ mode = 'machining' }) {
                   <span style={{ color: '#e9d5ff', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🔧 Vorrichtung optimieren</span>
                 </label>
 
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }} title="Erlaubt es dem Algorithmus, Aufträge der Folgewochen (bis zu 14 Tage) vorzuziehen, falls dadurch Werkzeugwechsel eingespart werden können und freie Kapazitäten vorhanden sind.">
+                  <input
+                    type="checkbox"
+                    checked={allowLookahead}
+                    onChange={(e) => setAllowLookahead(e.target.checked)}
+                    style={{ width: '16px', height: '16px', accentColor: '#f43f5e' }}
+                  />
+                  <span style={{ color: '#fda4af', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🔮 Zukünftige Aufträge vorziehen</span>
+                </label>
+
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
                   <input
                     type="checkbox"
@@ -4403,24 +4418,26 @@ function PlanningTab({ mode = 'machining' }) {
                       type="range"
                       min="0"
                       max="100"
-                      value={fixtureWeight}
-                      onChange={(e) => setFixtureWeight(parseInt(e.target.value))}
+                      value={tempFixtureWeight}
+                      onChange={(e) => setTempFixtureWeight(parseInt(e.target.value))}
+                      onMouseUp={() => setFixtureWeight(tempFixtureWeight)}
+                      onTouchEnd={() => setFixtureWeight(tempFixtureWeight)}
                       className="custom-range"
                       title={
-                        fixtureWeight === 50 ? "Ausgeglichene Gewichtung (Standard)." :
-                        fixtureWeight < 50 ? `${100 - fixtureWeight}% Werkzeug / ${fixtureWeight}% Vorrichtung (${fixtureWeight === 0 ? 'Ignoriert Vorrichtungswechsel' : 'Werkzeugfokus'})` :
-                        `${100 - fixtureWeight}% Werkzeug / ${fixtureWeight}% Vorrichtung (Vorrichtungsfokus)`
+                        tempFixtureWeight === 50 ? "Ausgeglichene Gewichtung (Standard)." :
+                        tempFixtureWeight < 50 ? `${100 - tempFixtureWeight}% Werkzeug / ${tempFixtureWeight}% Vorrichtung (${tempFixtureWeight === 0 ? 'Ignoriert Vorrichtungswechsel' : 'Werkzeugfokus'})` :
+                        `${100 - tempFixtureWeight}% Werkzeug / ${tempFixtureWeight}% Vorrichtung (Vorrichtungsfokus)`
                       }
                       style={{
                         flexGrow: 1,
-                        background: `linear-gradient(to right, #3b82f6 0%, #a855f7 ${fixtureWeight}%, rgba(255,255,255,0.08) ${fixtureWeight}%, rgba(255,255,255,0.08) 100%)`,
+                        background: `linear-gradient(to right, #3b82f6 0%, #a855f7 ${tempFixtureWeight}%, rgba(255,255,255,0.08) ${tempFixtureWeight}%, rgba(255,255,255,0.08) 100%)`,
                         height: '5px'
                       }}
                     />
                     <span style={{ fontSize: '0.65rem', color: '#c084fc' }}>Vorrichtung</span>
                   </div>
                   <span style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 700, minWidth: '115px', textAlign: 'right' }}>
-                    {100 - fixtureWeight}% Wzg / {fixtureWeight}% Vorr
+                    {100 - tempFixtureWeight}% Wzg / {tempFixtureWeight}% Vorr
                   </span>
                 </div>
               )}
@@ -4501,7 +4518,7 @@ function PlanningTab({ mode = 'machining' }) {
           }
         })();
 
-        if (!activeSavings || activeSavings.savedChanges <= 0) return null;
+        if (!activeSavings) return null;
 
         const algoLabel = algo === 'ga' ? 'Genetischer Algorithmus (GA)' : algo === 'rl' ? 'Reinforcement Learning (RL)' : algo === 'hybrid' ? 'Hybrid (Greedy + GA + RL)' : algo === 'mip' ? 'Exakter Solver (MIP)' : 'Greedy Nearest Neighbor';
         const scopeLabel = selectedMachine === 'All' ? 'alle Maschinen' : `Maschine ${selectedMachine}`;
@@ -4873,6 +4890,11 @@ function PlanningTab({ mode = 'machining' }) {
                                 ⚠ {formatDate(step.originalStartDate)}
                               </span>
                             )}
+                            {step.isLookahead && (
+                              <span className="badge" style={{ background: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fda4af', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 700 }} title={`Vorgezogen aus der eigentlichen Woche: ${formatDate(step.originalStartDate)}`}>
+                                🔮 VORGEZOGEN
+                              </span>
+                            )}
                             {step.isNightRunCapable && (
                               <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', color: '#d8b4fe', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px' }}>
                                 🌙 Nacht
@@ -4894,10 +4916,15 @@ function PlanningTab({ mode = 'machining' }) {
                               <span style={{ color: 'var(--border-dim)' }}>|</span>
                               {!step.ncProgram ? (
                                 <span style={{ color: '#ef4444', fontWeight: 600 }}>NC fehlt</span>
-                              ) : step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
-                                <span style={{ color: '#10b981', fontWeight: 600 }}>✓ 0 Wechsel</span>
                               ) : (
-                                <span style={{ color: '#38bdf8', fontWeight: 600 }}>🔧 +{step.loadTools.length} / -{step.unloadTools.length}</span>
+                                <span style={{ color: '#38bdf8', fontWeight: 600 }}>
+                                  🔧 Rüsten: {step.directMisses ? `+${step.directMisses.length}` : `+${step.loadTools.length}`}
+                                  {step.directMisses && step.directMisses.length !== step.loadTools.length && (
+                                    <span style={{ color: '#64748b', fontSize: '0.62rem', marginLeft: '0.25rem' }}>
+                                      (Sim: +{step.loadTools.length})
+                                    </span>
+                                  )}
+                                </span>
                               )}
                             </div>
                             <button
@@ -4964,37 +4991,39 @@ function PlanningTab({ mode = 'machining' }) {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: '#ef4444', fontWeight: 600 }}>
                                   <span>NC fehlt</span>
                                 </div>
-                              ) : step.loadTools.length === 0 && step.unloadTools.length === 0 ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: '#10b981' }}>
-                                  <CheckCircle2 size={10} />
-                                  <span>Übernahme (0 Wechsel)</span>
-                                </div>
                               ) : (
                                 <>
-                                  {step.loadTools.length > 0 && (
-                                    <div style={{ marginBottom: '0.35rem' }}>
-                                      <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#34d399', marginBottom: '0.15rem' }}>Einwechseln (+{step.loadTools.length}):</div>
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
-                                        {step.loadTools.map(t => (
+                                  <div style={{ marginBottom: '0.35rem' }}>
+                                    <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#f59e0b', marginBottom: '0.15rem' }}>
+                                      Tatsächlich zu rüsten ({step.directMisses ? step.directMisses.length : step.loadTools.length}):
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                      {((step.directMisses || step.loadTools).length === 0) ? (
+                                        <div style={{ color: '#10b981', fontSize: '0.6rem', fontStyle: 'italic' }}>
+                                          ✓ Alle Werkzeuge auf der Maschine
+                                        </div>
+                                      ) : (
+                                        (step.directMisses || step.loadTools).map(t => (
                                           <div key={t.nr} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.62rem', background: 'rgba(255,255,255,0.01)', padding: '0.08rem 0.2rem', borderRadius: '2px' }}>
-                                            <span style={{ color: '#34d399', fontWeight: 700 }}>T{t.nr}</span>
+                                            <span style={{ color: '#f59e0b', fontWeight: 700 }}>T{t.nr}</span>
                                             <span style={{ color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={t.desc}>{t.desc}</span>
                                             {t.dia && <span style={{ color: '#64748b' }}>Ø{t.dia}</span>}
                                           </div>
-                                        ))}
-                                      </div>
+                                        ))
+                                      )}
                                     </div>
-                                  )}
-                                  {step.unloadTools.length > 0 && (
-                                    <div>
-                                      <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#f87171', marginBottom: '0.15rem' }}>Auswechseln (-{step.unloadTools.length}):</div>
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
-                                        {step.unloadTools.map(t => (
-                                          <div key={t.nr} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.62rem', background: 'rgba(255,255,255,0.01)', padding: '0.08rem 0.2rem', borderRadius: '2px' }}>
-                                            <span style={{ color: '#f87171', fontWeight: 700 }}>T{t.nr}</span>
-                                            <span style={{ color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={t.desc}>{t.desc}</span>
-                                          </div>
-                                        ))}
+                                  </div>
+
+                                  {step.directMisses && step.directMisses.length !== step.loadTools.length && (
+                                    <div style={{ borderTop: '1px dashed rgba(255,255,255,0.04)', paddingTop: '0.25rem', marginTop: '0.25rem' }}>
+                                      <div style={{ fontSize: '0.58rem', fontWeight: 600, color: '#64748b', marginBottom: '0.1rem' }}>
+                                        Simulierter Ablauf (Transitional):
+                                      </div>
+                                      <div style={{ fontSize: '0.58rem', color: '#8b9bb4' }}>
+                                        Einwechseln: {step.loadTools.map(t => `T${t.nr}`).join(', ') || 'Keine'}
+                                      </div>
+                                      <div style={{ fontSize: '0.58rem', color: '#8b9bb4' }}>
+                                        Auswechseln: {step.unloadTools.map(t => `T${t.nr}`).join(', ') || 'Keine'}
                                       </div>
                                     </div>
                                   )}
@@ -5251,6 +5280,11 @@ function PlanningTab({ mode = 'machining' }) {
                     <AlertTriangle size={12} /> Soll: {formatDate(activeModalStep.originalStartDate)}
                   </span>
                 )}
+                {activeModalStep.isLookahead && (
+                  <span className="badge" style={{ background: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fda4af', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 700 }}>
+                    🔮 Vorgezogen (Soll: {formatDate(activeModalStep.originalStartDate)})
+                  </span>
+                )}
                 {activeModalStep.isNightRunCapable && (
                   <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
                     <Moon size={12} /> Nachtlauf
@@ -5497,82 +5531,96 @@ function PlanningTab({ mode = 'machining' }) {
                 )}
               </div>
 
-              {/* Row 6: Rüstbedarf (Werkzeuge laden & entladen) */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', borderTop: '1px solid var(--border-dim)', paddingTop: '1.25rem' }}>
-                {/* Tools to Load */}
-                <div>
-                  <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <span style={{ color: '#f59e0b' }}>Einwechseln (Rein)</span>
-                    <span style={{ fontSize: '0.7rem', background: 'rgba(245, 158, 11, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#f59e0b', fontWeight: 600 }}>
-                      +{activeModalStep.loadTools ? activeModalStep.loadTools.length : 0}
-                    </span>
+              {/* Row 6: Rüstbedarf (Simulierte Reihenfolge & Direktvergleich) */}
+              <div style={{ borderTop: '1px solid var(--border-dim)', paddingTop: '1.25rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                  {/* Left Column: Reihenfolge-Rüstbedarf (Sequentieller Ablauf) */}
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: '#fff', fontWeight: 600, marginBottom: '0.25rem' }}>
+                      Reihenfolge-Rüstbedarf (Ablauf-Simulation)
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginBottom: '0.75rem', lineHeight: '1.3' }}>
+                      Welche Werkzeuge müssen geladen werden, wenn die Aufträge in der geplanten Reihenfolge abgearbeitet werden?
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <span style={{ color: '#38bdf8' }}>Einwechseln (Rein)</span>
+                      <span style={{ fontSize: '0.7rem', background: 'rgba(56, 189, 248, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#38bdf8', fontWeight: 600 }}>
+                        +{activeModalStep.loadTools ? activeModalStep.loadTools.length : 0}
+                      </span>
+                    </div>
+                    {activeModalStep.loadTools && activeModalStep.loadTools.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '200px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                        {activeModalStep.loadTools.map((t, tIdx) => (
+                          <div key={tIdx} style={{ 
+                            display: 'flex', 
+                            flexDirection: 'column', 
+                            gap: '0.15rem', 
+                            background: 'rgba(56, 189, 248, 0.03)', 
+                            border: '1px solid rgba(56, 189, 248, 0.12)', 
+                            padding: '0.45rem 0.75rem', 
+                            borderRadius: '6px', 
+                            fontSize: '0.8rem' 
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ color: '#fff', fontWeight: 700 }}>T{t.nr}</span>
+                              {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span>}
+                            </div>
+                            <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
+                              {t.desc}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ color: '#10b981', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500 }}>
+                        ✓ Kein Rüstbedarf in der Sequenz (bereits geladen)!
+                      </div>
+                    )}
                   </div>
-                  {activeModalStep.loadTools && activeModalStep.loadTools.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem' }}>
-                      {activeModalStep.loadTools.map((t, tIdx) => (
-                        <div key={tIdx} style={{ 
-                          display: 'flex', 
-                          flexDirection: 'column', 
-                          gap: '0.15rem', 
-                          background: 'rgba(245, 158, 11, 0.03)', 
-                          border: '1px solid rgba(245, 158, 11, 0.12)', 
-                          padding: '0.45rem 0.75rem', 
-                          borderRadius: '6px', 
-                          fontSize: '0.8rem' 
-                        }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ color: '#fff', fontWeight: 700 }}>T{t.nr}</span>
-                            {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span>}
-                          </div>
-                          <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
-                            {t.desc}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ color: '#10b981', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500 }}>
-                      ✓ Bereits im Magazin gerüstet!
-                    </div>
-                  )}
-                </div>
 
-                {/* Tools to Unload */}
-                <div>
-                  <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <span style={{ color: '#f87171' }}>Auswechseln (Raus)</span>
-                    <span style={{ fontSize: '0.7rem', background: 'rgba(239, 68, 68, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#f87171', fontWeight: 600 }}>
-                      -{activeModalStep.unloadTools ? activeModalStep.unloadTools.length : 0}
-                    </span>
+                  {/* Right Column: Direktvergleich (Aktueller Ist-Zustand) */}
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: '#fff', fontWeight: 600, marginBottom: '0.25rem' }}>
+                      Direktvergleich (Aktueller Maschinenbestand)
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginBottom: '0.75rem', lineHeight: '1.3' }}>
+                      Welche Werkzeuge fehlen im Vergleich zum heutigen Ist-Zustand der Maschine? (Andere Aufträge ignoriert).
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <span style={{ color: '#f59e0b' }}>Fehlende Werkzeuge (Laden)</span>
+                      <span style={{ fontSize: '0.7rem', background: 'rgba(245, 158, 11, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#f59e0b', fontWeight: 600 }}>
+                        {activeModalStep.directMisses ? activeModalStep.directMisses.length : 0}
+                      </span>
+                    </div>
+                    {activeModalStep.directMisses && activeModalStep.directMisses.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '200px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                        {activeModalStep.directMisses.map((t, tIdx) => (
+                          <div key={tIdx} style={{ 
+                            display: 'flex', 
+                            flexDirection: 'column', 
+                            gap: '0.15rem', 
+                            background: 'rgba(245, 158, 11, 0.03)', 
+                            border: '1px solid rgba(245, 158, 11, 0.12)', 
+                            padding: '0.45rem 0.75rem', 
+                            borderRadius: '6px', 
+                            fontSize: '0.8rem' 
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ color: '#fff', fontWeight: 700 }}>T{t.nr}</span>
+                              {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span>}
+                            </div>
+                            <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
+                              {t.desc}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ color: '#10b981', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500 }}>
+                        ✓ Alle benötigten Werkzeuge sind aktuell in der Maschine!
+                      </div>
+                    )}
                   </div>
-                  {activeModalStep.unloadTools && activeModalStep.unloadTools.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem' }}>
-                      {activeModalStep.unloadTools.map((t, tIdx) => (
-                        <div key={tIdx} style={{ 
-                          display: 'flex', 
-                          flexDirection: 'column', 
-                          gap: '0.15rem', 
-                          background: 'rgba(239, 68, 68, 0.03)', 
-                          border: '1px solid rgba(239, 68, 68, 0.12)', 
-                          padding: '0.45rem 0.75rem', 
-                          borderRadius: '6px', 
-                          fontSize: '0.8rem' 
-                        }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ color: '#f87171', fontWeight: 700 }}>T{t.nr}</span>
-                            {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span>}
-                          </div>
-                          <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
-                            {t.desc}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ color: '#64748b', fontSize: '0.75rem', border: '1px solid var(--border-dim)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontStyle: 'italic' }}>
-                      Keine Werkzeuge zum Auswechseln.
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
