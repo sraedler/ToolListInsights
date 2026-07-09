@@ -1,37 +1,53 @@
 const http = require('http');
 
-http.get('http://localhost:5000/api/planning?optimize=true&optimizeNightRun=true&algo=greedy&allowLookahead=true', (res) => {
-  let data = '';
-  res.on('data', (chunk) => { data += chunk; });
-  res.on('end', () => {
-    try {
-      const json = JSON.parse(data);
-      console.log('Days:', json.days);
-      console.log('Total Savings:', json.savings.total);
-      console.log('\nPer Machine Savings with Lookahead:');
-      for (let m of Object.keys(json.savings.machines)) {
-        const s = json.savings.machines[m];
-        console.log(`Machine: ${m} | Before: ${s.originalChanges} | After: ${s.optimizedChanges} | Saved: ${s.savedChanges}`);
-      }
-      
-      // Let's count how many lookahead steps were scheduled!
-      let lookaheadCount = 0;
-      for (let m of Object.keys(json.board)) {
-        for (let d of Object.keys(json.board[m])) {
-          const steps = json.board[m][d] || [];
-          steps.forEach(s => {
-            if (s.isLookahead) {
-              lookaheadCount++;
-              console.log(`Scheduled Lookahead Step on ${m} (${d}): StepId ${s.stepId}, Original Start: ${s.originalStartDate}`);
-            }
-          });
-        }
-      }
-      console.log(`\nTotal Scheduled Lookahead Steps: ${lookaheadCount}`);
-    } catch (e) {
-      console.error('Error parsing JSON:', e);
-    }
+function getMode() {
+  return new Promise((resolve) => {
+    http.get('http://localhost:5000/api/db-mode', (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve(JSON.parse(data)));
+    });
   });
-}).on('error', (err) => {
-  console.error('Error calling API:', err);
-});
+}
+
+function setMode(mode) {
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: 'localhost',
+      port: 5000,
+      path: '/api/db-mode',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve(JSON.parse(data)));
+    });
+    req.write(JSON.stringify({ mode }));
+    req.end();
+  });
+}
+
+async function run() {
+  try {
+    let modeObj = await getMode();
+    console.log('Initial DB Mode:', modeObj.mode);
+    
+    console.log('Switching to LIVE mode...');
+    const switchRes = await setMode('live');
+    console.log('Switch response:', switchRes);
+    
+    modeObj = await getMode();
+    console.log('Current DB Mode:', modeObj.mode);
+    
+    console.log('Switching back to DEV mode...');
+    const switchBack = await setMode('dev');
+    console.log('Switch response:', switchBack);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+run();

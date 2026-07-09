@@ -84,7 +84,7 @@ function buildConfig(serverEnv, databaseEnv, userEnv, passwordEnv, portEnv, encr
   };
 }
 
-const configD4 = buildConfig(
+const configD4Dev = buildConfig(
   process.env.DB_D4_SERVER,
   process.env.DB_D4_DATABASE || 'D4',
   process.env.DB_D4_USER,
@@ -96,7 +96,7 @@ const configD4 = buildConfig(
   'werkzeug'
 );
 
-const configWT = buildConfig(
+const configWTDev = buildConfig(
   process.env.DB_WT_SERVER,
   process.env.DB_WT_DATABASE || 'WTDATA',
   process.env.DB_WT_USER,
@@ -104,6 +104,31 @@ const configWT = buildConfig(
   process.env.DB_WT_PORT,
   process.env.DB_WT_ENCRYPT,
   connStrWT,
+  'werkzeug',
+  'werkzeug'
+);
+
+// Live database configurations (based on production servers in docker-compose)
+const configD4Live = buildConfig(
+  null,
+  'D4',
+  'werkzeug',
+  'werkzeug',
+  null,
+  'false',
+  'Driver={ODBC Driver 17 for SQL Server};Server=192.168.100.5\\D4;Database=D4;Uid=werkzeug;Pwd=werkzeug;TrustServerCertificate=yes;',
+  'werkzeug',
+  'werkzeug'
+);
+
+const configWTLive = buildConfig(
+  null,
+  'WTData',
+  'werkzeug',
+  'werkzeug',
+  null,
+  'false',
+  'Driver={ODBC Driver 17 for SQL Server};Server=192.168.100.8\\cim4net;Database=WTData;Uid=werkzeug;Pwd=werkzeug;TrustServerCertificate=yes;',
   'werkzeug',
   'werkzeug'
 );
@@ -128,19 +153,47 @@ let poolD4Promise = null;
 let poolWTPromise = null;
 let poolTLPromise = null;
 
+let currentDbMode = 'dev'; // 'dev' or 'live'
+
+function getDbMode() {
+  return currentDbMode;
+}
+
+function setDbMode(mode) {
+  if (mode === 'live' || mode === 'dev') {
+    if (currentDbMode !== mode) {
+      console.log(`[DB Switch] Switching database mode from ${currentDbMode} to ${mode}...`);
+      currentDbMode = mode;
+      
+      // Close and reset connections to force recreation
+      if (poolD4) {
+        try { poolD4.close(); } catch (e) {}
+        poolD4 = null;
+        poolD4Promise = null;
+      }
+      if (poolWT) {
+        try { poolWT.close(); } catch (e) {}
+        poolWT = null;
+        poolWTPromise = null;
+      }
+    }
+  }
+}
+
 async function getPoolD4() {
   if (poolD4) return poolD4;
   if (!poolD4Promise) {
     poolD4Promise = (async () => {
-      console.log('Initializing D4 database pool...');
-      const pool = new sql.ConnectionPool(configD4);
+      const activeConfig = currentDbMode === 'live' ? configD4Live : configD4Dev;
+      console.log(`Initializing D4 database pool in ${currentDbMode} mode...`);
+      const pool = new sql.ConnectionPool(activeConfig);
       try {
         await pool.connect();
         poolD4 = pool;
-        console.log('D4 database pool initialized.');
+        console.log(`D4 database pool initialized in ${currentDbMode} mode.`);
         return pool;
       } catch (err) {
-        console.error('Failed to initialize D4 pool:', err.message);
+        console.error(`Failed to initialize D4 pool in ${currentDbMode} mode:`, err.message);
         poolD4Promise = null;
         throw err;
       }
@@ -153,15 +206,16 @@ async function getPoolWT() {
   if (poolWT) return poolWT;
   if (!poolWTPromise) {
     poolWTPromise = (async () => {
-      console.log('Initializing WTDATA database pool...');
-      const pool = new sql.ConnectionPool(configWT);
+      const activeConfig = currentDbMode === 'live' ? configWTLive : configWTDev;
+      console.log(`Initializing WTDATA database pool in ${currentDbMode} mode...`);
+      const pool = new sql.ConnectionPool(activeConfig);
       try {
         await pool.connect();
         poolWT = pool;
-        console.log('WTDATA database pool initialized.');
+        console.log(`WTDATA database pool initialized in ${currentDbMode} mode.`);
         return pool;
       } catch (err) {
-        console.error('Failed to initialize WTDATA pool:', err.message);
+        console.error(`Failed to initialize WTDATA pool in ${currentDbMode} mode:`, err.message);
         poolWTPromise = null;
         throw err;
       }
@@ -195,5 +249,7 @@ module.exports = {
   getPoolD4,
   getPoolWT,
   getPoolTL,
+  getDbMode,
+  setDbMode,
   sql
 };

@@ -3574,7 +3574,7 @@ function MissingDataTab() {
         });
       }
       
-      const filtered = allSteps.filter(s => !s.ncProgram || (s.ncProgram && !s.matchedListNr) || (s.ncProgram && s.matchedType === 'fuzzy') || !s.fixture);
+      const filtered = allSteps.filter(s => !s.ncProgram || (s.ncProgram && !s.matchedListNr) || (s.ncProgram && s.matchedType === 'fuzzy') || !s.fixture || s.isWrongMachine);
       setData(filtered);
     } catch (err) {
       console.error(err);
@@ -3617,6 +3617,7 @@ function MissingDataTab() {
         return hasGap && masterNotOk;
       }
       if (filterType === 'fixture') return !s.fixture;
+      if (filterType === 'wrong_machine') return s.isWrongMachine;
       
       return true;
     });
@@ -3653,14 +3654,15 @@ function MissingDataTab() {
   const ncMissingCount = data.filter(s => !s.ncProgram).length;
   const stammMissingCount = data.filter(s => s.ncProgram && (!s.matchedListNr || s.matchedType === 'fuzzy')).length;
   const fixtureMissingCount = data.filter(s => !s.fixture).length;
+  const wrongMachineCount = data.filter(s => s.isWrongMachine).length;
 
   return (
     <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', height: '100%', overflowY: 'auto' }}>
       
       {/* Stats Cards Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1.25rem' }}>
         <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem 1.25rem', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', padding: '0.6rem', borderRadius: '10px' }}>
+          <div style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#fff', padding: '0.6rem', borderRadius: '10px' }}>
             <AlertTriangle size={24} />
           </div>
           <div>
@@ -3698,6 +3700,16 @@ function MissingDataTab() {
             <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#fb923c' }}>{stammMissingCount}</div>
           </div>
         </div>
+
+        <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem 1.25rem', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171', padding: '0.6rem', borderRadius: '10px' }}>
+            <AlertCircle size={24} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Falsche Maschine</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#f87171' }}>{wrongMachineCount}</div>
+          </div>
+        </div>
       </div>
 
       {/* Filter Toolbar */}
@@ -3715,6 +3727,7 @@ function MissingDataTab() {
             <option value="stamm_p_auftrag">Stamm fehlt (nur P-Auftrag)</option>
             <option value="stamm_artikel">Stamm fehlt (auch Artikel-AP)</option>
             <option value="fixture">Vorrichtung fehlt (Spannmittel)</option>
+            <option value="wrong_machine">Falsche Maschine (Direktzuordnung Pool-Maschine)</option>
           </select>
         </div>
 
@@ -3890,7 +3903,18 @@ function MissingDataTab() {
                                     <td style={{ padding: '0.5rem', color: '#38bdf8', fontWeight: 700 }}>{s.stepPos || 'N/A'}</td>
                                     <td style={{ padding: '0.5rem', fontWeight: 500 }}>{s.stepDesc}</td>
                                     <td style={{ padding: '0.5rem', color: '#64748b' }}>#{s.stepId}</td>
-                                    <td style={{ padding: '0.5rem' }}><span style={{ color: '#fbbf24', fontWeight: 600 }}>{s.machine}</span></td>
+                                    <td style={{ padding: '0.5rem' }}>
+                                      {s.isWrongMachine ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                          <span style={{ color: '#fbbf24', fontWeight: 600 }}>{s.machine}</span>
+                                          <span style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '0.1rem 0.25rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 700, width: 'fit-content' }} title="Diese Maschine sollte im Pool (z.B. Pool C40-C42) und nicht direkt im ERP geplant werden!">
+                                            ❌ FALSCHE MASCHINE
+                                          </span>
+                                        </div>
+                                      ) : (
+                                        <span style={{ color: '#fbbf24', fontWeight: 600 }}>{s.machine}</span>
+                                      )}
+                                    </td>
                                     <td style={{ padding: '0.5rem', color: '#94a3b8' }}>{s.dayScheduled}</td>
                                     <td style={{ padding: '0.5rem' }}>
                                       {s.ncProgram ? (
@@ -3973,11 +3997,22 @@ function PlanningTab({ mode = 'machining' }) {
   const [fixtureWeight, setFixtureWeight] = useState(50); // weighting slider (0 = tools only, 50 = balanced standard, 100 = fixtures only)
   const [tempFixtureWeight, setTempFixtureWeight] = useState(50);
   const [allowLookahead, setAllowLookahead] = useState(false);
+  const [dbMode, setDbModeState] = useState('dev');
+  const [daysCount, setDaysCount] = useState(5);
+
   useEffect(() => {
     setTempFixtureWeight(fixtureWeight);
   }, [fixtureWeight]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/db-mode`)
+      .then(res => res.json())
+      .then(json => setDbModeState(json.mode))
+      .catch(err => console.error('Error fetching DB mode:', err));
+  }, []);
   const [selectedMachine, setSelectedMachine] = useState('All');
   const [activeModalStep, setActiveModalStep] = useState(null);
+  const [isExplanationCollapsed, setIsExplanationCollapsed] = useState(true);
   const [hideExecuting, setHideExecuting] = useState(false);
   const [algo, setAlgo] = useState('greedy');
   const [expandedCards, setExpandedCards] = useState({});
@@ -4160,7 +4195,7 @@ function PlanningTab({ mode = 'machining' }) {
         ? (fixtureWeight / 50) * 1.5 
         : 1.5 + ((fixtureWeight - 50) / 50) * 8.5
       ).toFixed(2);
-      let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}&optimizeFixture=${optimizeFixture}&fixtureWeight=${calculatedWeight}&allowLookahead=${allowLookahead}`;
+      let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}&optimizeFixture=${optimizeFixture}&fixtureWeight=${calculatedWeight}&allowLookahead=${allowLookahead}&daysCount=${daysCount}`;
       if (startDate) {
         url += `&startDate=${startDate}`;
       }
@@ -4189,7 +4224,7 @@ function PlanningTab({ mode = 'machining' }) {
 
   useEffect(() => {
     fetchPlanningData();
-  }, [optimize, optimizeNightRun, algo, optimizeFixture, fixtureWeight, allowLookahead]);
+  }, [optimize, optimizeNightRun, algo, optimizeFixture, fixtureWeight, allowLookahead, daysCount]);
 
   const handleDateChange = (e) => {
     setStartDate(e.target.value);
@@ -4210,6 +4245,29 @@ function PlanningTab({ mode = 'machining' }) {
       await fetchPlanningData();
     } catch (err) {
       console.error('Error clearing cache:', err);
+      setError(err.message);
+      setLoading(false);
+    }
+  };
+
+  const handleToggleDbMode = async () => {
+    const targetMode = dbMode === 'live' ? 'dev' : 'live';
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/db-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: targetMode })
+      });
+      if (!res.ok) {
+        throw new Error('Fehler beim Umschalten der Datenbank.');
+      }
+      const json = await res.json();
+      setDbModeState(json.mode);
+      await fetchPlanningData();
+    } catch (err) {
+      console.error(err);
       setError(err.message);
       setLoading(false);
     }
@@ -4255,7 +4313,22 @@ function PlanningTab({ mode = 'machining' }) {
     );
   }
 
-  const { days = [], machines: rawMachines = [], board = {}, capacities = {} } = data || {};
+  const { days: allDays = [], machines: rawMachines = [], board = {}, capacities = {} } = data || {};
+  const days = allDays.filter(day => {
+    if (day === 'Überlauf') {
+      if (selectedMachine === 'All') {
+        return Object.keys(board).some(mName => (board[mName]?.['Überlauf'] || []).length > 0);
+      } else {
+        return (board[selectedMachine]?.[day] || []).length > 0;
+      }
+    }
+    if (selectedMachine === 'All') {
+      return Object.keys(board).some(mName => (board[mName]?.[day] || []).length > 0);
+    } else {
+      return (board[selectedMachine]?.[day] || []).length > 0;
+    }
+  });
+
   const machines = mode === 'deburring'
     ? ['Entgraten', 'Laser', 'Messmaschine', 'Montage', 'Montage UR5', 'Prüfplanung', 'Versand']
     : ['Brother', 'Chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2'];
@@ -4284,13 +4357,138 @@ function PlanningTab({ mode = 'machining' }) {
     return remainingMins > 0 ? `${hrs}h ${remainingMins}m` : `${hrs}h`;
   };
 
+  const getPredecessorForStep = (step) => {
+    if (!step || !data || !data.board) return null;
+    for (let m of Object.keys(data.board)) {
+      for (let d of Object.keys(data.board[m])) {
+        const list = data.board[m][d] || [];
+        const idx = list.findIndex(s => s.stepId === step.stepId);
+        if (idx !== -1) {
+          return idx > 0 ? list[idx - 1] : null;
+        }
+      }
+    }
+    return null;
+  };
+
+  const getToolLifetimeInfo = (t, step, type) => {
+    if (!step || !data || !data.board) return "";
+    
+    // Find the sequence of steps on this machine
+    let machineName = null;
+    let sequence = [];
+    const days = [...(data.days || []), 'Überlauf'];
+    
+    for (let m of Object.keys(data.board)) {
+      const seq = [];
+      let found = false;
+      for (let d of days) {
+        const list = data.board[m][d] || [];
+        seq.push(...list);
+        if (list.some(s => s.stepId === step.stepId)) {
+          found = true;
+        }
+      }
+      if (found) {
+        machineName = m;
+        sequence = seq;
+        break;
+      }
+    }
+
+    if (sequence.length === 0) return "";
+    const currentIdx = sequence.findIndex(s => s.stepId === step.stepId);
+    if (currentIdx === -1) return "";
+
+    if (type === 'rein') {
+      let stepsDuration = null;
+      for (let i = currentIdx; i < sequence.length; i++) {
+        const futureStep = sequence[i];
+        const futureUnloaded = (futureStep.unloadTools || []).map(ut => ut.nr);
+        if (futureUnloaded.includes(t.nr)) {
+          stepsDuration = i - currentIdx;
+          break;
+        }
+      }
+      if (stepsDuration === null) {
+        return "Bleibt bis Planungsende geladen";
+      } else if (stepsDuration === 0) {
+        return "Wird danach wieder entladen";
+      } else {
+        return `Bleibt für ${stepsDuration + 1} Schritte geladen`;
+      }
+    } else if (type === 'raus') {
+      let stepsUntilNextUse = null;
+      for (let i = currentIdx + 1; i < sequence.length; i++) {
+        const nextStep = sequence[i];
+        const nextNeeded = [...(nextStep.directMisses || []), ...(nextStep.directHits || [])].map(nt => nt.nr);
+        if (nextNeeded.includes(t.nr)) {
+          stepsUntilNextUse = i - currentIdx;
+          break;
+        }
+      }
+      if (stepsUntilNextUse === null) {
+        return "Nicht mehr benötigt im Planungszeitraum";
+      } else if (stepsUntilNextUse === 1) {
+        return "Wird bei NÄCHSTEM Schritt benötigt!";
+      } else {
+        return `Wird in ${stepsUntilNextUse} Schritten wieder benötigt`;
+      }
+    }
+    return "";
+  };
+
+  const getStepPlacementExplanation = (step, prevStep) => {
+    const lines = [];
+    if (!step) return "";
+    
+    if (step.isExecuting) {
+      lines.push("Der Auftrag befindet sich aktuell auf der Maschine in aktiver Ausführung.");
+    }
+    
+    if (step.isLookahead) {
+      const formattedOrigDate = formatDate(step.originalStartDate);
+      lines.push(`Wurde aus einer Folgewoche (geplant für ${formattedOrigDate}) vorgezogen, um freie Kapazitäten und Rüstüberschneidungen optimal zu nutzen.`);
+    }
+
+    if (prevStep) {
+      const prevLabel = prevStep.contractNumber || `Auftrag #${prevStep.orderId}`;
+      if (step.fixture && prevStep.fixture && step.fixture === prevStep.fixture) {
+        lines.push(`Teilt die gleiche Vorrichtung ("${step.fixture}") mit dem direkten Vorläufer (${prevLabel}). Dies spart einen zeitintensiven Vorrichtungswechsel.`);
+      } else if (step.fixture) {
+        lines.push(`Benötigt Vorrichtung "${step.fixture}".`);
+      }
+
+      const misses = step.directMisses ? step.directMisses.length : (step.loadTools ? step.loadTools.length : 0);
+      if (misses === 0) {
+        lines.push(`0-Rüstzeit: Alle benötigten Werkzeuge sind bereits durch den Vorläufer (${prevLabel}) im Magazin vorhanden.`);
+      } else {
+        lines.push(`Rüstoptimiert: Im Vergleich zum Vorläufer (${prevLabel}) müssen nur ${misses} Werkzeuge getauscht werden.`);
+      }
+    } else {
+      if (!step.isExecuting) {
+        lines.push("Tagesstart-Auftrag. Das Werkzeug-Setup wurde bestmöglich auf den Vortag abgestimmt, um Anrüstzeiten zu minimieren.");
+      }
+    }
+
+    if (step.isNightRunCapable) {
+      lines.push("Bedienerloser Nachtlauf: Der Auftrag ist nachtlaufgeeignet und kann in unbemannten Schichten laufen.");
+    }
+    
+    if (lines.length === 0) {
+      lines.push("Kapazitäts-Einplanung: Der Schritt wurde zur optimalen Auslastung der Maschinenbelegungszeit an dieser Stelle platziert.");
+    }
+    
+    return lines.map(line => `• ${line}`).join("\n");
+  };
+
   return (
     <div className="planning-tab">
       {/* Controls Header */}
       <div className="planning-controls card">
         <div className="controls-row">
           <div className="control-group">
-            <label>Planungs-Startdatum:</label>
+            <label>Planungs-Startdatum & Zeitraum:</label>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <input
                 type="date"
@@ -4306,6 +4504,26 @@ function PlanningTab({ mode = 'machining' }) {
                   outline: 'none'
                 }}
               />
+              <select
+                value={daysCount}
+                onChange={(e) => setDaysCount(parseInt(e.target.value, 10))}
+                style={{
+                  background: 'rgba(13, 20, 35, 0.4)',
+                  border: '1px solid var(--border-dim)',
+                  borderRadius: '8px',
+                  color: '#fff',
+                  fontSize: '0.85rem',
+                  padding: '0.4rem 0.75rem',
+                  outline: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                <option value={3}>3 Arbeitstage</option>
+                <option value={5}>5 Arbeitstage</option>
+                <option value={7}>7 Arbeitstage</option>
+                <option value={10}>10 Arbeitstage</option>
+                <option value={14}>14 Arbeitstage</option>
+              </select>
               <button onClick={handleApplyDate} className="btn btn-primary btn-sm">
                 Planung laden
               </button>
@@ -4325,6 +4543,38 @@ function PlanningTab({ mode = 'machining' }) {
                 <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
                 <span>Cache leeren & neu laden</span>
               </button>
+
+              <div 
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.5rem', 
+                  background: 'rgba(255,255,255,0.02)', 
+                  border: '1px solid var(--border-dim)', 
+                  padding: '0.35rem 0.75rem', 
+                  borderRadius: '8px', 
+                  cursor: 'pointer',
+                  userSelect: 'none'
+                }} 
+                onClick={handleToggleDbMode}
+                title="Klicken, um zwischen Entwicklungs- und Live-Datenbank umzuschalten"
+              >
+                <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Datenquelle:</span>
+                <span style={{ 
+                  background: dbMode === 'live' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', 
+                  border: dbMode === 'live' ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)', 
+                  color: dbMode === 'live' ? '#34d399' : '#f87171', 
+                  fontSize: '0.72rem', 
+                  padding: '0.15rem 0.5rem', 
+                  borderRadius: '6px', 
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.3rem'
+                }}>
+                  {dbMode === 'live' ? '🟢 LIVE-DB' : '🔴 DEV-DB'}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -4852,7 +5102,7 @@ function PlanningTab({ mode = 'machining' }) {
                         <div 
                           key={step.stepId} 
                           className={`kanban-card ${step.isExecuting ? 'executing' : ''}`} 
-                          onClick={() => setActiveModalStep(step)} 
+                          onClick={() => { setActiveModalStep(step); setIsExplanationCollapsed(true); }}
                           style={{
                             cursor: 'pointer',
                             padding: '0.65rem',
@@ -4866,8 +5116,15 @@ function PlanningTab({ mode = 'machining' }) {
                         >
                           {/* Header Row */}
                           <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
-                            <span className="card-order-id" style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f1f5f9' }}>
+                            <span className="card-order-id" style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                               {step.contractNumber || `Auftrag #${step.orderId}`}
+                              <span 
+                                title={getStepPlacementExplanation(step, idx > 0 ? daySteps[idx - 1] : null)}
+                                style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <Info size={12} style={{ color: '#64748b' }} />
+                              </span>
                             </span>
                             <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
                               {highlightRobotFlow && !isNonRobot && (
@@ -5007,7 +5264,7 @@ function PlanningTab({ mode = 'machining' }) {
                                           <div key={t.nr} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.62rem', background: 'rgba(255,255,255,0.01)', padding: '0.08rem 0.2rem', borderRadius: '2px' }}>
                                             <span style={{ color: '#f59e0b', fontWeight: 700 }}>T{t.nr}</span>
                                             <span style={{ color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={t.desc}>{t.desc}</span>
-                                            {t.dia && <span style={{ color: '#64748b' }}>Ø{t.dia}</span>}
+                                            {t.dia && t.dia !== '0' && t.dia !== 0 ? <span style={{ color: '#64748b' }}>Ø{t.dia}</span> : null}
                                           </div>
                                         ))
                                       )}
@@ -5046,7 +5303,7 @@ function PlanningTab({ mode = 'machining' }) {
         <div className="swimlane-view card">
           <div className="swimlane-grid">
             {/* Header Row */}
-            <div className="grid-row header-row">
+            <div className="grid-row header-row" style={{ gridTemplateColumns: `180px repeat(${days.length}, 1fr)`, position: 'sticky', top: 0, zIndex: 10, background: '#0c1220', borderBottom: '2px solid rgba(255,255,255,0.08)' }}>
               <div className="grid-cell machine-cell header-cell" style={{ fontWeight: 700 }}>Maschine</div>
               {days.map(day => (
                 <div key={day} className="grid-cell header-cell">
@@ -5081,7 +5338,7 @@ function PlanningTab({ mode = 'machining' }) {
               });
 
               return (
-                <div key={mName} className="grid-row content-row">
+                <div key={mName} className="grid-row content-row" style={{ gridTemplateColumns: `180px repeat(${days.length}, 1fr)` }}>
                   <div className="grid-cell machine-cell" onClick={() => setSelectedMachine(mName)}>
                     <div className="machine-title">{mName}</div>
                     <div className="machine-click-hint">Kanban-Ansicht</div>
@@ -5139,7 +5396,12 @@ function PlanningTab({ mode = 'machining' }) {
                   const barColor = loadPercentage > 100 ? '#ef4444' : loadPercentage > 85 ? '#f59e0b' : '#10b981';
 
                   return (
-                    <div key={day} className="grid-cell cell-content" onClick={() => setSelectedMachine(mName)}>
+                    <div key={day} className="grid-cell cell-content" onClick={() => setSelectedMachine(mName)} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', justifyContent: 'flex-start', paddingTop: '0.65rem' }}>
+                      {/* Cell Day Header */}
+                      <div style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 700, borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '0.2rem', marginBottom: '0.2rem', display: 'flex', justifyContent: 'space-between', width: '100%', textTransform: 'uppercase', letterSpacing: '0.02em', pointerEvents: 'none', userSelect: 'none' }}>
+                        <span style={{ color: '#38bdf8' }}>{getDayName(day)}</span>
+                        <span>{formatDate(day)}</span>
+                      </div>
                       {daySteps.length === 0 ? (
                         <div className="grid-empty">Keine Belegung</div>
                       ) : (
@@ -5301,16 +5563,24 @@ function PlanningTab({ mode = 'machining' }) {
 
             {/* Modal Body */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              {activeModalStep.isSplit && (
-                <div style={{ background: 'rgba(14, 165, 233, 0.08)', border: '1px solid rgba(14, 165, 233, 0.25)', padding: '0.85rem 1.1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <span>✂ Aufgeteilter Arbeitsschritt (Kapazität)</span>
+
+              {/* Einplanungserklärung (Placement Explanation) */}
+              <div style={{ background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.15)', padding: '0.85rem 1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                <div 
+                  onClick={() => setIsExplanationCollapsed(!isExplanationCollapsed)}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#38bdf8', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <Info size={14} /> Einplanung & Optimierung
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: '#94a3b8', lineHeight: 1.4 }}>
-                    Aufgrund der maximalen Belegungszeit von 24 Std. pro Tag wurde dieser Arbeitsschritt automatisch gesplittet. Dies ist <strong style={{ color: '#fff' }}>Teil {activeModalStep.splitPart}</strong>. Rüstzeiten fallen nur am ersten Tag an.
-                  </div>
+                  {isExplanationCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
                 </div>
-              )}
+                {!isExplanationCollapsed && (
+                  <div style={{ fontSize: '0.8rem', color: '#cbd5e1', lineHeight: 1.4, whiteSpace: 'pre-line', marginTop: '0.2rem' }}>
+                    {getStepPlacementExplanation(activeModalStep, getPredecessorForStep(activeModalStep))}
+                  </div>
+                )}
+              </div>
 
               {/* Row 1: P-Nummer & Order ID */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
@@ -5540,8 +5810,10 @@ function PlanningTab({ mode = 'machining' }) {
                       Reihenfolge-Rüstbedarf (Ablauf-Simulation)
                     </div>
                     <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginBottom: '0.75rem', lineHeight: '1.3' }}>
-                      Welche Werkzeuge müssen geladen werden, wenn die Aufträge in der geplanten Reihenfolge abgearbeitet werden?
+                      Welche Werkzeuge müssen ein- und ausgelagert werden, wenn die Aufträge in der geplanten Reihenfolge ablaufen?
                     </div>
+                    
+                    {/* Einwechseln */}
                     <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                       <span style={{ color: '#38bdf8' }}>Einwechseln (Rein)</span>
                       <span style={{ fontSize: '0.7rem', background: 'rgba(56, 189, 248, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#38bdf8', fontWeight: 600 }}>
@@ -5549,7 +5821,7 @@ function PlanningTab({ mode = 'machining' }) {
                       </span>
                     </div>
                     {activeModalStep.loadTools && activeModalStep.loadTools.length > 0 ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '200px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '0.25rem', marginBottom: '1rem' }}>
                         {activeModalStep.loadTools.map((t, tIdx) => (
                           <div key={tIdx} style={{ 
                             display: 'flex', 
@@ -5563,17 +5835,59 @@ function PlanningTab({ mode = 'machining' }) {
                           }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <span style={{ color: '#fff', fontWeight: 700 }}>T{t.nr}</span>
-                              {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span>}
+                              {t.dia && t.dia !== '0' && t.dia !== 0 ? <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span> : null}
                             </div>
                             <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
                               {t.desc}
+                            </div>
+                            <div style={{ fontSize: '0.68rem', color: '#38bdf8', fontWeight: 600, marginTop: '0.25rem' }}>
+                              ℹ {getToolLifetimeInfo(t, activeModalStep, 'rein')}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ color: '#10b981', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500, marginBottom: '1rem' }}>
+                        ✓ Keine Werkzeuge einwechseln
+                      </div>
+                    )}
+
+                    {/* Auswechseln */}
+                    <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.75rem' }}>
+                      <span style={{ color: '#f87171' }}>Auswechseln (Raus)</span>
+                      <span style={{ fontSize: '0.7rem', background: 'rgba(239, 68, 68, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#f87171', fontWeight: 600 }}>
+                        -{activeModalStep.unloadTools ? activeModalStep.unloadTools.length : 0}
+                      </span>
+                    </div>
+                    {activeModalStep.unloadTools && activeModalStep.unloadTools.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                        {activeModalStep.unloadTools.map((t, tIdx) => (
+                          <div key={tIdx} style={{ 
+                            display: 'flex', 
+                            flexDirection: 'column', 
+                            gap: '0.15rem', 
+                            background: 'rgba(239, 68, 68, 0.03)', 
+                            border: '1px solid rgba(239, 68, 68, 0.12)', 
+                            padding: '0.45rem 0.75rem', 
+                            borderRadius: '6px', 
+                            fontSize: '0.8rem' 
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ color: '#fff', fontWeight: 700 }}>T{t.nr}</span>
+                              {t.dia && t.dia !== '0' && t.dia !== 0 ? <span style={{ color: '#f87171', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span> : null}
+                            </div>
+                            <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
+                              {t.desc}
+                            </div>
+                            <div style={{ fontSize: '0.68rem', color: '#f87171', fontWeight: 600, marginTop: '0.25rem' }}>
+                              ℹ {getToolLifetimeInfo(t, activeModalStep, 'raus')}
                             </div>
                           </div>
                         ))}
                       </div>
                     ) : (
                       <div style={{ color: '#10b981', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500 }}>
-                        ✓ Kein Rüstbedarf in der Sequenz (bereits geladen)!
+                        ✓ Keine Werkzeuge auswechseln (Magazin ausreichend frei)
                       </div>
                     )}
                   </div>
@@ -5607,7 +5921,7 @@ function PlanningTab({ mode = 'machining' }) {
                           }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <span style={{ color: '#fff', fontWeight: 700 }}>T{t.nr}</span>
-                              {t.dia && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span>}
+                              {t.dia && t.dia !== '0' && t.dia !== 0 ? <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span> : null}
                             </div>
                             <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
                               {t.desc}
@@ -5744,11 +6058,11 @@ function PlanningTab({ mode = 'machining' }) {
                             {t.desc}
                           </span>
                         </div>
-                        {t.dia && (
+                        {t.dia && t.dia !== '0' && t.dia !== 0 ? (
                           <span style={{ color: '#38bdf8', fontSize: '0.7rem', fontWeight: 600, fontFamily: 'monospace' }}>
                             Ø{t.dia}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     ))}
                   </div>

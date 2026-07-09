@@ -4,7 +4,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
-const { getPoolD4, getPoolWT, getPoolTL, sql } = require('./db');
+const { getPoolD4, getPoolWT, getPoolTL, getDbMode, setDbMode, sql } = require('./db');
 const { extractNCPrograms, findMatches } = require('./matching');
 
 const app = express();
@@ -37,6 +37,7 @@ let cachedDemand = null;
 let cachedDemandSteps = null;
 let cachedToolDetails = {};
 let cachedSetupData = null;
+let cacheWarmingPromise = null;
 let cachedMachines = [];
 const activeScenarios = {}; // machineName -> { unloadPrograms, loadPrograms }
 
@@ -314,231 +315,253 @@ async function cacheDemand() {
 }
 
 async function cacheSetupData() {
-  const poolD4 = await getPoolD4();
-  const poolWT = await getPoolWT();
+  if (cacheWarmingPromise) {
+    return cacheWarmingPromise;
+  }
 
-  console.log('Caching steps, tools, and night-run bookings in parallel...');
-  const [rows, mappingResult, toolsDetailResult, nightBookingsResult, fixtureLocationsResult] = await Promise.all([
-    fetchActiveStepsAndMaterials(poolD4),
-    poolWT.request().query('SELECT ToolListNr, ToolNr FROM [WTDATA].[dbo].[ToolList] WHERE ToolNr IS NOT NULL'),
-    poolWT.request().query('SELECT Nr, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools]'),
-    poolD4.request().query(`
-      SELECT b.BP_IDAR as ArticleId, p.PSP_POSITION_NUMMER as StepPos, COUNT(*) as NightBookings
-      FROM [D4].[dbo].[tZE_BUCH] zb
-      INNER JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbb ON zbb.ZBUBW_IDZBU = zb.ID
-      INNER JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = zb.ZBU_IDBEBP
-      INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = zb.ZBU_IDPSKP
-      WHERE DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) >= 22 OR DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6
-      GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
-    `),
-    poolD4.request().query(`
-      SELECT ar.AR_NUMMER, lo.LO_NUMMER
-      FROM [D4].[dbo].[tARST] ar
-      INNER JOIN [D4].[dbo].[tLG_ORTE] lo ON lo.ID = ar.AR_IDLGOR
-      WHERE ar.AR_NUMMER IS NOT NULL
-    `)
-  ]);
+  cacheWarmingPromise = (async () => {
+    const poolD4 = await getPoolD4();
+    const poolWT = await getPoolWT();
 
-  const fixtureLocationMap = {};
-  fixtureLocationsResult.recordset.forEach(row => {
-    if (row.AR_NUMMER && row.LO_NUMMER) {
-      fixtureLocationMap[row.AR_NUMMER.trim().toLowerCase()] = row.LO_NUMMER.trim();
+    console.log('Caching steps, tools, and night-run bookings in parallel...');
+    const [rows, mappingResult, toolsDetailResult, nightBookingsResult] = await Promise.all([
+      fetchActiveStepsAndMaterials(poolD4),
+      poolWT.request().query('SELECT ToolListNr, ToolNr FROM [WTDATA].[dbo].[ToolList] WHERE ToolNr IS NOT NULL'),
+      poolWT.request().query('SELECT Nr, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools]'),
+      poolD4.request().query(`
+        SELECT b.BP_IDAR as ArticleId, p.PSP_POSITION_NUMMER as StepPos, COUNT(*) as NightBookings
+        FROM [D4].[dbo].[tZE_BUCH] zb
+        INNER JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbb ON zbb.ZBUBW_IDZBU = zb.ID
+        INNER JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = zb.ZBU_IDBEBP
+        INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = zb.ZBU_IDPSKP
+        WHERE DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) >= 22 OR DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6
+        GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
+      `)
+    ]);
+
+    let fixtureLocationsResult = { recordset: [] };
+    try {
+      fixtureLocationsResult = await poolD4.request().query(`
+        SELECT DISTINCT CAST(p.PSP_BEZEICHNUNG AS VARCHAR(8000)) as StepDesc, k.KK_LAGERORT as Lagerort
+        FROM [D4].[dbo].[tPPS_SKKALP] p
+        INNER JOIN [D4].[dbo].[tPPS_SKKALK] k ON p.PSP_IDPSKKK = k.ID
+        WHERE p.PSP_BEZEICHNUNG LIKE '%vorrichtung%' OR p.PSP_BEZEICHNUNG LIKE '%spannmittel%'
+      `);
+    } catch (e) {
+      console.warn('[DB Warning] Could not load fixture locations from D4 (likely missing KK_LAGERORT in dev environment):', e.message);
     }
-  });
 
-  const listToToolsMap = {};
-  const toolUsageCounts = {};
-  mappingResult.recordset.forEach(row => {
-    if (!listToToolsMap[row.ToolListNr]) {
-      listToToolsMap[row.ToolListNr] = [];
-    }
-    listToToolsMap[row.ToolListNr].push(row.ToolNr);
-    toolUsageCounts[row.ToolNr] = (toolUsageCounts[row.ToolNr] || 0) + 1;
-  });
-
-  const toolsDetails = {};
-  toolsDetailResult.recordset.forEach(t => {
-    toolsDetails[t.Nr] = {
-      nr: t.Nr,
-      desc: t.Descript,
-      keyword: t.KeyWord,
-      dia: t.Ds,
-      len: t.CLength
-    };
-  });
-
-  const nightSteps = new Set();
-  nightBookingsResult.recordset.forEach(row => {
-    if (row.NightBookings >= 3) {
-      nightSteps.add(`${row.ArticleId}-${row.StepPos}`);
-    }
-  });
-
-  // Group steps by OrderId to resolve predecessors correctly within each order
-  const ordersMap = {};
-  rows.forEach(row => {
-    row.isNightRunCapable = nightSteps.has(`${row.ArticleId}-${row.StepPos}`);
-    row.prodTime = row.ProdTime || 0;
-
-    if (!ordersMap[row.OrderId]) {
-      ordersMap[row.OrderId] = [];
-    }
-    ordersMap[row.OrderId].push(row);
-  });
-
-  // Sort and resolve feasibility status for each step in each order
-  Object.keys(ordersMap).forEach(orderId => {
-    const stepsGroup = ordersMap[orderId];
-    stepsGroup.sort((a, b) => {
-      const posA = parseInt(a.StepPos || 0, 10);
-      const posB = parseInt(b.StepPos || 0, 10);
-      return posA - posB;
-    });
-
-    stepsGroup.forEach((step, idx) => {
-      // Rule: If self is 2, status is Green (In-Progress can always be run/continued)
-      if (step.SPKO === 2) {
-        step.color = 'Green';
-        return;
-      }
-      // If completed, keep it Green (already run)
-      if (step.SPKO === 4) {
-        step.color = 'Green';
-        return;
-      }
-
-      // Predecessor check
-      let predPos = null;
-      let vgRaw = (step.VORGAENGER || '').trim();
-      if (vgRaw.startsWith('|')) {
-        vgRaw = vgRaw.replace('|', '').trim();
-      }
-
-      if (vgRaw === '') {
-        // "Wenn Vorgänger ist leer, dann nehme nächst kleinere PSP_Position_Nummer als eigene PSP_Position_Nummer als Vorgänger."
-        if (idx > 0) {
-          predPos = stepsGroup[idx - 1].StepPos;
-        }
-      } else {
-        // "Ist Vorgänger eine Zahl, nehme diese Zahl als PSP_Position_nummer Vorgänger."
-        predPos = vgRaw;
-      }
-
-      let predStep = null;
-      if (predPos !== null) {
-        predStep = stepsGroup.find(s => s.StepPos === predPos);
-      }
-
-      if (!predStep) {
-        // No predecessor -> Can start, so Green
-        step.color = 'Green';
-      } else {
-        // "Ist der Vorgäner = 2, dann hast du selbst den Status Gelb."
-        // "Ist der Vorgänger = 1, dann bist du Rot."
-        if (predStep.SPKO === 2) {
-          step.color = 'Yellow';
-        } else if (predStep.SPKO === 1) {
-          step.color = 'Red';
-        } else if (predStep.SPKO === 4) {
-          step.color = 'Green';
-        } else {
-          step.color = 'Green';
+    const fixtureLocationMap = {};
+    fixtureLocationsResult.recordset.forEach(row => {
+      const desc = row.StepDesc;
+      const loc = row.Lagerort;
+      if (desc && loc) {
+        const fixture = extractFixture(desc);
+        if (fixture) {
+          fixtureLocationMap[fixture.trim().toLowerCase()] = loc.trim();
         }
       }
     });
-  });
 
-  // Keep only normal work steps (StepTyp = 0) with valid setup time (> 0) and assigned to a machine or pool
-  // Also filter out completed steps (SPKO === 4)
-  const steps = rows.filter(step => {
-    if (step.SPKO === 4) return false;
-    if (step.TypHerkunft !== 0 || step.StepTyp !== 0) return false;
+    const listToToolsMap = {};
+    const toolUsageCounts = {};
+    mappingResult.recordset.forEach(row => {
+      if (!listToToolsMap[row.ToolListNr]) {
+        listToToolsMap[row.ToolListNr] = [];
+      }
+      listToToolsMap[row.ToolListNr].push(row.ToolNr);
+      toolUsageCounts[row.ToolNr] = (toolUsageCounts[row.ToolNr] || 0) + 1;
+    });
 
-    const desc = (step.StepDesc || '').toLowerCase();
-    const isDeburringAssembly = 
-      step.MachineId === 15 || desc.includes('ur5') ||
-      step.MachineId === 16 || desc.includes('laser') ||
-      step.MachineId === 17 || desc.includes('messmaschine') || desc.includes('zeiss') || desc.includes('kmg') ||
-      desc.includes('versand') || desc.includes('verpacken') || desc.includes('etikett') ||
-      desc.includes('montage') || desc.includes('gewindeeinsatz') || desc.includes('zapfen brechen') ||
-      desc.includes('prüf') || desc.includes('abnahme') || desc.includes('serienprüfung') || desc.includes('stempeln') ||
-      desc.includes('entgrat');
+    const toolsDetails = {};
+    toolsDetailResult.recordset.forEach(t => {
+      toolsDetails[t.Nr] = {
+        nr: t.Nr,
+        desc: t.Descript,
+        keyword: t.KeyWord,
+        dia: t.Ds,
+        len: t.CLength
+      };
+    });
 
-    const isMachining = step.SetupTime > 0 &&
-      ((step.MachineId !== null && step.MachineId !== 0) || (step.MachinePoolId !== null && step.MachinePoolId !== 0));
+    const nightSteps = new Set();
+    nightBookingsResult.recordset.forEach(row => {
+      if (row.NightBookings >= 3) {
+        nightSteps.add(row.ArticleId + '-' + row.StepPos);
+      }
+    });
 
-    return isDeburringAssembly || isMachining;
-  });
-  console.log('Loading article master routing template steps...');
-  const masterStepsResult = await poolD4.request().query(`
-    SELECT p.KP_IDAR as ArticleId, p.KP_POSITION_NUMMER as StepPos, CAST(p.KP_BEZEICHNUNG AS VARCHAR(8000)) as StepDesc
-    FROM [D4].[dbo].[tSK_KALP] p
-    INNER JOIN [D4].[dbo].[tSK_KALK] k ON p.KP_IDSKKK = k.ID
-    WHERE (k.KK_IDBEBP IS NULL OR k.KK_IDBEBP = 0)
-      AND p.KP_TYP_POSITION = 0
-  `);
-  
-  const masterStepsMap = {};
-  masterStepsResult.recordset.forEach(row => {
-    if (row.ArticleId) {
-      const key = `${row.ArticleId}_${(row.StepPos || '').trim()}`;
-      masterStepsMap[key] = row.StepDesc || '';
-    }
-  });
-  console.log(`Loaded ${masterStepsResult.recordset.length} master template steps.`);
+    // Group steps by OrderId to resolve predecessors correctly within each order
+    const ordersMap = {};
+    rows.forEach(row => {
+      row.isNightRunCapable = nightSteps.has(row.ArticleId + '-' + row.StepPos);
+      row.prodTime = row.ProdTime || 0;
 
-  console.log(`Matching NC programs for ${steps.length} setup steps...`);
-  const matchCache = {};
-  steps.forEach((step, idx) => {
-    if (idx % 25 === 0) {
-      systemState.progress = `5. Rüstzeitmodelle: Ordne NC-Programme zu (${idx} / ${steps.length} verarbeitet)...`;
-    }
-    const progs = extractNCPrograms(step.StepDesc);
-    if (progs.length > 0) {
-      const prog = progs[0];
-      step.NCProgram = prog;
-      if (matchCache[prog] === undefined) {
-        const matches = findMatches(prog, cachedToolLists, 0.6);
-        if (matches.length > 0) {
-          matchCache[prog] = {
-            Nr: matches[0].Nr,
-            Ident: matches[0].Ident,
-            matchType: matches[0].matchType,
-            score: matches[0].score
-          };
-        } else {
-          matchCache[prog] = null;
+      if (!ordersMap[row.OrderId]) {
+        ordersMap[row.OrderId] = [];
+      }
+      ordersMap[row.OrderId].push(row);
+    });
+
+    // Sort and resolve feasibility status for each step in each order
+    Object.keys(ordersMap).forEach(orderId => {
+      const stepsGroup = ordersMap[orderId];
+      stepsGroup.sort((a, b) => {
+        const posA = parseInt(a.StepPos || 0, 10);
+        const posB = parseInt(b.StepPos || 0, 10);
+        return posA - posB;
+      });
+
+      stepsGroup.forEach((step, idx) => {
+        // Rule: If self is 2, status is Green (In-Progress can always be run/continued)
+        if (step.SPKO === 2) {
+          step.color = 'Green';
+          return;
         }
-      }
+        // If completed, keep it Green (already run)
+        if (step.SPKO === 4) {
+          step.color = 'Green';
+          return;
+        }
 
-      const match = matchCache[prog];
-      if (match) {
-        step.MatchedListNr = match.Nr;
-        step.MatchedListIdent = match.Ident;
-        step.MatchedType = match.matchType;
-        step.MatchedScore = match.score;
-      }
-      step.fixture = extractFixture(step.StepDesc);
-      step.fixtureLocation = step.fixture ? (fixtureLocationMap[step.fixture.trim().toLowerCase()] || extractLagerortFromDesc(step.StepDesc)) : null;
-    }
+        // Predecessor check
+        let predPos = null;
+        let vgRaw = (step.VORGAENGER || '').trim();
+        if (vgRaw.startsWith('|')) {
+          vgRaw = vgRaw.replace('|', '').trim();
+        }
 
-    // Match master routing template step
-    const cleanPos = (step.StepPos || '').trim();
-    const masterDesc = masterStepsMap[`${step.ArticleId}_${cleanPos}`];
-    if (masterDesc) {
-      const masterProgs = extractNCPrograms(masterDesc);
-      if (masterProgs.length > 0) {
-        const masterProg = masterProgs[0];
-        step.masterNcProgram = masterProg;
-        const masterMatches = findMatches(masterProg, cachedToolLists, 0.6);
-        if (masterMatches.length > 0) {
-          step.masterMatchedListNr = masterMatches[0].Nr;
-          step.masterMatchedListIdent = masterMatches[0].Ident;
-          step.masterMatchedType = masterMatches[0].matchType;
-          step.masterMatchedScore = masterMatches[0].score;
+        if (vgRaw === '') {
+          // "Wenn Vorgänger ist leer, dann nehme nächst kleinere PSP_Position_Nummer als eigene PSP_Position_Nummer als Vorgänger."
+          if (idx > 0) {
+            predPos = stepsGroup[idx - 1].StepPos;
+          }
         } else {
+          // "Ist Vorgänger eine Zahl, nehme diese Zahl als PSP_Position_nummer Vorgänger."
+          predPos = vgRaw;
+        }
+
+        let predStep = null;
+        if (predPos !== null) {
+          predStep = stepsGroup.find(s => s.StepPos === predPos);
+        }
+
+        if (!predStep) {
+          // No predecessor -> Can start, so Green
+          step.color = 'Green';
+        } else {
+          // "Ist der Vorgäner = 2, dann hast du selbst den Status Gelb."
+          // "Ist der Vorgänger = 1, dann bist du Rot."
+          if (predStep.SPKO === 2) {
+            step.color = 'Yellow';
+          } else if (predStep.SPKO === 1) {
+            step.color = 'Red';
+          } else if (predStep.SPKO === 4) {
+            step.color = 'Green';
+          } else {
+            step.color = 'Green';
+          }
+        }
+      });
+    });
+
+    // Keep only normal work steps (StepTyp = 0) with valid setup time (> 0) and assigned to a machine or pool
+    // Also filter out completed steps (SPKO === 4)
+    const steps = rows.filter(step => {
+      if (step.SPKO === 4) return false;
+      if (step.TypHerkunft !== 0 || step.StepTyp !== 0) return false;
+
+      const desc = (step.StepDesc || '').toLowerCase();
+      const isDeburringAssembly = 
+        step.MachineId === 15 || desc.includes('ur5') ||
+        step.MachineId === 16 || desc.includes('laser') ||
+        step.MachineId === 17 || desc.includes('messmaschine') || desc.includes('zeiss') || desc.includes('kmg') ||
+        desc.includes('versand') || desc.includes('verpacken') || desc.includes('etikett') ||
+        desc.includes('montage') || desc.includes('gewindeeinsatz') || desc.includes('zapfen brechen') ||
+        desc.includes('prüf') || desc.includes('abnahme') || desc.includes('serienprüfung') || desc.includes('stempeln') ||
+        desc.includes('entgrat');
+
+      const isMachining = step.SetupTime > 0 &&
+        ((step.MachineId !== null && step.MachineId !== 0) || (step.MachinePoolId !== null && step.MachinePoolId !== 0));
+
+      return isDeburringAssembly || isMachining;
+    });
+
+    console.log('Loading article master routing template steps...');
+    const masterStepsResult = await poolD4.request().query(`
+      SELECT p.KP_IDAR as ArticleId, p.KP_POSITION_NUMMER as StepPos, CAST(p.KP_BEZEICHNUNG AS VARCHAR(8000)) as StepDesc
+      FROM [D4].[dbo].[tSK_KALP] p
+      INNER JOIN [D4].[dbo].[tSK_KALK] k ON p.KP_IDSKKK = k.ID
+      WHERE (k.KK_IDBEBP IS NULL OR k.KK_IDBEBP = 0)
+        AND p.KP_TYP_POSITION = 0
+    `);
+    
+    const masterStepsMap = {};
+    masterStepsResult.recordset.forEach(row => {
+      if (row.ArticleId) {
+        const key = row.ArticleId + '_' + (row.StepPos || '').trim();
+        masterStepsMap[key] = row.StepDesc || '';
+      }
+    });
+    console.log('Loaded ' + masterStepsResult.recordset.length + ' master template steps.');
+
+    console.log('Matching NC programs for ' + steps.length + ' setup steps...');
+    const matchCache = {};
+    steps.forEach((step, idx) => {
+      if (idx % 25 === 0) {
+        systemState.progress = '5. Rüstzeitmodelle: Ordne NC-Programme zu (' + idx + ' / ' + steps.length + ' verarbeitet)...';
+      }
+      const progs = extractNCPrograms(step.StepDesc);
+      if (progs.length > 0) {
+        const prog = progs[0];
+        step.NCProgram = prog;
+        if (matchCache[prog] === undefined) {
+          const matches = findMatches(prog, cachedToolLists, 0.6);
+          if (matches.length > 0) {
+            matchCache[prog] = {
+              Nr: matches[0].Nr,
+              Ident: matches[0].Ident,
+              matchType: matches[0].matchType,
+              score: matches[0].score
+            };
+          } else {
+            matchCache[prog] = null;
+          }
+        }
+
+        const match = matchCache[prog];
+        if (match) {
+          step.MatchedListNr = match.Nr;
+          step.MatchedListIdent = match.Ident;
+          step.MatchedType = match.matchType;
+          step.MatchedScore = match.score;
+        }
+        step.fixture = extractFixture(step.StepDesc);
+        step.fixtureLocation = step.fixture ? (fixtureLocationMap[step.fixture.trim().toLowerCase()] || extractLagerortFromDesc(step.StepDesc)) : null;
+      }
+
+      const cleanPos = (step.StepPos || '').trim();
+      const masterDesc = masterStepsMap[step.ArticleId + '_' + cleanPos];
+      if (masterDesc) {
+        const masterProgs = extractNCPrograms(masterDesc);
+        if (masterProgs.length > 0) {
+          const masterProg = masterProgs[0];
+          step.masterNcProgram = masterProg;
+          const masterMatches = findMatches(masterProg, cachedToolLists, 0.6);
+          if (masterMatches.length > 0) {
+            step.masterMatchedListNr = masterMatches[0].Nr;
+            step.masterMatchedListIdent = masterMatches[0].Ident;
+            step.masterMatchedType = masterMatches[0].matchType;
+            step.masterMatchedScore = masterMatches[0].score;
+          } else {
+            step.masterMatchedListNr = null;
+            step.masterMatchedListIdent = null;
+            step.masterMatchedType = null;
+            step.masterMatchedScore = null;
+          }
+        } else {
+          step.masterNcProgram = null;
           step.masterMatchedListNr = null;
-          step.masterMatchedListIdent = null;
           step.masterMatchedType = null;
           step.masterMatchedScore = null;
         }
@@ -548,37 +571,37 @@ async function cacheSetupData() {
         step.masterMatchedType = null;
         step.masterMatchedScore = null;
       }
-    } else {
-      step.masterNcProgram = null;
-      step.masterMatchedListNr = null;
-      step.masterMatchedType = null;
-      step.masterMatchedScore = null;
-    }
-  });
-  console.log('NC program matching completed.');
+    });
+    console.log('NC program matching completed.');
 
-  const listHeadersResult = await poolWT.request().query(`
-    SELECT Nr, MachineNr
-    FROM [WTDATA].[dbo].[ToolLists]
-    WHERE MachineNr IS NOT NULL
-  `);
+    const listHeadersResult = await poolWT.request().query(`
+      SELECT Nr, MachineNr
+      FROM [WTDATA].[dbo].[ToolLists]
+      WHERE MachineNr IS NOT NULL
+    `);
 
-  const listToMachineMap = {};
-  listHeadersResult.recordset.forEach(row => {
-    listToMachineMap[row.Nr] = row.MachineNr;
-  });
+    const listToMachineMap = {};
+    listHeadersResult.recordset.forEach(row => {
+      listToMachineMap[row.Nr] = row.MachineNr;
+    });
 
-  cachedSetupData = {
-    steps,
-    listToToolsMap,
-    toolUsageCounts,
-    toolsDetails,
-    listToMachineMap,
-    fixtureLocationMap
-  };
-  console.log('Setup reduction base data cached.');
+    cachedSetupData = {
+      steps,
+      listToToolsMap,
+      toolUsageCounts,
+      toolsDetails,
+      listToMachineMap,
+      fixtureLocationMap
+    };
+    console.log('Setup reduction base data cached.');
+  })();
+
+  try {
+    await cacheWarmingPromise;
+  } finally {
+    cacheWarmingPromise = null;
+  }
 }
-
 function getMagazineSize(number, name) {
   const code = ((number || '') + ' ' + (name || '')).toUpperCase();
   if (code.includes('C400')) return 37;
@@ -680,6 +703,26 @@ app.post('/api/clear-cache', (req, res) => {
   try {
     cachedSetupData = null;
     res.json({ success: true, message: 'Cache wurde erfolgreich gelöscht.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get DB Mode Endpoint
+app.get('/api/db-mode', (req, res) => {
+  res.json({ mode: getDbMode() });
+});
+
+// Switch DB Mode Endpoint
+app.post('/api/db-mode', (req, res) => {
+  const { mode } = req.body;
+  if (mode !== 'live' && mode !== 'dev') {
+    return res.status(400).json({ error: 'Ungültiger Modus. Erlaubt sind: dev, live' });
+  }
+  try {
+    setDbMode(mode);
+    cachedSetupData = null; // Clear cache so next request fetches fresh data from selected DB!
+    res.json({ success: true, mode: getDbMode(), message: `Erfolgreich auf ${mode === 'live' ? 'Live-Datenbank' : 'Entwicklungs-Datenbank'} umgeschaltet.` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1952,6 +1995,36 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
     return { sequenced: [], finalMagazine: currentMagazine };
   }
 
+  // Extract active steps (in progress) and force them to the front of today's schedule
+  const activeSteps = stepsList.filter(s => s.SPKO === 2);
+  const normalSteps = stepsList.filter(s => s.SPKO !== 2);
+
+  if (activeSteps.length > 0) {
+    let runningMag = [...currentMagazine];
+    activeSteps.forEach(chosen => {
+      const tools = listToToolsMap[chosen.MatchedListNr] || [];
+      const load = tools.filter(t => !runningMag.includes(t));
+      load.forEach(tNr => {
+        while (runningMag.length >= magazineSize) {
+          const candidates = runningMag.filter(mNr => !tools.includes(mNr));
+          if (candidates.length === 0) break;
+          const remaining = activeSteps.slice(activeSteps.indexOf(chosen) + 1).concat(normalSteps);
+          const victim = findOptimalVictim(candidates, remaining, listToToolsMap);
+          runningMag = runningMag.filter(mNr => mNr !== victim);
+        }
+        runningMag.push(tNr);
+      });
+      chosen.loadTools = load;
+      chosen.missesCount = load.length;
+    });
+
+    const result = sequenceSteps(normalSteps, runningMag, magazineSize, listToToolsMap, algo, optimizeFixture, fixtureWeight);
+    return {
+      sequenced: activeSteps.concat(result.sequenced),
+      finalMagazine: result.finalMagazine
+    };
+  }
+
   let ordered = [];
   if (algo === 'ga') {
     ordered = sequenceStepsGA(stepsList, currentMagazine, magazineSize, listToToolsMap, optimizeFixture, fixtureWeight);
@@ -2109,18 +2182,18 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
   return { sequenced, finalMagazine: magazine };
 }
 
-// Helper to get next 5 working days (Monday-Friday) starting from a date
-function getNext5WorkingDays(startDateStr) {
+// Helper to get next working days (Monday-Friday) starting from a date
+function getNextWorkingDays(startDateStr, daysCount = 5) {
   const days = [];
   let curr = new Date(startDateStr);
   let limit = 0;
-  while (days.length < 5 && limit < 15) {
-    limit++;
+  while (days.length < daysCount && limit < 100) {
     const dayOfWeek = curr.getDay();
     if (dayOfWeek !== 0 && dayOfWeek !== 6) {
       days.push(curr.toISOString().substring(0, 10));
     }
     curr.setDate(curr.getDate() + 1);
+    limit++;
   }
   return days;
 }
@@ -2234,7 +2307,8 @@ app.get('/api/planning', async (req, res) => {
       await cacheSetupData();
     }
 
-    const { startDate, optimize, algo, optimizeFixture, fixtureWeight } = req.query;
+    const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount } = req.query;
+    const parsedDaysCount = daysCount !== undefined ? parseInt(daysCount, 10) : 5;
     const shouldOptimizeFixture = optimizeFixture === 'true';
     const parsedFixtureWeight = fixtureWeight !== undefined ? parseFloat(fixtureWeight) : 1.5;
     let { steps, listToToolsMap, toolsDetails, listToMachineMap, fixtureLocationMap } = cachedSetupData;
@@ -2284,7 +2358,7 @@ app.get('/api/planning', async (req, res) => {
     const defaultStartStr = new Date().toISOString().substring(0, 10);
 
     const startStr = startDate || defaultStartStr;
-    const planningDays = getNext5WorkingDays(startStr);
+    const planningDays = getNextWorkingDays(startStr, parsedDaysCount);
 
     const machinesList = [
       'Brother', 'Chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2',
@@ -2397,13 +2471,20 @@ app.get('/api/planning', async (req, res) => {
         stepDateStr = planningDays[0];
       }
 
+      // Active steps (in execution) must always be scheduled on the first day of planning (today)!
+      if (step.SPKO === 2) {
+        stepDateStr = planningDays[0];
+      }
+
       // Check if it belongs to a deburring/assembly/laser virtual column
       const virtualM = getVirtualMachineForStep(step);
       if (virtualM) {
         if (planningDays.includes(stepDateStr)) {
           board[virtualM][stepDateStr].push(step);
         } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
-          lookaheadCandidates[virtualM].push(step);
+          if (!lookaheadCandidates[virtualM].some(x => x.StepId === step.StepId)) {
+            lookaheadCandidates[virtualM].push(step);
+          }
         }
         return;
       }
@@ -2445,7 +2526,9 @@ app.get('/api/planning', async (req, res) => {
         if (planningDays.includes(stepDateStr)) {
           board[targetM][stepDateStr].push(step);
         } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
-          lookaheadCandidates[targetM].push(step);
+          if (!lookaheadCandidates[targetM].some(x => x.StepId === step.StepId)) {
+            lookaheadCandidates[targetM].push(step);
+          }
         }
       } else {
         // Pool assignment step - save to list to distribute dynamically after baseline load
@@ -2454,11 +2537,11 @@ app.get('/api/planning', async (req, res) => {
             poolSteps.push({ step, dateStr: stepDateStr });
           } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
             if (step.MachinePoolId === 13) {
-              lookaheadCandidates['C40'].push(step);
-              lookaheadCandidates['C42'].push(step);
+              if (!lookaheadCandidates['C40'].some(x => x.StepId === step.StepId)) lookaheadCandidates['C40'].push(step);
+              if (!lookaheadCandidates['C42'].some(x => x.StepId === step.StepId)) lookaheadCandidates['C42'].push(step);
             } else if (step.MachinePoolId === 9 || step.MachinePoolId === 12) {
-              lookaheadCandidates['RS2_1'].push(step);
-              lookaheadCandidates['RS2_2'].push(step);
+              if (!lookaheadCandidates['RS2_1'].some(x => x.StepId === step.StepId)) lookaheadCandidates['RS2_1'].push(step);
+              if (!lookaheadCandidates['RS2_2'].some(x => x.StepId === step.StepId)) lookaheadCandidates['RS2_2'].push(step);
             }
           }
         }
@@ -2541,45 +2624,57 @@ app.get('/api/planning', async (req, res) => {
           const isNonMachining = ['Entgraten', 'Montage', 'Montage UR5', 'Laser', 'Messmaschine', 'Prüfplanung', 'Versand'].includes(mName);
 
           if (dayCandidates.length > 0) {
-            if (isNonMachining) {
-              const { sequenced } = sequenceNonMachining(dayCandidates, orderStepsMap);
-              sequencedSteps = sequenced;
-            } else if (shouldOptimize && optimizeNightRun) {
-              const nightSteps = dayCandidates.filter(s => s.isNightRunCapable);
-              const normalSteps = dayCandidates.filter(s => !s.isNightRunCapable);
+            // Force executing steps (SPKO === 2) to run first, bypassing the normal/night splitting
+            const executingSteps = dayCandidates.filter(s => s.SPKO === 2);
+            const nonExecutingCandidates = dayCandidates.filter(s => s.SPKO !== 2);
 
-              let currentMag = [...runningMagazine];
-              const isChironOrBrother = mName === 'Chiron' || mName === 'Brother';
+            let currentMag = [...runningMagazine];
+            if (executingSteps.length > 0) {
+              const { sequenced, finalMagazine } = sequenceSteps(executingSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+              sequencedSteps = sequencedSteps.concat(sequenced);
+              currentMag = finalMagazine;
+            }
 
-              if (isChironOrBrother) {
-                if (nightSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                  sequencedSteps = sequencedSteps.concat(sequenced);
-                  currentMag = finalMagazine;
-                }
-                if (normalSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                  sequencedSteps = sequencedSteps.concat(sequenced);
-                  currentMag = finalMagazine;
+            if (nonExecutingCandidates.length > 0) {
+              if (isNonMachining) {
+                const { sequenced } = sequenceNonMachining(nonExecutingCandidates, orderStepsMap);
+                sequencedSteps = sequencedSteps.concat(sequenced);
+              } else if (shouldOptimize && optimizeNightRun) {
+                const nightSteps = nonExecutingCandidates.filter(s => s.isNightRunCapable);
+                const normalSteps = nonExecutingCandidates.filter(s => !s.isNightRunCapable);
+
+                const isChironOrBrother = mName === 'Chiron' || mName === 'Brother';
+
+                if (isChironOrBrother) {
+                  if (nightSteps.length > 0) {
+                    const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                    sequencedSteps = sequencedSteps.concat(sequenced);
+                    currentMag = finalMagazine;
+                  }
+                  if (normalSteps.length > 0) {
+                    const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                    sequencedSteps = sequencedSteps.concat(sequenced);
+                    currentMag = finalMagazine;
+                  }
+                } else {
+                  if (normalSteps.length > 0) {
+                    const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                    sequencedSteps = sequencedSteps.concat(sequenced);
+                    currentMag = finalMagazine;
+                  }
+                  if (nightSteps.length > 0) {
+                    const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                    sequencedSteps = sequencedSteps.concat(sequenced);
+                    currentMag = finalMagazine;
+                  }
                 }
               } else {
-                if (normalSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                  sequencedSteps = sequencedSteps.concat(sequenced);
-                  currentMag = finalMagazine;
-                }
-                if (nightSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                  sequencedSteps = sequencedSteps.concat(sequenced);
-                  currentMag = finalMagazine;
-                }
+                const { sequenced, finalMagazine } = sequenceSteps(nonExecutingCandidates, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                sequencedSteps = sequencedSteps.concat(sequenced);
+                currentMag = finalMagazine;
               }
-              runningMagazine = currentMag;
-            } else {
-              const { sequenced, finalMagazine } = sequenceSteps(dayCandidates, runningMagazine, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-              sequencedSteps = sequenced;
-              runningMagazine = finalMagazine;
             }
+            runningMagazine = currentMag;
           }
 
           // Apply capacity constraint scheduling
@@ -2724,6 +2819,11 @@ app.get('/api/planning', async (req, res) => {
             originalStartDate: originalDateStr || null,
              isSplit: s.isSplit || false,
              isLookahead: originalDateStr ? (originalDateStr > planningDays[planningDays.length - 1]) : false,
+             isWrongMachine: (
+               (s.StepDesc && s.StepDesc.toLowerCase().includes('c40') && s.MachineId === 4) ||
+               (s.StepDesc && s.StepDesc.toLowerCase().includes('c42') && s.MachineId === 25) ||
+               (s.StepDesc && s.StepDesc.toLowerCase().includes('rs2') && (s.MachineId === 5 || s.MachineId === 6))
+             ) || false,
              splitPart: s.splitPart || null,
              isExecuting: s.SPKO === 2,
             ncProgram: s.NCProgram || null,
