@@ -5,8 +5,8 @@
 function extractNCPrograms(text) {
   if (!text) return [];
   const results = [];
-  // Regex to match "NC-Programm:" or "Programm:" followed by the text
-  const regex = /(?:NC-)?Programm:\s*([^\r\n\t]+)/gi;
+  // Regex to match "NC-Programm:" or "Programm:" followed by the text (allowing optional space before the colon)
+  const regex = /(?:NC-)?Programm\s*:\s*([^\r\n\t]+)/gi;
   let match;
   
   while ((match = regex.exec(text)) !== null) {
@@ -153,6 +153,9 @@ function findMatches(progName, cachedToolLists, threshold = 0.6) {
   
   // 2. Perform fuzzy search
   const matches = [];
+  const isPurelyNumeric = /^\d+$/.test(searchName);
+  const isVeryShort = searchName.length <= 5;
+
   for (let list of cachedToolLists) {
     const identScore = jaroWinklerSimilarity(progName, list.Ident || '');
     const ncpScore = jaroWinklerSimilarity(progName, list.NCP || '');
@@ -164,7 +167,7 @@ function findMatches(progName, cachedToolLists, threshold = 0.6) {
                         (list.Ident && list.Ident.toLowerCase().includes(progName.toLowerCase())) ||
                         (list.NCP && list.NCP.toLowerCase().includes(progName.toLowerCase()));
                         
-    const finalScore = isSubstring ? Math.max(maxScore, 0.75) : maxScore;
+    const finalScore = isSubstring ? Math.max(maxScore, 0.75) : (isPurelyNumeric || isVeryShort ? 0.0 : maxScore);
     
     if (finalScore >= threshold) {
       matches.push({

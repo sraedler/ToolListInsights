@@ -5482,6 +5482,7 @@ function PlanningTab({ mode = 'machining' }) {
   const [allowLookahead, setAllowLookahead] = useState(true);
   const [dbMode, setDbModeState] = useState('dev');
   const [daysCount, setDaysCount] = useState(5);
+  const [poolOptimization, setPoolOptimization] = useState(false);
 
   useEffect(() => {
     setTempFixtureWeight(fixtureWeight);
@@ -5826,7 +5827,8 @@ function PlanningTab({ mode = 'machining' }) {
   const formatDate = (dateStr) => {
     if (dateStr === 'Überlauf') return 'Postponed backlog';
     if (!dateStr) return '';
-    const parts = dateStr.split('-');
+    const cleanDate = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+    const parts = cleanDate.split('-');
     if (parts.length === 3) {
       return `${parts[2]}.${parts[1]}.`;
     }
@@ -6098,6 +6100,18 @@ function PlanningTab({ mode = 'machining' }) {
                   />
                   <span style={{ color: '#a7f3d0' }}>⚡ Laufende verblassen</span>
                 </label>
+
+                {['RS2_1', 'RS2_2', 'C40', 'C42'].includes(selectedMachine) && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={poolOptimization}
+                      onChange={(e) => setPoolOptimization(e.target.checked)}
+                      style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
+                    />
+                    <span style={{ color: '#93c5fd' }}>🔄 Pool Optimierung</span>
+                  </label>
+                )}
 
                 {(selectedMachine === 'Chiron' || selectedMachine === 'Brother') && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
@@ -6517,11 +6531,20 @@ function PlanningTab({ mode = 'machining' }) {
           // Detailed Single Machine Kanban Board (5 columns)
           <div className="kanban-board">
           {days.map(day => {
-            const daySteps = board[selectedMachine]?.[day] || [];
-            const totalSetupTime = daySteps.reduce((acc, s) => acc + s.setupTime, 0);
-            const totalProdTime = daySteps.reduce((acc, s) => acc + s.prodTime, 0);
+            const partnerMap = { 'C40': 'C42', 'C42': 'C40', 'RS2_1': 'RS2_2', 'RS2_2': 'RS2_1' };
+            const partnerName = partnerMap[selectedMachine];
+            let daySteps = board[selectedMachine]?.[day] || [];
+            if (poolOptimization && partnerName) {
+              const recommendedFromPartner = (board[partnerName]?.[day] || [])
+                .filter(s => s.poolRecommendation && s.poolRecommendation.partnerMachine === selectedMachine)
+                .map(s => ({ ...s, isPoolRecommendationCopy: true }));
+              daySteps = [...daySteps, ...recommendedFromPartner];
+            }
+            const actualSteps = daySteps.filter(s => !s.isPoolRecommendationCopy);
+            const totalSetupTime = actualSteps.reduce((acc, s) => acc + s.setupTime, 0);
+            const totalProdTime = actualSteps.reduce((acc, s) => acc + s.prodTime, 0);
             const totalWorkloadTime = totalSetupTime + totalProdTime;
-            const totalChanges = daySteps.reduce((acc, s) => acc + s.missesCount, 0);
+            const totalChanges = actualSteps.reduce((acc, s) => acc + s.missesCount, 0);
 
             const dayCapacity = capacities[selectedMachine]?.[day];
             const loadPercentage = dayCapacity ? Math.min(100, Math.round((totalWorkloadTime / dayCapacity) * 100)) : 0;
@@ -6533,7 +6556,14 @@ function PlanningTab({ mode = 'machining' }) {
                   <div className="day-name">{getDayName(day)}</div>
                   <div className="day-date">{formatDate(day)}</div>
                   <div className="column-summary" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-                    <div style={{ color: '#fff', fontWeight: 600 }}>{daySteps.length} Aufträge</div>
+                    <div style={{ color: '#fff', fontWeight: 600 }}>
+                      {actualSteps.length} {actualSteps.length === 1 ? 'Auftrag' : 'Aufträge'}
+                      {daySteps.length > actualSteps.length && (
+                        <span style={{ color: '#93c5fd', fontSize: '0.68rem', fontWeight: 500, marginLeft: '0.25rem' }}>
+                          (+{daySteps.length - actualSteps.length} Tipps)
+                        </span>
+                      )}
+                    </div>
                     <div style={{ color: '#38bdf8', fontSize: '0.75rem', fontWeight: 600 }}>
                       Gesamt: {formatMinutes(totalWorkloadTime)}
                     </div>
@@ -6568,7 +6598,7 @@ function PlanningTab({ mode = 'machining' }) {
                       const isBlurryExecuting = hideExecuting && step.isExecuting;
                       return (
                         <div 
-                          key={step.stepId} 
+                          key={step.isPoolRecommendationCopy ? `${step.stepId}-recommendation-${idx}` : `${step.stepId}-${idx}`} 
                           className={`kanban-card ${step.isExecuting ? 'executing' : ''}`} 
                           onClick={() => { setActiveModalStep(step); setIsExplanationCollapsed(true); }}
                           style={{
@@ -6577,15 +6607,44 @@ function PlanningTab({ mode = 'machining' }) {
                             transition: 'opacity 0.25s, filter 0.25s, border-color 0.25s',
                             opacity: isBlurryExecuting ? 0.6 : (isNonRobot ? 0.6 : 1),
                             filter: isBlurryExecuting ? 'blur(1px) grayscale(20%)' : (isNonRobot ? 'blur(0.8px) grayscale(15%)' : 'none'),
-                            border: highlightRobotFlow && !isNonRobot ? '1.5px solid #a855f7' : undefined,
-                            boxShadow: highlightRobotFlow && !isNonRobot ? '0 0 12px rgba(168, 85, 247, 0.2)' : undefined,
+                            border: step.isPoolRecommendationCopy 
+                              ? '1.5px dashed rgba(59, 130, 246, 0.5)' 
+                              : (highlightRobotFlow && !isNonRobot ? '1.5px solid #a855f7' : undefined),
+                            boxShadow: step.isPoolRecommendationCopy
+                              ? '0 0 12px rgba(59, 130, 246, 0.2)'
+                              : (highlightRobotFlow && !isNonRobot ? '0 0 12px rgba(168, 85, 247, 0.2)' : undefined),
+                            background: step.isPoolRecommendationCopy ? 'rgba(59, 130, 246, 0.03)' : undefined,
                             pointerEvents: isBlurryExecuting ? 'none' : undefined
                           }}
                         >
+                          {step.isPoolRecommendationCopy && (
+                            <div style={{
+                              background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.15), rgba(139, 92, 246, 0.15))',
+                              borderBottom: '1px solid rgba(59, 130, 246, 0.2)',
+                              margin: '-0.65rem -0.65rem 0.4rem -0.65rem',
+                              padding: '0.25rem 0.65rem',
+                              borderTopLeftRadius: '8px',
+                              borderTopRightRadius: '8px',
+                              fontSize: '0.62rem',
+                              fontWeight: 700,
+                              color: '#93c5fd',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.25rem',
+                              letterSpacing: '0.02em'
+                            }}>
+                              <span>🔄 Pool-Tipp: besser auf {selectedMachine} (-{step.poolRecommendation.savings} Rüstwechsel)</span>
+                            </div>
+                          )}
                           {/* Header Row */}
                           <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
                             <span className="card-order-id" style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                              {step.contractNumber || `Auftrag #${step.orderId}`}
+                              {step.contractNumber || 'Auftrag'}
+                              {step.deliveryDate && (
+                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 600, marginLeft: '0.25rem' }}>
+                                  (Lief: {formatDate(step.deliveryDate)})
+                                </span>
+                              )}
                               <span 
                                 title={getStepPlacementExplanation(step, idx > 0 ? daySteps[idx - 1] : null)}
                                 style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
@@ -6641,6 +6700,10 @@ function PlanningTab({ mode = 'machining' }) {
                               <span style={{ color: 'var(--border-dim)' }}>|</span>
                               {!step.ncProgram ? (
                                 <span style={{ color: '#ef4444', fontWeight: 600 }}>NC fehlt</span>
+                              ) : !step.matchedListNr ? (
+                                <span style={{ color: '#f87171', fontWeight: 600 }} title="Keine WinTool-Liste gefunden">
+                                  💀 WT fehlt
+                                </span>
                               ) : (
                                 <span style={{ color: '#38bdf8', fontWeight: 600 }}>
                                   🔧 Rüsten: {step.directMisses ? `+${step.directMisses.length}` : `+${step.loadTools.length}`}
@@ -6715,6 +6778,10 @@ function PlanningTab({ mode = 'machining' }) {
                               {!step.ncProgram ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: '#ef4444', fontWeight: 600 }}>
                                   <span>NC fehlt</span>
+                                </div>
+                              ) : !step.matchedListNr ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: '#f87171', fontWeight: 600 }}>
+                                  <span>💀 Keine WinTool-Liste gefunden</span>
                                 </div>
                               ) : (
                                 <>
@@ -6903,11 +6970,11 @@ function PlanningTab({ mode = 'machining' }) {
                             </span>
                           )}
                           <div className="grid-steps-preview">
-                            {daySteps.slice(0, 2).map(s => {
+                            {daySteps.slice(0, 2).map((s, idx) => {
                               const isBlurryExecuting = hideExecuting && s.isExecuting;
                               return (
                                 <div 
-                                  key={s.stepId} 
+                                  key={`${s.stepId}-${idx}`} 
                                   className="preview-item"
                                   style={{
                                     opacity: isBlurryExecuting ? 0.6 : 1,
@@ -7057,8 +7124,10 @@ function PlanningTab({ mode = 'machining' }) {
                   <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>{activeModalStep.contractNumber || 'Keine P-Nummer'}</div>
                 </div>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>D4-Auftrags-ID</div>
-                  <div style={{ fontSize: '1.05rem', color: '#fff', fontWeight: 700 }}>#{activeModalStep.orderId}</div>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Lieferdatum</div>
+                  <div style={{ fontSize: '1.05rem', color: '#10b981', fontWeight: 700 }}>
+                    {activeModalStep.deliveryDate ? formatDate(activeModalStep.deliveryDate) : 'Kein Lieferdatum'}
+                  </div>
                 </div>
               </div>
 
@@ -7131,7 +7200,9 @@ function PlanningTab({ mode = 'machining' }) {
                 </div>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>WinTool-Liste</div>
-                  <div style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 600 }}>{activeModalStep.matchedListIdent || 'Keine Liste'}</div>
+                  <div style={{ fontSize: '0.9rem', color: activeModalStep.matchedListNr ? '#fff' : '#f87171', fontWeight: 600 }}>
+                    {activeModalStep.matchedListNr ? activeModalStep.matchedListIdent : '💀 Keine Liste'}
+                  </div>
                   {activeModalStep.matchedListNr && <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Liste: #{activeModalStep.matchedListNr}</div>}
                 </div>
               </div>
@@ -7145,9 +7216,15 @@ function PlanningTab({ mode = 'machining' }) {
                       🛠️ {activeModalStep.fixture}
                     </span>
                     {activeModalStep.fixtureLocation && (
-                      <span style={{ fontSize: '0.8rem', color: '#a7f3d0', fontWeight: 600, background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '0.15rem 0.4rem', borderRadius: '6px' }}>
-                        📍 Lagerort: {activeModalStep.fixtureLocation}
-                      </span>
+                      activeModalStep.fixtureLocationFromDb ? (
+                        <span style={{ fontSize: '0.8rem', color: '#a7f3d0', fontWeight: 600, background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '0.15rem 0.4rem', borderRadius: '6px' }}>
+                          📍 Lagerort: {activeModalStep.fixtureLocation}
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '0.8rem', color: '#f59e0b', fontWeight: 600, background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.2)', padding: '0.15rem 0.4rem', borderRadius: '6px' }} title="Dieser Lagerplatz wurde aus dem Arbeitsschritt-Text ausgelesen, da in der Datenbank kein Lagerort hinterlegt ist.">
+                          ⚠️ Lagerplatz nicht hinterlegt (Text-Info: {activeModalStep.fixtureLocation})
+                        </span>
+                      )
                     )}
                   </div>
                 </div>

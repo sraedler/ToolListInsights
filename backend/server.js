@@ -84,6 +84,13 @@ async function fetchActiveStepsAndMaterials(poolD4) {
       p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
       p.PSP_ZEIT_MINUTEN_PRODUKTION_GESAMT_SOLL as ProdTime,
       p.PSP_IDMS as MachineId,
+      (
+        SELECT TOP 1 zb.ZBU_IDMS
+        FROM [D4].[dbo].[tZE_BUCH] zb
+        WHERE zb.ZBU_IDPSKP = OuterTemp.ID
+          AND zb.ZBU_IDMS IS NOT NULL
+        ORDER BY zb.ID DESC
+      ) as BookedMachineId,
       p.PSP_IDMP as MachinePoolId,
       p.PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG as MaxProdTag,
       p.PSP_MENGE_SOLL as Quantity,
@@ -315,6 +322,23 @@ async function cacheDemand() {
   console.log('Tool demand timeline cached.');
 }
 
+function getToollistMachineId(d4MachineId, d4PoolId) {
+  // D4 Machine IDs: 5 -> RS2_1, 6 -> RS2_2, 4 -> C40, 25 -> C42, 21 -> Chiron, 2 -> C400
+  // Toollist DB Machine IDs: 3 -> RS1 (RS2_1), 4 -> RS2 (RS2_2), 1 -> C40, 6 -> C42, 5 -> Chiron, 2 -> C400
+  if (d4MachineId === 5) return 3;
+  if (d4MachineId === 6) return 4;
+  if (d4MachineId === 4) return 1;
+  if (d4MachineId === 25) return 6;
+  if (d4MachineId === 21) return 5;
+  if (d4MachineId === 2) return 2;
+  
+  // D4 Pool IDs: 9 -> RS2, 12 -> Kapazität RS2, 13 -> Kapazität C40-C42
+  if (d4PoolId === 9 || d4PoolId === 12) return [3, 4];
+  if (d4PoolId === 13) return [1, 6];
+  
+  return null;
+}
+
 async function cacheSetupData() {
   if (cacheWarmingPromise) {
     return cacheWarmingPromise;
@@ -323,9 +347,10 @@ async function cacheSetupData() {
   cacheWarmingPromise = (async () => {
     const poolD4 = await getPoolD4();
     const poolWT = await getPoolWT();
+    const poolTL = await getPoolTL();
 
     console.log('Caching steps, tools, and night-run bookings in parallel...');
-    const [rows, mappingResult, toolsDetailResult, nightBookingsResult] = await Promise.all([
+    const [rows, mappingResult, toolsDetailResult, nightBookingsResult, activeProgsResult] = await Promise.all([
       fetchActiveStepsAndMaterials(poolD4),
       poolWT.request().query('SELECT ToolListNr, ToolNr FROM [WTDATA].[dbo].[ToolList] WHERE ToolNr IS NOT NULL'),
       poolWT.request().query('SELECT Nr, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools]'),
@@ -337,7 +362,8 @@ async function cacheSetupData() {
         INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = zb.ZBU_IDPSKP
         WHERE DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) >= 21 OR DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6
         GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
-      `)
+      `),
+      poolTL.request().query('SELECT Machine, ProgramName FROM MachineToProgram WHERE ProgramName IS NOT NULL')
     ]);
 
     let fixtureLocationsResult = { recordset: [] };
@@ -351,6 +377,14 @@ async function cacheSetupData() {
     } catch (e) {
       console.warn('[DB Warning] Could not load fixture locations from D4 (likely missing KK_LAGERORT in dev environment):', e.message);
     }
+
+    const machineActivePrograms = {};
+    activeProgsResult.recordset.forEach(r => {
+      if (!machineActivePrograms[r.Machine]) {
+        machineActivePrograms[r.Machine] = [];
+      }
+      machineActivePrograms[r.Machine].push(r.ProgramName.trim().toLowerCase());
+    });
 
     const fixtureLocationMap = {};
     fixtureLocationsResult.recordset.forEach(row => {
@@ -395,6 +429,9 @@ async function cacheSetupData() {
     // Group steps by OrderId to resolve predecessors correctly within each order
     const ordersMap = {};
     rows.forEach(row => {
+      if (row.BookedMachineId) {
+        row.MachineId = row.BookedMachineId;
+      }
       row.isNightRunCapable = nightSteps.has(row.ArticleId + '-' + row.StepPos);
       row.prodTime = row.ProdTime || 0;
 
@@ -412,6 +449,37 @@ async function cacheSetupData() {
         const posB = parseInt(b.StepPos || 0, 10);
         return posA - posB;
       });
+
+      // Find the highest step position that is completed (SPKO === 4) or in progress (SPKO === 2)
+      let maxCompletedPos = -1;
+      stepsGroup.forEach(s => {
+        if (s.SPKO === 4 || s.SPKO === 2) {
+          const posVal = parseInt(s.StepPos || 0, 10);
+          if (posVal > maxCompletedPos) {
+            maxCompletedPos = posVal;
+          }
+        }
+      });
+
+      // Auto-complete preceding steps if they are Fracht (shipping) or Fremdleistung (external processing)
+      if (maxCompletedPos !== -1) {
+        stepsGroup.forEach(s => {
+          const posVal = parseInt(s.StepPos || 0, 10);
+          if (posVal < maxCompletedPos) {
+            const isFremd = s.StepTyp === 1;
+            const desc = (s.StepDesc || '').toLowerCase();
+            const isFracht = desc.includes('fracht') || 
+                             desc.includes('versand') || 
+                             desc.includes('transport') ||
+                             desc.includes('spedition') ||
+                             desc.includes('extern') ||
+                             desc.includes('fremdleistung');
+            if ((isFremd || isFracht) && s.SPKO !== 4) {
+              s.SPKO = 4;
+            }
+          }
+        });
+      }
 
       stepsGroup.forEach((step, idx) => {
         // Rule: If self is 2, status is Green (In-Progress can always be run/continued)
@@ -516,21 +584,63 @@ async function cacheSetupData() {
       if (progs.length > 0) {
         const prog = progs[0];
         step.NCProgram = prog;
-        if (matchCache[prog] === undefined) {
+        const cacheKey = prog + '_' + (step.MachineId || 'null') + '_' + (step.MachinePoolId || 'null');
+        if (matchCache[cacheKey] === undefined) {
           const matches = findMatches(prog, cachedToolLists, 0.6);
           if (matches.length > 0) {
-            matchCache[prog] = {
+            const tlMachineIds = getToollistMachineId(step.MachineId, step.MachinePoolId);
+            if (tlMachineIds && matches.length > 1) {
+              const activeIds = Array.isArray(tlMachineIds) ? tlMachineIds : [tlMachineIds];
+              matches.sort((a, b) => {
+                const aActive = activeIds.some(mId => 
+                  machineActivePrograms[mId] && 
+                  (machineActivePrograms[mId].includes((a.Ident || '').trim().toLowerCase()) ||
+                   machineActivePrograms[mId].includes((a.NCP || '').trim().toLowerCase()))
+                );
+                const bActive = activeIds.some(mId => 
+                  machineActivePrograms[mId] && 
+                  (machineActivePrograms[mId].includes((b.Ident || '').trim().toLowerCase()) ||
+                   machineActivePrograms[mId].includes((b.NCP || '').trim().toLowerCase()))
+                );
+                if (aActive && !bActive) return -1;
+                if (!aActive && bActive) return 1;
+                
+                // Taper fallback: RS machines prefer SK40, C40/C42 prefer HSK
+                const isRS = activeIds.includes(3) || activeIds.includes(4);
+                const isC4x = activeIds.includes(1) || activeIds.includes(6);
+                
+                const strA = ((a.Ident || '') + ' ' + (a.NCP || '')).toLowerCase();
+                const strB = ((b.Ident || '') + ' ' + (b.NCP || '')).toLowerCase();
+
+                if (isRS) {
+                  const aHasSk40 = strA.includes('sk40');
+                  const bHasSk40 = strB.includes('sk40');
+                  if (aHasSk40 && !bHasSk40) return -1;
+                  if (!aHasSk40 && bHasSk40) return 1;
+                }
+
+                if (isC4x) {
+                  const aHasHsk = strA.includes('hsk');
+                  const bHasHsk = strB.includes('hsk');
+                  if (aHasHsk && !bHasHsk) return -1;
+                  if (!aHasHsk && bHasHsk) return 1;
+                }
+
+                return b.score - a.score;
+              });
+            }
+            matchCache[cacheKey] = {
               Nr: matches[0].Nr,
               Ident: matches[0].Ident,
               matchType: matches[0].matchType,
               score: matches[0].score
             };
           } else {
-            matchCache[prog] = null;
+            matchCache[cacheKey] = null;
           }
         }
 
-        const match = matchCache[prog];
+        const match = matchCache[cacheKey];
         if (match) {
           step.MatchedListNr = match.Nr;
           step.MatchedListIdent = match.Ident;
@@ -538,7 +648,9 @@ async function cacheSetupData() {
           step.MatchedScore = match.score;
         }
         step.fixture = extractFixture(step.StepDesc);
-        step.fixtureLocation = step.fixture ? (fixtureLocationMap[step.fixture.trim().toLowerCase()] || extractLagerortFromDesc(step.StepDesc)) : null;
+        const dbLoc = step.fixture ? fixtureLocationMap[step.fixture.trim().toLowerCase()] : null;
+        step.fixtureLocation = dbLoc || (step.fixture ? extractLagerortFromDesc(step.StepDesc) : null);
+        step.fixtureLocationFromDb = !!dbLoc;
       }
 
       const cleanPos = (step.StepPos || '').trim();
@@ -550,6 +662,47 @@ async function cacheSetupData() {
           step.masterNcProgram = masterProg;
           const masterMatches = findMatches(masterProg, cachedToolLists, 0.6);
           if (masterMatches.length > 0) {
+            const tlMachineIds = getToollistMachineId(step.MachineId, step.MachinePoolId);
+            if (tlMachineIds && masterMatches.length > 1) {
+              const activeIds = Array.isArray(tlMachineIds) ? tlMachineIds : [tlMachineIds];
+              masterMatches.sort((a, b) => {
+                const aActive = activeIds.some(mId => 
+                  machineActivePrograms[mId] && 
+                  (machineActivePrograms[mId].includes((a.Ident || '').trim().toLowerCase()) ||
+                   machineActivePrograms[mId].includes((a.NCP || '').trim().toLowerCase()))
+                );
+                const bActive = activeIds.some(mId => 
+                  machineActivePrograms[mId] && 
+                  (machineActivePrograms[mId].includes((b.Ident || '').trim().toLowerCase()) ||
+                   machineActivePrograms[mId].includes((b.NCP || '').trim().toLowerCase()))
+                );
+                if (aActive && !bActive) return -1;
+                if (!aActive && bActive) return 1;
+                
+                // Taper fallback: RS machines prefer SK40, C40/C42 prefer HSK
+                const isRS = activeIds.includes(3) || activeIds.includes(4);
+                const isC4x = activeIds.includes(1) || activeIds.includes(6);
+                
+                const strA = ((a.Ident || '') + ' ' + (a.NCP || '')).toLowerCase();
+                const strB = ((b.Ident || '') + ' ' + (b.NCP || '')).toLowerCase();
+
+                if (isRS) {
+                  const aHasSk40 = strA.includes('sk40');
+                  const bHasSk40 = strB.includes('sk40');
+                  if (aHasSk40 && !bHasSk40) return -1;
+                  if (!aHasSk40 && bHasSk40) return 1;
+                }
+
+                if (isC4x) {
+                  const aHasHsk = strA.includes('hsk');
+                  const bHasHsk = strB.includes('hsk');
+                  if (aHasHsk && !bHasHsk) return -1;
+                  if (!aHasHsk && bHasHsk) return 1;
+                }
+
+                return b.score - a.score;
+              });
+            }
             step.masterMatchedListNr = masterMatches[0].Nr;
             step.masterMatchedListIdent = masterMatches[0].Ident;
             step.masterMatchedType = masterMatches[0].matchType;
@@ -999,6 +1152,13 @@ app.get('/api/orders/:id/steps', async (req, res) => {
             AND tPPS_SKKALP_PLAN.PSPP_STATUS_PLANUNG <> 1
         ) as StartDate,
         p.PSP_IDMS as MachineId,
+        (
+          SELECT TOP 1 zb.ZBU_IDMS
+          FROM tZE_BUCH zb
+          WHERE zb.ZBU_IDPSKP = p.ID
+            AND zb.ZBU_IDMS IS NOT NULL
+          ORDER BY zb.ID DESC
+        ) as BookedMachineId,
         p.PSP_IDMP as MachinePoolId,
         COALESCE(masta.MS_BEZEICHNUNG, pool.MP_BEZEICHNUNG, masta.MS_NUMMER, '') as MachineName
       FROM [D4].[dbo].[tPPS_SKKALK] k
@@ -1069,7 +1229,41 @@ app.get('/api/orders/:id/steps', async (req, res) => {
       return posA - posB;
     });
 
+    // Find the highest step position that is completed (SPKO === 4) or in progress (SPKO === 2)
+    let maxCompletedPos = -1;
+    combinedSteps.forEach(s => {
+      if (s.SPKO === 4 || s.SPKO === 2) {
+        const posVal = parseInt(s.StepPos || 0, 10);
+        if (posVal > maxCompletedPos) {
+          maxCompletedPos = posVal;
+        }
+      }
+    });
+
+    // Auto-complete preceding steps if they are Fracht (shipping) or Fremdleistung (external processing)
+    if (maxCompletedPos !== -1) {
+      combinedSteps.forEach(s => {
+        const posVal = parseInt(s.StepPos || 0, 10);
+        if (posVal < maxCompletedPos) {
+          const isFremd = s.StepTyp === 1;
+          const desc = (s.StepDesc || '').toLowerCase();
+          const isFracht = desc.includes('fracht') || 
+                           desc.includes('versand') || 
+                           desc.includes('transport') ||
+                           desc.includes('spedition') ||
+                           desc.includes('extern') ||
+                           desc.includes('fremdleistung');
+          if ((isFremd || isFracht) && s.SPKO !== 4) {
+            s.SPKO = 4;
+          }
+        }
+      });
+    }
+
     const processedSteps = combinedSteps.map(step => {
+      if (step.BookedMachineId) {
+        step.MachineId = step.BookedMachineId;
+      }
       const stepTypName = 
         step.StepTyp === 0 ? 'Arbeitsschritt' :
         step.StepTyp === 1 ? 'Fremddienstleistung' :
@@ -2282,6 +2476,14 @@ function extractFixture(desc) {
 
 function extractLagerortFromDesc(desc) {
   if (!desc) return null;
+  
+  // 1. Try to find the PN... FA... LP... pattern
+  const pnFaLpMatch = desc.match(/(PN\s*\w+)\s*[\/\-\s]*\s*(FA\s*\w+)\s*[\/\-\s]*\s*(LP\s*\w+)/i);
+  if (pnFaLpMatch) {
+    return pnFaLpMatch[0].trim();
+  }
+
+  // 2. Otherwise try the standard lagerort: pattern
   const match = desc.match(/lagerort\s*:\s*([^\r\n\t]+)/i);
   if (match) {
     let val = match[1].trim();
@@ -2819,6 +3021,7 @@ app.get('/api/planning', async (req, res) => {
             stepId: s.StepId,
             orderId: s.OrderId,
             contractNumber: s.ContractNumber || null,
+            deliveryDate: s.DeliveryDate || null,
             stepPos: s.StepPos || null,
             articleId: s.ArticleId,
             orderDesc: s.OrderDesc,
@@ -2850,6 +3053,7 @@ app.get('/api/planning', async (req, res) => {
             color: s.color,
             fixture: s.fixture || extractFixture(s.StepDesc),
             fixtureLocation: s.fixtureLocation || (s.fixture ? (fixtureLocationMap[s.fixture.trim().toLowerCase()] || extractLagerortFromDesc(s.StepDesc)) : null),
+            fixtureLocationFromDb: s.fixtureLocationFromDb !== undefined ? s.fixtureLocationFromDb : (s.fixture ? !!fixtureLocationMap[s.fixture.trim().toLowerCase()] : false),
             entireArbeitsplan,
             missesCount: s.loadTools ? s.loadTools.length : 0,
             loadTools: (s.loadTools || []).map(tNr => {
@@ -3031,6 +3235,44 @@ app.get('/api/planning', async (req, res) => {
     if (hasOverflow) {
       responseDays.push('Überlauf');
     }
+
+    // Post-process finalBoard to add poolRecommendation where applicable
+    const partnerMachineMap = {
+      'C40': 'C42',
+      'C42': 'C40',
+      'RS2_1': 'RS2_2',
+      'RS2_2': 'RS2_1'
+    };
+
+    const poolMachiningList = ['C40', 'C42', 'RS2_1', 'RS2_2'];
+    poolMachiningList.forEach(mName => {
+      const partnerName = partnerMachineMap[mName];
+      if (!partnerName || !finalBoard[mName] || !finalBoard[partnerName]) return;
+
+      const magSelf = machineMagazines[mName].magazine || [];
+      const magPartner = machineMagazines[partnerName].magazine || [];
+
+      responseDays.forEach(day => {
+        const steps = finalBoard[mName][day] || [];
+        steps.forEach(step => {
+          const tools = listToToolsMap[step.matchedListNr] || [];
+          if (tools.length > 0) {
+            const overlapSelf = tools.filter(t => magSelf.includes(t)).length;
+            const overlapPartner = tools.filter(t => magPartner.includes(t)).length;
+            
+            if (overlapPartner > overlapSelf) {
+              step.poolRecommendation = {
+                originalMachine: mName,
+                partnerMachine: partnerName,
+                overlapSelf,
+                overlapPartner,
+                savings: overlapPartner - overlapSelf
+              };
+            }
+          }
+        });
+      });
+    });
 
     res.json({
       days: responseDays,
