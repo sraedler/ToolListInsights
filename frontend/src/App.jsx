@@ -26,19 +26,35 @@ import {
   Server,
   Moon,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Cpu
 } from 'lucide-react';
 import { 
   AreaChart, 
   Area, 
+  BarChart,
+  Bar,
+  Cell,
+  LineChart,
+  Line,
   XAxis, 
   YAxis, 
   CartesianGrid, 
   Tooltip, 
+  Legend,
+  ReferenceArea,
   ResponsiveContainer 
 } from 'recharts';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
+
+function formatMinutes(mins) {
+  if (mins < 0 || mins === undefined || mins === null) return '0m';
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  const remainingMins = mins % 60;
+  return remainingMins > 0 ? `${hrs}h ${remainingMins}m` : `${hrs}h`;
+}
 
 export default function App() {
   const [systemStatus, setSystemStatus] = useState({
@@ -62,6 +78,25 @@ export default function App() {
   // Global Date range filters
   const [globalStartDate, setGlobalStartDate] = useState(getOffsetDateStr(-14));
   const [globalEndDate, setGlobalEndDate] = useState(getOffsetDateStr(42)); // 6 weeks = 42 days
+  const [selectedMachine, setSelectedMachine] = useState('All');
+
+  const handleGlobalStartDateChange = (val) => {
+    setGlobalStartDate(val);
+    if (val && val.length === 10) {
+      if (globalEndDate && globalEndDate.length === 10 && globalEndDate < val) {
+        setGlobalEndDate(val);
+      }
+    }
+  };
+
+  const handleGlobalEndDateChange = (val) => {
+    setGlobalEndDate(val);
+    if (val && val.length === 10) {
+      if (globalStartDate && globalStartDate.length === 10 && val < globalStartDate) {
+        setGlobalStartDate(val);
+      }
+    }
+  };
 
   // Poll system status on mount
   useEffect(() => {
@@ -278,6 +313,14 @@ export default function App() {
             </div>
 
             <div 
+              className={`nav-item ${activeTab === 'time_evaluation' ? 'active' : ''}`}
+              onClick={() => setActiveTab('time_evaluation')}
+            >
+              <BarChart4 size={18} />
+              <span>Zeitauswertung</span>
+            </div>
+
+            <div 
               className={`nav-item ${activeTab === 'missing_data' ? 'active' : ''}`}
               onClick={() => setActiveTab('missing_data')}
               style={{ 
@@ -310,6 +353,7 @@ export default function App() {
               {activeTab === 'machines' && 'Maschinen-Werkzeugbedarf'}
               {activeTab === 'planning' && 'Kanban-Maschinenbelegungsplanung'}
               {activeTab === 'planning_deburring' && 'Kanban-Belegungsplanung Entgraten/Montieren'}
+              {activeTab === 'time_evaluation' && 'Zeitauswertung: Soll vs. Ist Maschinenzeiten'}
               {activeTab === 'missing_data' && 'Datenvollständigkeit: Fehlende NC / Vorrichtungen'}
             </h2>
           </div>
@@ -322,7 +366,7 @@ export default function App() {
               <input
                 type="date"
                 value={globalStartDate}
-                onChange={(e) => setGlobalStartDate(e.target.value)}
+                onChange={(e) => handleGlobalStartDateChange(e.target.value)}
                 style={{
                   background: 'rgba(13, 20, 35, 0.4)',
                   border: '1px solid var(--border-dim)',
@@ -340,7 +384,7 @@ export default function App() {
               <input
                 type="date"
                 value={globalEndDate}
-                onChange={(e) => setGlobalEndDate(e.target.value)}
+                onChange={(e) => handleGlobalEndDateChange(e.target.value)}
                 style={{
                   background: 'rgba(13, 20, 35, 0.4)',
                   border: '1px solid var(--border-dim)',
@@ -370,6 +414,12 @@ export default function App() {
           {activeTab === 'machines' && <MachinesTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'planning' && <PlanningTab mode="machining" />}
           {activeTab === 'planning_deburring' && <PlanningTab mode="deburring" />}
+          {activeTab === 'time_evaluation' && (
+            <TimeEvaluationTab 
+              selectedMachine={selectedMachine} 
+              setSelectedMachine={setSelectedMachine} 
+            />
+          )}
           {activeTab === 'missing_data' && <MissingDataTab />}
         </div>
       </main>
@@ -3544,6 +3594,1439 @@ function MachinesTab({ startDate, endDate }) {
   );
 }
 
+
+// 7c. Time Evaluation Tab (Soll vs Ist)
+function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().substring(0, 10);
+  });
+  const [endDate, setEndDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().substring(0, 10);
+  });
+
+  const handleStartDateChange = (val) => {
+    setStartDate(val);
+    if (val && val.length === 10) {
+      if (endDate && endDate.length === 10 && endDate < val) {
+        setEndDate(val);
+      }
+    }
+  };
+
+  const handleEndDateChange = (val) => {
+    setEndDate(val);
+    if (val && val.length === 10) {
+      if (startDate && startDate.length === 10 && val < startDate) {
+        setStartDate(val);
+      }
+    }
+  };
+
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [drilldownDate, setDrilldownDate] = useState('');
+  const [showRuestFilter, setShowRuestFilter] = useState(true);
+  const [showProdFilter, setShowProdFilter] = useState(true);
+
+  const [activeEvalOrder, setActiveEvalOrder] = useState(null);
+  const [evalRouting, setEvalRouting] = useState([]);
+  const [loadingEvalRouting, setLoadingEvalRouting] = useState(false);
+  const [selectedEvalStep, setSelectedEvalStep] = useState(null);
+  const [evalDrawingMeta, setEvalDrawingMeta] = useState(null);
+  const [loadingEvalDrawing, setLoadingEvalDrawing] = useState(false);
+
+  useEffect(() => {
+    if (!activeEvalOrder) {
+      setEvalRouting([]);
+      setEvalDrawingMeta(null);
+      setSelectedEvalStep(null);
+      return;
+    }
+
+    const loadOrderDetails = async () => {
+      setLoadingEvalRouting(true);
+      try {
+        const res = await fetch(`${API_BASE}/orders/${activeEvalOrder.orderId}/steps`);
+        if (res.ok) {
+          const json = await res.json();
+          const mapped = json.map(op => {
+            // Find actual bookings for this specific operation
+            const stepBookings = data.filter(item => 
+              item.ContractNumber === activeEvalOrder.contractNumber && 
+              String(item.AS_NUMMER) === String(op.StepPos)
+            );
+            const actualRuest = stepBookings.reduce((sum, item) => sum + (item.IST_ZEIT_RUESTUNG || 0), 0);
+            const actualProd = stepBookings.reduce((sum, item) => sum + (item.IST_ZEIT_PRODUKTION || 0), 0);
+            
+            return {
+              stepId: op.StepId,
+              stepPos: op.StepPos,
+              stepDesc: (op.StepDesc || '').trim(),
+              setupTime: op.SetupTime || 0,
+              prodTime: op.ProdTime || 0,
+              actualRuest,
+              actualProd,
+              isCompleted: op.SPKO === 4,
+              isExecuting: op.SPKO === 2,
+              machineName: op.MachineName || (op.MachineId ? `Maschine #${op.MachineId}` : 'Pool'),
+              color: op.SPKO === 4 ? 'Green' : op.SPKO === 2 ? 'Yellow' : 'Blue',
+              targetQty: op.TargetQty || 0,
+              statusProduction: op.StatusProduction
+            };
+          });
+          setEvalRouting(mapped);
+          if (mapped.length > 0) {
+            setSelectedEvalStep(mapped[0]);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching routing steps in evaluation:', err);
+      } finally {
+        setLoadingEvalRouting(false);
+      }
+
+      if (activeEvalOrder.articleNumber) {
+        setLoadingEvalDrawing(true);
+        try {
+          const res = await fetch(`${API_BASE}/dms/drawing/${activeEvalOrder.articleNumber}/meta`);
+          if (res.ok) {
+            const json = await res.json();
+            setEvalDrawingMeta(json);
+          }
+        } catch (err) {
+          console.error('Error fetching drawing meta in evaluation:', err);
+        } finally {
+          setLoadingEvalDrawing(false);
+        }
+      }
+    };
+
+    loadOrderDetails();
+  }, [activeEvalOrder, data]);
+
+  const getDatesInRange = (startStr, endStr) => {
+    const datesList = [];
+    const curr = new Date(startStr);
+    const end = new Date(endStr);
+    let limit = 0;
+    while (curr <= end && limit < 100) {
+      datesList.push(curr.toISOString().substring(0, 10));
+      curr.setDate(curr.getDate() + 1);
+      limit++;
+    }
+    return datesList;
+  };
+
+  const dates = getDatesInRange(startDate, endDate);
+
+  const getLocalDateStr = (dateVal) => {
+    if (!dateVal) return '';
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return '';
+    const offset = d.getTimezoneOffset();
+    const localTime = new Date(d.getTime() - (offset * 60 * 1000));
+    return localTime.toISOString().substring(0, 10);
+  };
+
+  const getWeekendReferenceAreas = () => {
+    const areas = [];
+    let startMs = null;
+    
+    dates.forEach((dateStr) => {
+      const d = new Date(dateStr + 'T00:00:00');
+      const day = d.getDay(); // 0 = Sun, 5 = Fri, 6 = Sat
+      const timeMs = d.getTime();
+      
+      if (day === 5) {
+        // Start block at Friday 12:00:00
+        startMs = timeMs + 12 * 60 * 60 * 1000;
+      } else if (day === 6) {
+        if (startMs === null) {
+          // If we didn't start on Friday, start here at Saturday 00:00
+          startMs = timeMs;
+        }
+      } else if (day === 0) {
+        const endMs = timeMs + 24 * 60 * 60 * 1000 - 1000;
+        if (startMs !== null) {
+          areas.push({
+            x1: startMs,
+            x2: endMs,
+            label: 'Wochenende'
+          });
+          startMs = null;
+        } else {
+          areas.push({
+            x1: timeMs,
+            x2: endMs,
+            label: 'Wochenende'
+          });
+        }
+      } else {
+        if (startMs !== null) {
+          const prevDayEnd = timeMs - 1000;
+          areas.push({
+            x1: startMs,
+            x2: prevDayEnd,
+            label: 'Wochenende'
+          });
+          startMs = null;
+        }
+      }
+    });
+    
+    if (startMs !== null) {
+      const lastDate = dates[dates.length - 1];
+      const lastDayEnd = new Date(lastDate + 'T23:59:59').getTime();
+      areas.push({
+        x1: startMs,
+        x2: lastDayEnd,
+        label: 'Wochenende'
+      });
+    }
+    
+    return areas;
+  };
+
+  const fetchEvaluation = async () => {
+    if (!startDate || startDate.length !== 10 || !endDate || endDate.length !== 10) {
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/machine-time-evaluation?startDate=${startDate}&endDate=${endDate}`);
+      if (!res.ok) {
+        throw new Error(`Fehler beim Laden: ${res.statusText}`);
+      }
+      const json = await res.json();
+      
+      const mappedJson = json.map(item => {
+        const rawName = item.MS_BEZEICHNUNG;
+        let cleanName = null;
+        if (rawName) {
+          const nameUpper = rawName.toUpperCase();
+          if (nameUpper.includes('BROTHER') || nameUpper.includes('TC2A')) cleanName = 'Brother';
+          else if (nameUpper.includes('CHIRON')) cleanName = 'Chiron';
+          else if (nameUpper.includes('C400')) cleanName = 'C400';
+          else if (nameUpper.includes('C40') && !nameUpper.includes('C400')) cleanName = 'C40';
+          else if (nameUpper.includes('C42')) cleanName = 'C42';
+          else if (nameUpper.includes('RS2-1') || nameUpper.includes('RS2_1')) cleanName = 'RS2_1';
+          else if (nameUpper.includes('RS2-2') || nameUpper.includes('RS2_2')) cleanName = 'RS2_2';
+        }
+        if (!cleanName) return null;
+        
+        // Parse exact start and stop times from movement
+        if (!item.ZB_DATUM_START || !item.ZBUBW_ZEIT_START || !item.ZBUBW_ZEIT_STOP) return null;
+        const datePart = item.ZB_DATUM_START.substring(0, 10);
+        const start = new Date(`${datePart}T${item.ZBUBW_ZEIT_START}`);
+        const end = new Date(`${datePart}T${item.ZBUBW_ZEIT_STOP}`);
+        if (end < start) {
+          end.setDate(end.getDate() + 1);
+        }
+        const duration = Math.round((end.getTime() - start.getTime()) / 60000);
+        if (duration <= 0) return null;
+
+        const isRuest = item.ZBUBW_TYP_ZEIT === 0;
+        
+        return {
+          ...item,
+          MS_BEZEICHNUNG: cleanName,
+          BookingId: item.ID,
+          ContractNumber: item.BK_BKBE_NUMMER,
+          PositionNumber: item.BP_POSITION_NUMMER,
+          ArticleNumber: item.AR_NUMMER,
+          ArticleDesc: item.AD_BEZEICHNUNG,
+          start_time: start,
+          stop_time: end,
+          IST_ZEIT_RUESTUNG: isRuest ? duration : 0,
+          IST_ZEIT_PRODUKTION: !isRuest ? duration : 0,
+          ZBU_ZEIT_GESAMT: duration
+        };
+      }).filter(Boolean);
+      
+      setData(mappedJson);
+    } catch (err) {
+      console.error('Error fetching time evaluation:', err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchEvaluation();
+  }, [startDate, endDate]);
+
+  useEffect(() => {
+    if (dates.length > 0) {
+      if (!drilldownDate || !dates.includes(drilldownDate)) {
+        setDrilldownDate(dates[0]);
+      }
+    }
+  }, [dates]);
+
+  const handleSetQuickRange = (rangeType) => {
+    const today = new Date();
+    if (rangeType === 'yesterday') {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      const str = d.toISOString().substring(0, 10);
+      setStartDate(str);
+      setEndDate(str);
+    } else if (rangeType === 'week') {
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      setStartDate(d.toISOString().substring(0, 10));
+      setEndDate(today.toISOString().substring(0, 10));
+    } else if (rangeType === 'month') {
+      const d = new Date();
+      d.setDate(d.getDate() - 30);
+      setStartDate(d.toISOString().substring(0, 10));
+      setEndDate(today.toISOString().substring(0, 10));
+    }
+  };
+
+  const formatMinutes = (mins) => {
+    if (mins === null || mins === undefined || isNaN(mins)) return "0m";
+    const absoluteMins = Math.abs(Math.round(mins));
+    if (absoluteMins < 60) return `${mins < 0 ? '-' : ''}${absoluteMins}m`;
+    const hrs = Math.floor(absoluteMins / 60);
+    const remainingMins = absoluteMins % 60;
+    return `${mins < 0 ? '-' : ''}${hrs}h ${remainingMins}m`;
+  };
+
+  const filteredData = data.filter(item => {
+    const matchesMachine = selectedMachine === 'All' || item.MS_BEZEICHNUNG === selectedMachine;
+    const matchesSearch = !searchQuery || 
+      (item.ContractNumber && item.ContractNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (item.ArticleNumber && String(item.ArticleNumber).toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (item.ArticleDesc && item.ArticleDesc.toLowerCase().includes(searchQuery.toLowerCase()));
+    return matchesMachine && matchesSearch;
+  });
+
+  // Deduplicate planned times by operation key (ContractNumber + AS_NUMMER) to prevent double counting
+  const uniqueOps = {};
+  filteredData.forEach(item => {
+    const opKey = `${item.ContractNumber}_${item.AS_NUMMER || 'N/A'}`;
+    if (!uniqueOps[opKey]) {
+      uniqueOps[opKey] = {
+        plannedRuest: item.SOLL_ZEIT_RUESTUNG || 0,
+        plannedProd: item.SOLL_ZEIT_PRODUKTION || 0
+      };
+    }
+  });
+
+  const totalPlannedRuest = Object.values(uniqueOps).reduce((sum, op) => sum + op.plannedRuest, 0);
+  const totalPlannedProd = Object.values(uniqueOps).reduce((sum, op) => sum + op.plannedProd, 0);
+  const totalPlannedGesamt = totalPlannedRuest + totalPlannedProd;
+
+  // Extract machine weekday capacities from data rows
+  const machineCapMap = {};
+  data.forEach(item => {
+    const mName = item.MS_BEZEICHNUNG;
+    if (mName && !machineCapMap[mName]) {
+      machineCapMap[mName] = {
+        MO: item.MS_KAPAZITAET_ZEIT_MINUTEN_MO || 0,
+        DI: item.MS_KAPAZITAET_ZEIT_MINUTEN_DI || 0,
+        MI: item.MS_KAPAZITAET_ZEIT_MINUTEN_MI || 0,
+        DO: item.MS_KAPAZITAET_ZEIT_MINUTEN_DO || 0,
+        FR: item.MS_KAPAZITAET_ZEIT_MINUTEN_FR || 0,
+        SA: item.MS_KAPAZITAET_ZEIT_MINUTEN_SA || 0,
+        SO: item.MS_KAPAZITAET_ZEIT_MINUTEN_SO || 0,
+      };
+    }
+  });
+
+  // dates is already declared above
+
+  const activeMachines = selectedMachine === 'All' 
+    ? Object.keys(machineCapMap) 
+    : [selectedMachine];
+
+  let totalCapacityPeriod = 0;
+  let totalActualRuestPeriod = 0;
+  let totalActualProdPeriod = 0;
+
+  activeMachines.forEach(mName => {
+    dates.forEach(dateStr => {
+      const dateObj = new Date(dateStr);
+      const day = dateObj.getDay();
+      if (day === 0 || day === 6) return; // skip Saturday and Sunday capacity
+      let weekdayKey = 'MO';
+      if (day === 1) weekdayKey = 'MO';
+      else if (day === 2) weekdayKey = 'DI';
+      else if (day === 3) weekdayKey = 'MI';
+      else if (day === 4) weekdayKey = 'DO';
+      else if (day === 5) weekdayKey = 'FR';
+
+      totalCapacityPeriod += (machineCapMap[mName] ? machineCapMap[mName][weekdayKey] : 0) || 0;
+    });
+
+    const machineBookings = filteredData.filter(item => item.MS_BEZEICHNUNG === mName);
+    totalActualRuestPeriod += machineBookings.reduce((sum, item) => sum + (item.IST_ZEIT_RUESTUNG || 0), 0);
+    totalActualProdPeriod += machineBookings.reduce((sum, item) => sum + (item.IST_ZEIT_PRODUKTION || 0), 0);
+  });
+
+  const totalActualPeriodTotal = totalActualRuestPeriod + totalActualProdPeriod;
+  const overallUtilization = totalCapacityPeriod > 0 ? Math.round((totalActualPeriodTotal / totalCapacityPeriod) * 100) : 0;
+  const overallProdRatio = totalCapacityPeriod > 0 ? Math.round((totalActualProdPeriod / totalCapacityPeriod) * 100) : 0;
+  const overallRuestRatio = totalCapacityPeriod > 0 ? Math.round((totalActualRuestPeriod / totalCapacityPeriod) * 100) : 0;
+
+  const machineAggList = Object.keys(machineCapMap).map(mName => {
+    let totalCapacity = 0;
+    dates.forEach(dateStr => {
+      const dateObj = new Date(dateStr);
+      const day = dateObj.getDay();
+      if (day === 0 || day === 6) return; // skip Saturday and Sunday capacity
+      let weekdayKey = 'MO';
+      if (day === 1) weekdayKey = 'MO';
+      else if (day === 2) weekdayKey = 'DI';
+      else if (day === 3) weekdayKey = 'MI';
+      else if (day === 4) weekdayKey = 'DO';
+      else if (day === 5) weekdayKey = 'FR';
+
+      totalCapacity += (machineCapMap[mName][weekdayKey] || 0);
+    });
+
+    const matches = data.filter(item => item.MS_BEZEICHNUNG === mName);
+    const actualRuest = matches.reduce((sum, item) => sum + (item.IST_ZEIT_RUESTUNG || 0), 0);
+    const actualProd = matches.reduce((sum, item) => sum + (item.IST_ZEIT_PRODUKTION || 0), 0);
+    const actualTotal = actualRuest + actualProd;
+    const ratio = totalCapacity > 0 ? Math.round((actualTotal / totalCapacity) * 100) : (actualTotal > 0 ? 100 : 0);
+
+    return {
+      name: mName,
+      actualRuest,
+      actualProd,
+      actualTotal,
+      plannedCapacity: totalCapacity,
+      ratio,
+      count: matches.length
+    };
+  }).sort((a, b) => {
+    const order = ['C40', 'C42', 'RS2_1', 'RS2_2', 'Chiron', 'C400', 'Brother'];
+    return order.indexOf(a.name) - order.indexOf(b.name);
+  });
+
+  const uniqueMachines = Array.from(new Set(data.map(item => item.MS_BEZEICHNUNG)))
+    .filter(Boolean)
+    .sort((a, b) => {
+      const order = ['C40', 'C42', 'RS2_1', 'RS2_2', 'Chiron', 'C400', 'Brother'];
+      return order.indexOf(a) - order.indexOf(b);
+    });
+
+  const detailedTableData = filteredData;
+
+  const groupedOrders = {};
+  detailedTableData.forEach(item => {
+    const orderKey = item.ContractNumber || 'Ohne P-Nummer';
+    if (!groupedOrders[orderKey]) {
+      groupedOrders[orderKey] = {
+        contractNumber: orderKey,
+        orderId: item.OrderId,
+        machines: new Set(),
+        minDate: null,
+        maxDate: null,
+        articleDesc: item.ArticleDesc || 'N/A',
+        articleNumber: item.ArticleNumber || 'N/A',
+        actualRuest: 0,
+        actualProd: 0,
+        operations: {} // opKey -> { sollRuest, sollProd, desc }
+      };
+    }
+
+    const order = groupedOrders[orderKey];
+    if (item.MS_BEZEICHNUNG) {
+      order.machines.add(item.MS_BEZEICHNUNG);
+    }
+    if (item.ZB_DATUM_START) {
+      const d = new Date(item.ZB_DATUM_START);
+      if (!order.minDate || d < order.minDate) order.minDate = d;
+      if (!order.maxDate || d > order.maxDate) order.maxDate = d;
+    }
+
+    order.actualRuest += (item.IST_ZEIT_RUESTUNG || 0);
+    order.actualProd += (item.IST_ZEIT_PRODUKTION || 0);
+
+    const opKey = `${item.AS_NUMMER || 'N/A'}`;
+    if (!order.operations[opKey]) {
+      order.operations[opKey] = {
+        sollRuest: item.SOLL_ZEIT_RUESTUNG || 0,
+        sollProd: item.SOLL_ZEIT_PRODUKTION || 0,
+        desc: item.AS_BEZEICHNUNG || 'N/A'
+      };
+    }
+  });
+
+  const groupedOrdersList = Object.values(groupedOrders).map(order => {
+    let plannedRuest = 0;
+    let plannedProd = 0;
+    const opStrings = [];
+
+    Object.entries(order.operations).forEach(([opNum, op]) => {
+      plannedRuest += op.sollRuest;
+      plannedProd += op.sollProd;
+      opStrings.push(`AS ${opNum}${op.desc && op.desc !== 'N/A' ? ': ' + op.desc : ''}`);
+    });
+
+    return {
+      contractNumber: order.contractNumber,
+      orderId: order.orderId,
+      machinesStr: Array.from(order.machines).join(', '),
+      dateStr: order.minDate 
+        ? (order.minDate.toLocaleDateString('de-DE') + (order.maxDate && order.maxDate.getTime() !== order.minDate.getTime() ? ` - ${order.maxDate.toLocaleDateString('de-DE')}` : ''))
+        : 'N/A',
+      articleDesc: order.articleDesc,
+      articleNumber: order.articleNumber,
+      actualRuest: order.actualRuest,
+      actualProd: order.actualProd,
+      plannedRuest,
+      plannedProd,
+      opDetailsStr: opStrings.join(' | ')
+    };
+  }).sort((a, b) => b.actualRuest + b.actualProd - (a.plannedRuest + a.plannedProd));
+
+  // Compute chart datasets for Zeitauswertung
+  const machineChartData = machineAggList.map(m => ({
+    name: m.name,
+    "Kapazität": parseFloat((m.plannedCapacity / 60).toFixed(1)),
+    "Ist-Zeit": parseFloat((m.actualTotal / 60).toFixed(1))
+  }));
+
+  console.log('[Debug Chart] Render activeMachines:', activeMachines, 'selectedMachine:', selectedMachine);
+  const dailyChartData = dates.map(dateStr => {
+    let dailyCapacity = 0;
+    let dailyActual = 0;
+
+    activeMachines.forEach(mName => {
+      const dateObj = new Date(dateStr);
+      const day = dateObj.getDay();
+      if (day !== 0 && day !== 6) { // skip Saturday and Sunday capacity
+        let weekdayKey = 'MO';
+        if (day === 1) weekdayKey = 'MO';
+        else if (day === 2) weekdayKey = 'DI';
+        else if (day === 3) weekdayKey = 'MI';
+        else if (day === 4) weekdayKey = 'DO';
+        else if (day === 5) weekdayKey = 'FR';
+
+        dailyCapacity += (machineCapMap[mName] ? machineCapMap[mName][weekdayKey] : 0) || 0;
+      }
+
+      const matches = data.filter(item => {
+        const itemDateStr = getLocalDateStr(item.ZB_DATUM_START);
+        return itemDateStr === dateStr && item.MS_BEZEICHNUNG === mName;
+      });
+      dailyActual += matches.reduce((sum, item) => sum + (item.IST_ZEIT_RUESTUNG || 0) + (item.IST_ZEIT_PRODUKTION || 0), 0);
+    });
+
+    const formattedDate = new Date(dateStr).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+
+    return {
+      date: formattedDate,
+      timestamp: new Date(dateStr + 'T00:00:00').getTime(),
+      "Kapazität": parseFloat((dailyCapacity / 60).toFixed(1)),
+      "Ist-Zeit": parseFloat((dailyActual / 60).toFixed(1))
+    };
+  });
+
+  // Compute hourly drilldown data
+  const getHourlyChartData = () => {
+    const hourlyMins = Array(24).fill(0).map((_, i) => ({
+      hour: `${String(i).padStart(2, '0')}:00`,
+      "Rüstzeit (Minuten)": 0,
+      "Produktionszeit (Minuten)": 0,
+      "Laufzeit (Minuten)": 0,
+      bookingsCount: 0
+    }));
+
+    const targetDayStr = drilldownDate || (dates.length > 0 ? dates[0] : '');
+    if (!targetDayStr) return { hourlyMins, drilldownBookingsList: [] };
+
+    const dayStart = new Date(targetDayStr + 'T00:00:00');
+    const dayEnd = new Date(targetDayStr + 'T23:59:59.999');
+
+    const drilldownBookingsList = data.filter(item => {
+      const matchesGlobalMachine = selectedMachine === 'All' || item.MS_BEZEICHNUNG === selectedMachine;
+      if (!matchesGlobalMachine) return false;
+
+      if (!item.start_time) return false;
+      const start = new Date(item.start_time);
+      const end = new Date(item.stop_time);
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) return false;
+
+      return start <= dayEnd && end >= dayStart;
+    });
+
+    drilldownBookingsList.forEach(booking => {
+      const start = new Date(booking.start_time);
+      const end = new Date(booking.stop_time);
+      const isRuest = booking.ZBUBW_TYP_ZEIT === 0;
+      
+      const totalMinutes = Math.round((end.getTime() - start.getTime()) / 60000);
+      if (totalMinutes <= 0) return;
+
+      for (let i = 0; i < totalMinutes; i++) {
+        const minTime = start.getTime() + i * 60000;
+        if (minTime >= dayStart.getTime() && minTime <= dayEnd.getTime()) {
+          const minDate = new Date(minTime);
+          const hour = minDate.getHours();
+          
+          if (isRuest) {
+            hourlyMins[hour]["Rüstzeit (Minuten)"]++;
+          } else {
+            hourlyMins[hour]["Produktionszeit (Minuten)"]++;
+          }
+          hourlyMins[hour]["Laufzeit (Minuten)"]++;
+        }
+      }
+      
+      if (start >= dayStart && start <= dayEnd) {
+        const startHour = start.getHours();
+        hourlyMins[startHour].bookingsCount++;
+      }
+    });
+
+    return { hourlyMins, drilldownBookingsList };
+  };
+
+  const { hourlyMins: drilldownChartData, drilldownBookingsList } = getHourlyChartData();
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minHeight: 0 }}>
+      <div className="machine-pills" style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginBottom: '-0.5rem' }}>
+        <button
+          className={`pill ${selectedMachine === 'All' ? 'active' : ''}`}
+          onClick={() => setSelectedMachine('All')}
+        >
+          Alle Maschinen (Übersicht)
+        </button>
+        {['C40', 'C42', 'RS2_1', 'RS2_2', 'Chiron', 'C400', 'Brother'].filter(m => m !== 'C400').map(m => (
+          <button
+            key={m}
+            className={`pill ${selectedMachine === m ? 'active' : ''}`}
+            onClick={() => setSelectedMachine(m)}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
+      <div className="card" style={{ padding: '1.25rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <label style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600 }}>Startdatum:</label>
+            <input 
+              type="date" 
+              value={startDate} 
+              onChange={(e) => handleStartDateChange(e.target.value)}
+              style={{ background: 'rgba(13, 20, 35, 0.4)', border: '1px solid var(--border-dim)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem', padding: '0.4rem 0.75rem', outline: 'none' }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <label style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600 }}>Enddatum:</label>
+            <input 
+              type="date" 
+              value={endDate} 
+              onChange={(e) => handleEndDateChange(e.target.value)}
+              style={{ background: 'rgba(13, 20, 35, 0.4)', border: '1px solid var(--border-dim)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem', padding: '0.4rem 0.75rem', outline: 'none' }}
+            />
+          </div>
+          <button onClick={fetchEvaluation} className="btn btn-primary" style={{ alignSelf: 'flex-end', padding: '0.45rem 1rem' }} disabled={loading}>
+            Auswerten
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.5rem', alignSelf: 'flex-end' }}>
+          <button onClick={() => handleSetQuickRange('yesterday')} className="btn btn-secondary btn-sm" style={{ background: 'rgba(255,255,255,0.02)' }}>Vortag (Gestern)</button>
+          <button onClick={() => handleSetQuickRange('week')} className="btn btn-secondary btn-sm" style={{ background: 'rgba(255,255,255,0.02)' }}>Letzte Woche</button>
+          <button onClick={() => handleSetQuickRange('month')} className="btn btn-secondary btn-sm" style={{ background: 'rgba(255,255,255,0.02)' }}>Letzter Monat</button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '4rem' }}>
+          <div className="spinner" style={{ width: '40px', height: '40px', borderRadius: '50%', border: '4px solid rgba(56, 189, 248, 0.1)', borderTopColor: '#38bdf8', animation: 'spin 1s linear infinite' }} />
+        </div>
+      ) : error ? (
+        <div className="card" style={{ padding: '2rem', textAlign: 'center', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+          <AlertTriangle size={32} style={{ marginBottom: '0.5rem' }} />
+          <h4>Fehler beim Laden der Zeitauswertung</h4>
+          <p style={{ fontSize: '0.9rem', color: '#64748b' }}>{error}</p>
+        </div>
+      ) : data.length === 0 ? (
+        <div className="card" style={{ padding: '4rem', textAlign: 'center', color: '#94a3b8' }}>
+          <Clock size={40} style={{ color: '#64748b', marginBottom: '0.75rem' }} />
+          <h4>Keine Rückmeldedaten im gewählten Zeitraum gefunden.</h4>
+          <p style={{ fontSize: '0.85rem' }}>Prüfen Sie den Datumsbereich oder buchen Sie Maschinenbelegungen.</p>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem' }}>
+            <div className="glass-card metric-card" style={{ borderLeft: '4px solid #38bdf8' }}>
+              <div className="metric-header" style={{ color: '#38bdf8' }}>
+                <span>Maschinen-Auslastung</span>
+                <Clock size={16} />
+              </div>
+              <div className="metric-value" style={{ fontSize: '1.8rem', fontWeight: 800, display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <span>{overallUtilization}%</span>
+                <span style={{ fontSize: '1rem', color: '#10b981', fontWeight: 700 }}>({overallProdRatio}% Prod)</span>
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '0.25rem' }}>
+                Rüst-Anteil: <strong style={{ color: '#f59e0b' }}>{overallRuestRatio}%</strong> der Gesamtkapazität
+              </div>
+            </div>
+
+            <div className="glass-card metric-card" style={{ borderLeft: '4px solid #10b981' }}>
+              <div className="metric-header" style={{ color: '#10b981' }}>
+                <span>Tatsächliche Belegungszeit (Ist)</span>
+                <Activity size={16} />
+              </div>
+              <div className="metric-value" style={{ fontSize: '1.8rem', fontWeight: 800 }}>
+                {formatMinutes(totalActualPeriodTotal)}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
+                Rüsten: {formatMinutes(totalActualRuestPeriod)} | Produktion: {formatMinutes(totalActualProdPeriod)}
+              </div>
+            </div>
+
+            <div className="glass-card metric-card" style={{ borderLeft: '4px solid #64748b' }}>
+              <div className="metric-header" style={{ color: '#94a3b8' }}>
+                <span>Geplante Maschinenzeit (Kapazität)</span>
+                <Clock size={16} />
+              </div>
+              <div className="metric-value" style={{ fontSize: '1.8rem', fontWeight: 800 }}>
+                {formatMinutes(totalCapacityPeriod)}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
+                Verfügbare Kapazität der selektierten Maschinen
+              </div>
+            </div>
+          </div>
+
+          {/* Charts Row */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1.5rem' }}>
+            {/* Chart 1: Machine Comparison */}
+            <div className="card" style={{ padding: '1.5rem', minHeight: '350px', display: 'flex', flexDirection: 'column' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', marginBottom: '1.25rem' }}>Auslastung nach Maschine (in Stunden)</h3>
+              <div style={{ flex: 1, width: '100%', minHeight: '280px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart 
+                    data={machineChartData} 
+                    margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                    style={{ cursor: 'pointer' }}
+                    onClick={(state) => {
+                      if (state && state.activeLabel) {
+                        const mName = state.activeLabel;
+                        setSelectedMachine(prev => prev === mName ? 'All' : mName);
+                      }
+                    }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                    <XAxis dataKey="name" stroke="#64748b" style={{ fontSize: '0.75rem' }} />
+                    <YAxis stroke="#64748b" style={{ fontSize: '0.75rem' }} />
+                    <Tooltip 
+                      contentStyle={{ background: 'rgba(15, 23, 42, 0.95)', border: '1px solid var(--border-dim)', borderRadius: '8px' }}
+                      labelStyle={{ color: '#fff', fontWeight: 600 }}
+                      itemStyle={{ color: '#cbd5e1' }}
+                    />
+                    <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.75rem' }} />
+                    <Bar dataKey="Kapazität" fill="rgba(255, 255, 255, 0.08)" radius={[4, 4, 0, 0]}>
+                      {machineChartData.map((entry, idx) => {
+                        const isSelected = entry.name === selectedMachine;
+                        const hasSelection = selectedMachine !== 'All';
+                        
+                        let fillVal = 'rgba(255, 255, 255, 0.03)';
+                        let strokeVal = 'rgba(255, 255, 255, 0.3)';
+                        let strokeDash = '3 3';
+                        
+                        if (hasSelection) {
+                          if (isSelected) {
+                            fillVal = 'rgba(255, 255, 255, 0.25)';
+                            strokeVal = '#10b981';
+                            strokeDash = 'none';
+                          } else {
+                            fillVal = 'rgba(255, 255, 255, 0.03)';
+                            strokeVal = 'rgba(255, 255, 255, 0.08)';
+                            strokeDash = '3 3';
+                          }
+                        } else {
+                          fillVal = 'rgba(255, 255, 255, 0.12)';
+                          strokeVal = 'rgba(255, 255, 255, 0.3)';
+                          strokeDash = 'none';
+                        }
+                        
+                        return (
+                          <Cell 
+                            key={`cap-cell-${idx}`} 
+                            fill={fillVal} 
+                            stroke={strokeVal} 
+                            strokeWidth={1.5}
+                            strokeDasharray={strokeDash}
+                          />
+                        );
+                      })}
+                    </Bar>
+                    <Bar dataKey="Ist-Zeit" fill="#38bdf8" radius={[4, 4, 0, 0]}>
+                      {machineChartData.map((entry, idx) => {
+                        const isSelected = entry.name === selectedMachine;
+                        const hasSelection = selectedMachine !== 'All';
+                        const fillVal = isSelected 
+                          ? '#10b981' 
+                          : (hasSelection ? 'rgba(255, 255, 255, 0.1)' : '#38bdf8');
+                        return <Cell key={`ist-cell-${idx}`} fill={fillVal} />;
+                      })}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Chart 2: Daily Development */}
+            <div className="card" style={{ padding: '1.5rem', minHeight: '350px', display: 'flex', flexDirection: 'column' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', marginBottom: '1.25rem' }}>Täglicher Verlauf der Belegungszeiten (in Stunden)</h3>
+              <div style={{ flex: 1, width: '100%', minHeight: '280px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart 
+                    data={dailyChartData} 
+                    margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                    style={{ cursor: 'pointer' }}
+                    onClick={(state) => {
+                      if (state && state.activeLabel) {
+                        const timestamp = Number(state.activeLabel);
+                        if (!isNaN(timestamp)) {
+                          const clickedDate = new Date(timestamp);
+                          const matchedDate = dates.find(d => {
+                            const dObj = new Date(d + 'T00:00:00');
+                            return dObj.getFullYear() === clickedDate.getFullYear() &&
+                                   dObj.getMonth() === clickedDate.getMonth() &&
+                                   dObj.getDate() === clickedDate.getDate();
+                          });
+                          if (matchedDate) {
+                            setDrilldownDate(matchedDate);
+                          }
+                        }
+                      }
+                    }}
+                  >
+                    <defs>
+                      <linearGradient id="colorIst" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                    {getWeekendReferenceAreas().map((area, idx) => (
+                      <ReferenceArea 
+                        key={`weekend-${idx}`}
+                        x1={area.x1} 
+                        x2={area.x2} 
+                        fill="rgba(239, 68, 68, 0.16)" 
+                        stroke="rgba(239, 68, 68, 0.35)" 
+                        strokeDasharray="3 3"
+                        label={area.label}
+                      />
+                    ))}
+                    <XAxis 
+                      dataKey="timestamp" 
+                      type="number" 
+                      scale="time"
+                      domain={['dataMin', 'dataMax']} 
+                      tickFormatter={(time) => new Date(time).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
+                      stroke="#64748b" 
+                      style={{ fontSize: '0.75rem' }} 
+                    />
+                    <YAxis stroke="#64748b" style={{ fontSize: '0.75rem' }} />
+                    <Tooltip 
+                      contentStyle={{ background: 'rgba(15, 23, 42, 0.95)', border: '1px solid var(--border-dim)', borderRadius: '8px' }}
+                      labelStyle={{ color: '#fff', fontWeight: 600 }}
+                      itemStyle={{ color: '#cbd5e1' }}
+                      labelFormatter={(label) => new Date(Number(label)).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                    />
+                    <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.75rem' }} />
+                    <Area type="monotone" dataKey="Kapazität" stroke="rgba(255, 255, 255, 0.55)" strokeWidth={1.5} fill="transparent" strokeDasharray="4 4" />
+                    <Area type="monotone" dataKey="Ist-Zeit" stroke="#10b981" fillOpacity={1} fill="url(#colorIst)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>          {/* Drilldown Section */}
+          <div id="drilldown-section" className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', borderLeft: '4px solid #10b981' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff', margin: 0 }}>📊 Stündliche Detailanalyse (Drilldown)</h3>
+                <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.2rem 0 0 0' }}>Wählen Sie einen Tag und eine Maschine aus, um die Auslastung auf Stundenbasis zu sehen.</p>
+              </div>
+
+              <div style={{ display: 'flex', gap: '2.5rem', flexWrap: 'wrap', alignItems: 'center', width: '100%', borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '1rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '180px' }}>
+                  <label style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600 }}>Tag:</label>
+                  <select 
+                    value={drilldownDate} 
+                    onChange={(e) => setDrilldownDate(e.target.value)}
+                    style={{ background: 'rgba(13, 20, 35, 0.4)', border: '1px solid var(--border-dim)', borderRadius: '8px', color: '#fff', fontSize: '0.8rem', padding: '0.3rem 0.5rem', outline: 'none', height: '32px', width: '100%' }}
+                  >
+                    {dates.map(d => (
+                      <option key={d} value={d} style={{ background: '#0f172a' }}>
+                        {new Date(d).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  <label style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600 }}>Zeiten ein-/ausblenden:</label>
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', height: '32px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#fff', fontSize: '0.75rem', cursor: 'pointer', userSelect: 'none' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={showRuestFilter} 
+                        onChange={(e) => setShowRuestFilter(e.target.checked)} 
+                        style={{ accentColor: '#f59e0b', cursor: 'pointer' }}
+                      />
+                      <span style={{ color: '#f59e0b', fontWeight: 600 }}>Rüstzeit (Gelb)</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#fff', fontSize: '0.75rem', cursor: 'pointer', userSelect: 'none' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={showProdFilter} 
+                        onChange={(e) => setShowProdFilter(e.target.checked)} 
+                        style={{ accentColor: '#10b981', cursor: 'pointer' }}
+                      />
+                      <span style={{ color: '#10b981', fontWeight: 600 }}>Prod. Zeit (Grün)</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {/* Drilldown Chart */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem', alignItems: 'start' }}>
+              <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem', borderRadius: '12px', height: '260px', display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, marginBottom: '0.75rem' }}>Laufzeitverteilung (Minuten pro Stunde)</span>
+                <div style={{ flex: 1, width: '100%', minHeight: 0 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={drilldownChartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.02)" />
+                      <XAxis dataKey="hour" stroke="#64748b" style={{ fontSize: '0.65rem' }} />
+                      <YAxis stroke="#64748b" style={{ fontSize: '0.65rem' }} />
+                      <Tooltip 
+                        contentStyle={{ background: 'rgba(15, 23, 42, 0.95)', border: '1px solid var(--border-dim)', borderRadius: '8px' }}
+                        labelStyle={{ color: '#fff', fontWeight: 600, fontSize: '0.75rem' }}
+                        itemStyle={{ fontSize: '0.75rem', color: '#cbd5e1' }}
+                      />
+                      {showRuestFilter && (
+                        <Bar 
+                          dataKey="Rüstzeit (Minuten)" 
+                          fill="#f59e0b" 
+                          stackId="a" 
+                          radius={!showProdFilter ? [2, 2, 0, 0] : [0, 0, 0, 0]} 
+                        />
+                      )}
+                      {showProdFilter && (
+                        <Bar 
+                          dataKey="Produktionszeit (Minuten)" 
+                          fill="#10b981" 
+                          stackId="a" 
+                          radius={[2, 2, 0, 0]} 
+                        />
+                      )}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Drilldown list of bookings */}
+              <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem', borderRadius: '12px', height: '260px', display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, marginBottom: '0.75rem' }}>Aktive Belegungen an diesem Tag ({drilldownBookingsList.length})</span>
+                <div style={{ flex: 1, overflowY: 'auto', fontSize: '0.75rem' }}>
+                  {drilldownBookingsList.length === 0 ? (
+                    <div style={{ color: '#64748b', textAlign: 'center', paddingTop: '3rem' }}>Keine Belegungsbuchungen</div>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border-dim)', color: '#64748b' }}>
+                          <th style={{ paddingBottom: '0.4rem' }}>Uhrzeit</th>
+                          <th style={{ paddingBottom: '0.4rem' }}>Auftrag</th>
+                          <th style={{ paddingBottom: '0.4rem' }}>Pos.</th>
+                          <th style={{ paddingBottom: '0.4rem' }}>AS</th>
+                          <th style={{ paddingBottom: '0.4rem' }}>Maschine</th>
+                          <th style={{ paddingBottom: '0.4rem', textAlign: 'right', color: '#f59e0b' }}>Ist-Rüsten</th>
+                          <th style={{ paddingBottom: '0.4rem', textAlign: 'right', color: '#10b981' }}>Ist-Prod</th>
+                          <th style={{ paddingBottom: '0.4rem', textAlign: 'right' }}>Gesamt</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {drilldownBookingsList.map((b, idx) => (
+                          <tr key={`${b.BookingId}-${b.ZBUBW_TYP_ZEIT}-${b.ZBUBW_ZEIT_START || idx}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                            <td style={{ padding: '0.4rem 0' }}>
+                              {b.ZBUBW_ZEIT_START ? b.ZBUBW_ZEIT_START.substring(0, 5) : ''} - {b.ZBUBW_ZEIT_STOP ? b.ZBUBW_ZEIT_STOP.substring(0, 5) : ''}
+                            </td>
+                            <td style={{ padding: '0.4rem 0', fontWeight: 600, color: '#38bdf8' }}>{b.ContractNumber || 'Ohne P-Nr'}</td>
+                            <td style={{ padding: '0.4rem 0', color: '#94a3b8' }}>{b.PositionNumber || '-'}</td>
+                            <td style={{ padding: '0.4rem 0', color: '#cbd5e1', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={b.AS_BEZEICHNUNG}>
+                              {b.AS_NUMMER ? `${b.AS_NUMMER}${b.AS_BEZEICHNUNG ? ` (${b.AS_BEZEICHNUNG})` : ''}` : '-'}
+                            </td>
+                            <td style={{ padding: '0.4rem 0', color: '#cbd5e1' }}>{b.MS_BEZEICHNUNG}</td>
+                            <td style={{ padding: '0.4rem 0', textAlign: 'right', color: '#f59e0b' }}>{formatMinutes(b.IST_ZEIT_RUESTUNG)}</td>
+                            <td style={{ padding: '0.4rem 0', textAlign: 'right', color: '#10b981' }}>{formatMinutes(b.IST_ZEIT_PRODUKTION)}</td>
+                            <td style={{ padding: '0.4rem 0', textAlign: 'right', fontWeight: 600 }}>{formatMinutes((b.IST_ZEIT_RUESTUNG || 0) + (b.IST_ZEIT_PRODUKTION || 0))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: '1.5rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', marginBottom: '1rem' }}>Maschinen-Auslastung</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.25rem' }}>
+              {machineAggList.map(m => {
+                const ratio = m.ratio;
+                const prodRatio = m.plannedCapacity > 0 ? Math.round((m.actualProd / m.plannedCapacity) * 100) : 0;
+                const ruestRatio = m.plannedCapacity > 0 ? Math.round((m.actualRuest / m.plannedCapacity) * 100) : 0;
+                const isSelected = selectedMachine === m.name;
+                
+                return (
+                  <div 
+                    key={m.name} 
+                    onClick={() => {
+                      setSelectedMachine(prev => prev === m.name ? 'All' : m.name);
+                    }}
+                    style={{ 
+                      background: isSelected ? 'rgba(16, 185, 129, 0.05)' : 'rgba(255,255,255,0.01)', 
+                      border: isSelected ? '1.5px solid #10b981' : '1px solid var(--border-dim)', 
+                      padding: '1rem', 
+                      borderRadius: '12px', 
+                      display: 'flex', 
+                      flexDirection: 'column', 
+                      gap: '0.5rem', 
+                      cursor: 'pointer', 
+                      transition: 'all 0.2s',
+                      boxShadow: isSelected ? '0 0 10px rgba(16, 185, 129, 0.1)' : 'none'
+                    }}
+                    className="machine-card-hover"
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        {isSelected && <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />}
+                        <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{m.name}</strong>
+                      </div>
+                      <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{m.count} Buchungssegmente</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#cbd5e1' }}>
+                      <span>Geplant (Kapazität): {formatMinutes(m.plannedCapacity)}</span>
+                      <span>Ist (Laufzeit): <strong>{formatMinutes(m.actualTotal)}</strong></span>
+                    </div>
+                    <div style={{ height: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '5px', overflow: 'hidden', marginTop: '0.2rem', display: 'flex' }}>
+                      <div style={{ width: `${Math.min(100, prodRatio)}%`, height: '100%', background: '#10b981', borderRadius: '5px 0 0 5px' }} />
+                      <div style={{ width: `${Math.min(100, ruestRatio)}%`, height: '100%', background: '#f59e0b', borderRadius: '0 5px 5px 0' }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: '#94a3b8' }}>
+                      <span>Auslastung: <strong style={{ color: '#fff' }}>{ratio}%</strong> <strong style={{ color: '#10b981', marginLeft: '0.35rem' }}>({prodRatio}% Prod)</strong></span>
+                      <span>
+                        Rüsten: <strong style={{ color: '#cbd5e1' }}>{formatMinutes(m.actualRuest)}</strong> | Prod: <strong style={{ color: '#cbd5e1' }}>{formatMinutes(m.actualProd)}</strong>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', margin: 0 }}>Rückmelde-Detailprotokoll</h3>
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  placeholder="P-Nummer / Artikel suchen..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{ background: 'rgba(13, 20, 35, 0.4)', border: '1px solid var(--border-dim)', borderRadius: '8px', color: '#fff', fontSize: '0.8rem', padding: '0.35rem 0.75rem', width: '220px', outline: 'none' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid rgba(255,255,255,0.06)', color: '#94a3b8', fontWeight: 700 }}>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Auftrag (P-Nummer)</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Maschine(n)</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Datum</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Artikel / Vorgänge</th>
+                    <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Soll-Rüsten</th>
+                    <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Ist-Rüsten</th>
+                    <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Soll-Prod</th>
+                    <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Ist-Prod</th>
+                    <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Ist/Soll-Abw.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupedOrdersList.map((order, idx) => {
+                    const actGesamt = (order.actualRuest || 0) + (order.actualProd || 0);
+                    const plGesamt = (order.plannedRuest || 0) + (order.plannedProd || 0);
+                    const diff = actGesamt - plGesamt;
+                    
+                    return (
+                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                        <td style={{ padding: '0.75rem 0.5rem' }}>
+                          <span 
+                            onClick={() => {
+                              if (order.orderId) {
+                                setActiveEvalOrder(order);
+                              } else {
+                                alert(`Keine interne ID für den Auftrag ${order.contractNumber} gefunden.`);
+                              }
+                            }}
+                            style={{ 
+                              color: order.orderId ? '#38bdf8' : '#64748b', 
+                              fontWeight: 700, 
+                              cursor: order.orderId ? 'pointer' : 'default',
+                              textDecoration: order.orderId ? 'underline' : 'none'
+                            }}
+                            title={order.orderId ? "Klicken für Arbeitsplan-Details" : "Keine D4-Verknüpfung"}
+                          >
+                            {order.contractNumber}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.75rem 0.5rem', color: '#fff', fontWeight: 600 }}>{order.machinesStr || 'Keine'}</td>
+                        <td style={{ padding: '0.75rem 0.5rem', color: '#cbd5e1' }}>{order.dateStr}</td>
+                        <td style={{ padding: '0.75rem 0.5rem', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${order.articleDesc} (${order.opDetailsStr})`}>
+                          <div style={{ color: '#fff', fontWeight: 500 }}>{order.articleDesc}</div>
+                          <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>{order.opDetailsStr}</div>
+                        </td>
+                        <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', color: '#94a3b8', fontWeight: 500 }}>{formatMinutes(order.plannedRuest)}</td>
+                        <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', color: '#fff', fontWeight: 600 }}>{formatMinutes(order.actualRuest)}</td>
+                        <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', color: '#94a3b8', fontWeight: 500 }}>{formatMinutes(order.plannedProd)}</td>
+                        <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', color: '#fff', fontWeight: 600 }}>{formatMinutes(order.actualProd)}</td>
+                        <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', fontWeight: 700, color: diff <= 0 ? '#10b981' : '#f87171' }}>
+                          {diff > 0 ? '+' : ''}{formatMinutes(diff)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Modal for Detailed Order/Arbeitsplan Information */}
+      {activeEvalOrder && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.75)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+          padding: '1.5rem',
+          animation: 'fadeIn 0.15s ease-out'
+        }} onClick={() => setActiveEvalOrder(null)}>
+          <div style={{
+            background: 'radial-gradient(100% 100% at 0% 0%, var(--bg-card-glow) 0%, var(--bg-card) 100%)',
+            border: '1px solid var(--border-glow)',
+            borderRadius: '16px',
+            width: '1000px',
+            maxWidth: '95vw',
+            maxHeight: '90vh',
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+            animation: 'scaleUp 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)'
+          }} onClick={(e) => e.stopPropagation()}>
+            
+            {/* Header */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '1.25rem 1.5rem',
+              borderBottom: '1px solid var(--border-dim)'
+            }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                  Auftrag Details: <span style={{ color: '#38bdf8' }}>{activeEvalOrder.contractNumber}</span>
+                </h3>
+                <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: '0.15rem 0 0 0' }}>
+                  Artikel: <strong>{activeEvalOrder.articleNumber}</strong> | {activeEvalOrder.articleDesc}
+                </p>
+              </div>
+              <button 
+                onClick={() => setActiveEvalOrder(null)}
+                style={{
+                  background: 'rgba(255,255,255,0.03)',
+                  border: '1px solid var(--border-dim)',
+                  color: '#64748b',
+                  cursor: 'pointer',
+                  borderRadius: '8px',
+                  width: '32px',
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.2s'
+                }}
+                className="btn-hover"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Content Body */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '1.5rem',
+              padding: '1.5rem',
+              overflowY: 'auto',
+              minHeight: 0,
+              flex: 1
+            }}>
+              
+              {/* Left Column: Routing Plan */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', minHeight: 0 }}>
+                <h4 style={{ fontSize: '0.85rem', color: '#94a3b8', margin: 0, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Gesamter Arbeitsplan (D4-Routing)
+                </h4>
+                
+                {loadingEvalRouting ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#cbd5e1', padding: '2rem', justifyContent: 'center' }}>
+                    <div className="spinner-mini" style={{ border: '2px solid rgba(255,255,255,0.1)', borderTop: '2px solid #38bdf8', borderRadius: '50%', width: '16px', height: '16px', animation: 'spin 1s linear infinite' }} />
+                    <span>Lade Arbeitsplan...</span>
+                  </div>
+                ) : evalRouting.length === 0 ? (
+                  <div style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic', padding: '2rem', textAlign: 'center' }}>
+                    Kein Arbeitsplan zu diesem Auftrag hinterlegt.
+                  </div>
+                ) : (
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.5rem',
+                    overflowY: 'auto',
+                    flex: 1,
+                    background: 'rgba(0,0,0,0.15)',
+                    border: '1px solid var(--border-dim)',
+                    borderRadius: '10px',
+                    padding: '0.75rem'
+                  }}>
+                    {evalRouting.map((op) => {
+                      const isSelected = selectedEvalStep && selectedEvalStep.stepId === op.stepId;
+                      const hasAbweichung = (op.actualRuest + op.actualProd) > (op.setupTime + op.prodTime);
+                      
+                      return (
+                        <div
+                          key={op.stepId}
+                          onClick={() => setSelectedEvalStep(op)}
+                          style={{
+                            background: isSelected ? 'rgba(56, 189, 248, 0.05)' : 'rgba(255,255,255,0.01)',
+                            border: isSelected ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.04)',
+                            borderRadius: '8px',
+                            padding: '0.65rem',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{
+                                width: '8px',
+                                height: '8px',
+                                borderRadius: '50%',
+                                background: op.color === 'Green' ? '#10b981' : op.color === 'Yellow' ? '#f59e0b' : '#38bdf8'
+                              }} />
+                              <strong style={{ color: '#fff', fontSize: '0.8rem' }}>AS {op.stepPos}</strong>
+                            </div>
+                            <span style={{ fontSize: '0.7rem', color: '#94a3b8', background: 'rgba(255,255,255,0.03)', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>
+                              {op.machineName}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#cbd5e1', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {op.stepDesc}
+                          </div>
+                          
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.4rem', fontSize: '0.68rem', color: '#64748b' }}>
+                            <div>Soll: {formatMinutes(op.setupTime + op.prodTime)}</div>
+                            <div style={{ textAlign: 'right', color: hasAbweichung ? '#f87171' : '#cbd5e1' }}>
+                              Ist: {formatMinutes(op.actualRuest + op.actualProd)}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Right Column: Step Details & Drawings */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', minHeight: 0 }}>
+                <h4 style={{ fontSize: '0.85rem', color: '#94a3b8', margin: 0, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Arbeitsschritt-Details
+                </h4>
+                
+                {selectedEvalStep ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', overflowY: 'auto', flex: 1 }}>
+                    
+                    {/* General Step KPI block */}
+                    <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px', padding: '0.75rem 1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                        <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Soll-Menge</span>
+                        <strong style={{ color: '#fff', fontSize: '0.8rem' }}>{selectedEvalStep.targetQty} Stück</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                        <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Status D4</span>
+                        <span style={{
+                          fontSize: '0.7rem',
+                          background: selectedEvalStep.color === 'Green' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(56, 189, 248, 0.1)',
+                          color: selectedEvalStep.color === 'Green' ? '#10b981' : '#38bdf8',
+                          padding: '0.1rem 0.35rem',
+                          borderRadius: '4px',
+                          fontWeight: 600
+                        }}>
+                          {selectedEvalStep.color === 'Green' ? 'Rückgemeldet' : selectedEvalStep.color === 'Yellow' ? 'In Arbeit' : 'Eingeplant'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Soll vs Ist Times Comparison Grid */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px', padding: '0.75rem' }}>
+                        <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.35rem' }}>Rüstzeiten</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
+                          <span style={{ color: '#94a3b8' }}>Soll:</span>
+                          <span style={{ color: '#fff', fontWeight: 500 }}>{formatMinutes(selectedEvalStep.setupTime)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                          <span style={{ color: '#94a3b8' }}>Ist:</span>
+                          <strong style={{ color: '#fff' }}>{formatMinutes(selectedEvalStep.actualRuest)}</strong>
+                        </div>
+                      </div>
+
+                      <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px', padding: '0.75rem' }}>
+                        <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.35rem' }}>Produktionszeiten</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
+                          <span style={{ color: '#94a3b8' }}>Soll:</span>
+                          <span style={{ color: '#fff', fontWeight: 500 }}>{formatMinutes(selectedEvalStep.prodTime)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                          <span style={{ color: '#94a3b8' }}>Ist:</span>
+                          <strong style={{ color: '#fff' }}>{formatMinutes(selectedEvalStep.actualProd)}</strong>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Drawings and PDF View */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span>Zeichnung (DMS)</span>
+                      </div>
+                      
+                      {loadingEvalDrawing ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#cbd5e1', padding: '1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px' }}>
+                          <div className="spinner-mini" style={{ border: '2px solid rgba(255,255,255,0.1)', borderTop: '2px solid #38bdf8', borderRadius: '50%', width: '16px', height: '16px', animation: 'spin 1s linear infinite' }} />
+                          <span>Lade Zeichnungs-Metadata...</span>
+                        </div>
+                      ) : evalDrawingMeta ? (
+                        <div style={{
+                          background: 'rgba(255,255,255,0.01)',
+                          border: '1px solid var(--border-dim)',
+                          borderRadius: '10px',
+                          padding: '0.75rem 1rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.5rem'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                            <span style={{ color: '#94a3b8' }}>Zeichnungsnummer:</span>
+                            <strong style={{ color: '#fff' }}>{evalDrawingMeta.drawingNumber || 'N/A'}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                            <span style={{ color: '#94a3b8' }}>Revision:</span>
+                            <span style={{ color: '#fff' }}>{evalDrawingMeta.drawingRevision || 'N/A'}</span>
+                          </div>
+                          {evalDrawingMeta.pdfInlineUri && (
+                            <a
+                              href={`${API_BASE}${evalDrawingMeta.pdfInlineUri}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.4rem',
+                                background: 'rgba(16, 185, 129, 0.1)',
+                                border: '1px solid rgba(16, 185, 129, 0.2)',
+                                color: '#10b981',
+                                textDecoration: 'none',
+                                padding: '0.45rem',
+                                borderRadius: '8px',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                marginTop: '0.25rem',
+                                transition: 'all 0.2s'
+                              }}
+                              className="btn-hover"
+                            >
+                              📄 PDF Zeichnung öffnen
+                            </a>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ color: '#64748b', fontSize: '0.75rem', fontStyle: 'italic', padding: '0.75rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px' }}>
+                          Keine Zeichnungsdaten im DMS gefunden.
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+                ) : (
+                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', fontStyle: 'italic', fontSize: '0.8rem' }}>
+                    Wählen Sie einen Arbeitsschritt links aus, um Details anzuzeigen.
+                  </div>
+                )}
+              </div>
+
+            </div>
+
+            {/* Footer */}
+            <div style={{
+              padding: '1rem 1.5rem',
+              borderTop: '1px solid var(--border-dim)',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              background: 'rgba(0,0,0,0.1)'
+            }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setActiveEvalOrder(null)}
+                style={{ padding: '0.45rem 1.25rem', fontSize: '0.8rem' }}
+              >
+                Schließen
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 8. Missing Data Tab (Datenvollständigkeit)
 function MissingDataTab() {
   const [data, setData] = useState([]);
@@ -3996,7 +5479,7 @@ function PlanningTab({ mode = 'machining' }) {
   const [optimizeFixture, setOptimizeFixture] = useState(true);
   const [fixtureWeight, setFixtureWeight] = useState(50); // weighting slider (0 = tools only, 50 = balanced standard, 100 = fixtures only)
   const [tempFixtureWeight, setTempFixtureWeight] = useState(50);
-  const [allowLookahead, setAllowLookahead] = useState(false);
+  const [allowLookahead, setAllowLookahead] = useState(true);
   const [dbMode, setDbModeState] = useState('dev');
   const [daysCount, setDaysCount] = useState(5);
 
@@ -4350,13 +5833,6 @@ function PlanningTab({ mode = 'machining' }) {
     return dateStr;
   };
 
-  const formatMinutes = (mins) => {
-    if (mins < 60) return `${mins}m`;
-    const hrs = Math.floor(mins / 60);
-    const remainingMins = mins % 60;
-    return remainingMins > 0 ? `${hrs}h ${remainingMins}m` : `${hrs}h`;
-  };
-
   const getPredecessorForStep = (step) => {
     if (!step || !data || !data.board) return null;
     for (let m of Object.keys(data.board)) {
@@ -4591,25 +6067,17 @@ function PlanningTab({ mode = 'machining' }) {
                   <span>Rüstoptimierung aktiv</span>
                 </label>
 
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                  <input
-                    type="checkbox"
-                    checked={optimizeNightRun}
-                    onChange={(e) => setOptimizeNightRun(e.target.checked)}
-                    style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
-                  />
-                  <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Moon size={14} /> Nachtlauf-Optimierung</span>
-                </label>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                  <input
-                    type="checkbox"
-                    checked={optimizeFixture}
-                    onChange={(e) => setOptimizeFixture(e.target.checked)}
-                    style={{ width: '16px', height: '16px', accentColor: '#c084fc' }}
-                  />
-                  <span style={{ color: '#e9d5ff', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🔧 Vorrichtung optimieren</span>
-                </label>
+                {selectedMachine !== 'Chiron' && selectedMachine !== 'C400' && selectedMachine !== 'Brother' && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={optimizeNightRun}
+                      onChange={(e) => setOptimizeNightRun(e.target.checked)}
+                      style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                    />
+                    <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Moon size={14} /> Nachtlauf-Optimierung</span>
+                  </label>
+                )}
 
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }} title="Erlaubt es dem Algorithmus, Aufträge der Folgewochen (bis zu 14 Tage) vorzuziehen, falls dadurch Werkzeugwechsel eingespart werden können und freie Kapazitäten vorhanden sind.">
                   <input
@@ -4640,7 +6108,7 @@ function PlanningTab({ mode = 'machining' }) {
                       style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
                     />
                     <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                      🤖 Nur Roboter-Folgeschritte
+                      🤖 Roboter-Folgeschritte
                     </span>
                   </label>
                 )}

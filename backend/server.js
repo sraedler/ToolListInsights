@@ -37,6 +37,7 @@ let cachedDemand = null;
 let cachedDemandSteps = null;
 let cachedToolDetails = {};
 let cachedSetupData = null;
+let machineTimeEvaluationCache = {};
 let cacheWarmingPromise = null;
 let cachedMachines = [];
 const activeScenarios = {}; // machineName -> { unloadPrograms, loadPrograms }
@@ -334,7 +335,7 @@ async function cacheSetupData() {
         INNER JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbb ON zbb.ZBUBW_IDZBU = zb.ID
         INNER JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = zb.ZBU_IDBEBP
         INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = zb.ZBU_IDPSKP
-        WHERE DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) >= 22 OR DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6
+        WHERE DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) >= 21 OR DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6
         GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
       `)
     ]);
@@ -702,6 +703,7 @@ app.get('/api/status', (req, res) => {
 app.post('/api/clear-cache', (req, res) => {
   try {
     cachedSetupData = null;
+    machineTimeEvaluationCache = {};
     res.json({ success: true, message: 'Cache wurde erfolgreich gelöscht.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2598,6 +2600,7 @@ app.get('/api/planning', async (req, res) => {
         planningDays.forEach(day => {
           const dayCapacity = getCapacityForDay(mName, day);
           dailyCap[day] = dayCapacity;
+          const isAutomated = mName !== 'Chiron' && mName !== 'C400' && mName !== 'Brother';
 
           let dayCandidates = [...overflowQueue, ...tempBoard[day]];
           
@@ -2609,14 +2612,35 @@ app.get('/api/planning', async (req, res) => {
             });
             const currentDayArticles = new Set(dayCandidates.map(s => s.ArticleId).filter(Boolean));
 
-            const matchingLookahead = lookaheadCandidates[mName].filter(s => {
-              if (scheduledStepIds.has(s.StepId)) return false;
+            const matchingLookahead = [];
+            const nonMatchingLookahead = [];
+
+            lookaheadCandidates[mName].forEach(s => {
+              if (scheduledStepIds.has(s.StepId)) return;
               const tools = listToToolsMap[s.MatchedListNr] || [];
               const hasToolOverlap = tools.some(t => currentDayTools.has(t));
               const hasArticleOverlap = s.ArticleId && currentDayArticles.has(s.ArticleId);
-              return hasToolOverlap || hasArticleOverlap;
+              if (hasToolOverlap || hasArticleOverlap) {
+                matchingLookahead.push(s);
+              } else {
+                nonMatchingLookahead.push(s);
+              }
             });
+
             dayCandidates = [...dayCandidates, ...matchingLookahead];
+
+            // If day is still not fully loaded, pull from non-matching lookahead to fill capacity
+            let currentTotalDuration = dayCandidates.reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
+            if (currentTotalDuration < dayCapacity) {
+              for (const s of nonMatchingLookahead) {
+                const duration = (s.SetupTime || 0) + (s.prodTime || 0);
+                dayCandidates.push(s);
+                currentTotalDuration += duration;
+                if (currentTotalDuration >= dayCapacity) {
+                  break;
+                }
+              }
+            }
           }
 
           let sequencedSteps = [];
@@ -2635,38 +2659,25 @@ app.get('/api/planning', async (req, res) => {
               currentMag = finalMagazine;
             }
 
+
+
             if (nonExecutingCandidates.length > 0) {
               if (isNonMachining) {
                 const { sequenced } = sequenceNonMachining(nonExecutingCandidates, orderStepsMap);
                 sequencedSteps = sequencedSteps.concat(sequenced);
-              } else if (shouldOptimize && optimizeNightRun) {
+              } else if (shouldOptimize && optimizeNightRun && isAutomated) {
                 const nightSteps = nonExecutingCandidates.filter(s => s.isNightRunCapable);
                 const normalSteps = nonExecutingCandidates.filter(s => !s.isNightRunCapable);
 
-                const isChironOrBrother = mName === 'Chiron' || mName === 'Brother';
-
-                if (isChironOrBrother) {
-                  if (nightSteps.length > 0) {
-                    const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                    sequencedSteps = sequencedSteps.concat(sequenced);
-                    currentMag = finalMagazine;
-                  }
-                  if (normalSteps.length > 0) {
-                    const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                    sequencedSteps = sequencedSteps.concat(sequenced);
-                    currentMag = finalMagazine;
-                  }
-                } else {
-                  if (normalSteps.length > 0) {
-                    const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                    sequencedSteps = sequencedSteps.concat(sequenced);
-                    currentMag = finalMagazine;
-                  }
-                  if (nightSteps.length > 0) {
-                    const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                    sequencedSteps = sequencedSteps.concat(sequenced);
-                    currentMag = finalMagazine;
-                  }
+                if (normalSteps.length > 0) {
+                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                  sequencedSteps = sequencedSteps.concat(sequenced);
+                  currentMag = finalMagazine;
+                }
+                if (nightSteps.length > 0) {
+                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                  sequencedSteps = sequencedSteps.concat(sequenced);
+                  currentMag = finalMagazine;
                 }
               } else {
                 const { sequenced, finalMagazine } = sequenceSteps(nonExecutingCandidates, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
@@ -2684,7 +2695,7 @@ app.get('/api/planning', async (req, res) => {
 
           sequencedSteps.forEach(s => {
             const stepDuration = (s.SetupTime || 0) + (s.prodTime || 0);
-            const canBypassCapacity = s.isNightRunCapable && s.loadTools && s.loadTools.length === 0;
+            const canBypassCapacity = isAutomated && s.isNightRunCapable && s.loadTools && s.loadTools.length === 0;
             const currentLimit = canBypassCapacity ? 1440 : dayCapacity;
             const dayRemaining = currentLimit - totalLoad;
             const stepLimit = (s.MaxProdTag && s.MaxProdTag > 0) ? s.MaxProdTag : currentLimit;
@@ -4403,6 +4414,80 @@ app.get('/api/dms/drawing/:articleId', async (req, res) => {
     } else {
       res.status(500).json({ error: err.message, resolvedArticleNumber: resolvedNumber, docIndex });
     }
+  }
+});
+
+app.get('/api/machine-time-evaluation', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate und endDate werden benötigt (Format: YYYY-MM-DD).' });
+    }
+
+    const cacheKey = `${startDate}_${endDate}`;
+    if (machineTimeEvaluationCache[cacheKey]) {
+      console.log(`[Cache Hit] Serving machine time evaluation from memory for range: ${startDate} to ${endDate}`);
+      return res.json(machineTimeEvaluationCache[cacheKey]);
+    }
+
+    const poolD4 = await getPoolD4();
+    
+    // Read the query directly from Maschinenzeiten.sql on disk
+    const sqlPath = path.join(__dirname, '..', 'Maschinenzeiten.sql');
+    let sqlContent = fs.readFileSync(sqlPath, 'utf8');
+    
+    // strip the 'go' at the end
+    sqlContent = sqlContent.replace(/\bgo\b/gi, '');
+    
+    const whereIndex = sqlContent.toLowerCase().lastIndexOf('where');
+    if (whereIndex === -1) {
+      throw new Error('Could not find WHERE clause in Maschinenzeiten.sql');
+    }
+    
+    const orderByIndex = sqlContent.toLowerCase().lastIndexOf('order by');
+    let selectAndFrom = sqlContent.substring(0, whereIndex);
+    let orderByPart = orderByIndex !== -1 ? sqlContent.substring(orderByIndex) : '';
+    
+    // Inject capacities right before the FIRST FROM of the main query
+    const fromMatch = selectAndFrom.match(/\bfrom\b/i);
+    if (fromMatch) {
+      const fromIndex = fromMatch.index;
+      let selectPart = selectAndFrom.substring(0, fromIndex);
+      let fromPart = selectAndFrom.substring(fromIndex);
+      
+      selectAndFrom = `
+        ${selectPart}
+        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_MO, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_MO
+        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_DI, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_DI
+        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_MI, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_MI
+        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_DO, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_DO
+        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_FR, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_FR
+        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_SA, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_SA
+        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_SO, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_SO
+        ${fromPart}
+      `;
+    }
+    
+    const query = `
+      ${selectAndFrom}
+      WHERE CONVERT(DATETIME, tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_START, 104) >= CONVERT(datetime, @start, 120)
+        AND CONVERT(DATETIME, tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_STOP, 104) <= CONVERT(datetime, @end, 120)
+      ${orderByPart}
+    `;
+
+    const startDateTimeStr = `${startDate} 00:00:00`;
+    const endDateTimeStr = `${endDate} 23:59:59`;
+
+    const result = await poolD4.request()
+      .input('start', sql.VarChar, startDateTimeStr)
+      .input('end', sql.VarChar, endDateTimeStr)
+      .query(query);
+
+    machineTimeEvaluationCache[cacheKey] = result.recordset;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Error fetching machine time evaluation:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 

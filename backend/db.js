@@ -153,7 +153,7 @@ let poolD4Promise = null;
 let poolWTPromise = null;
 let poolTLPromise = null;
 
-let currentDbMode = 'dev'; // 'dev' or 'live'
+let currentDbMode = 'live'; // 'dev' or 'live'
 
 function getDbMode() {
   return currentDbMode;
