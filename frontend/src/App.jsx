@@ -3783,7 +3783,14 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
     try {
       const res = await fetch(`${API_BASE}/machine-time-evaluation?startDate=${startDate}&endDate=${endDate}`);
       if (!res.ok) {
-        throw new Error(`Fehler beim Laden: ${res.statusText}`);
+        let errMsg = res.statusText;
+        try {
+          const errJson = await res.json();
+          if (errJson && errJson.error) {
+            errMsg = errJson.error;
+          }
+        } catch (e) {}
+        throw new Error(`Fehler beim Laden: ${errMsg}`);
       }
       const json = await res.json();
       
