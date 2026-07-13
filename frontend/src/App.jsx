@@ -3597,15 +3597,26 @@ function MachinesTab({ startDate, endDate }) {
 
 // 7c. Time Evaluation Tab (Soll vs Ist)
 function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
-  const [startDate, setStartDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
+  const getPreviousWorkdayStr = (refDate = new Date()) => {
+    const d = new Date(refDate);
+    const day = d.getDay(); // 0: Sunday, 1: Monday, ..., 6: Saturday
+    if (day === 1) { // Monday -> Friday
+      d.setDate(d.getDate() - 3);
+    } else if (day === 0) { // Sunday -> Friday
+      d.setDate(d.getDate() - 2);
+    } else if (day === 6) { // Saturday -> Friday
+      d.setDate(d.getDate() - 1);
+    } else { // Tuesday-Friday -> Yesterday
+      d.setDate(d.getDate() - 1);
+    }
     return d.toISOString().substring(0, 10);
+  };
+
+  const [startDate, setStartDate] = useState(() => {
+    return getPreviousWorkdayStr();
   });
   const [endDate, setEndDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().substring(0, 10);
+    return getPreviousWorkdayStr();
   });
 
   const handleStartDateChange = (val) => {
@@ -3803,9 +3814,16 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
         if (duration <= 0) return null;
 
         const isRuest = item.ZBUBW_TYP_ZEIT === 0;
+
+        // Shift times back by 6 hours to get the logical workday
+        const logicalStart = new Date(start.getTime() - 6 * 60 * 60 * 1000);
+        const logicalOffset = logicalStart.getTimezoneOffset();
+        const localLogicalStart = new Date(logicalStart.getTime() - (logicalOffset * 60 * 1000));
+        const logicalDayStr = localLogicalStart.toISOString().substring(0, 10);
         
         return {
           ...item,
+          ZB_DATUM_START: logicalDayStr,
           MS_BEZEICHNUNG: cleanName,
           BookingId: item.ID,
           ContractNumber: item.BK_BKBE_NUMMER,
@@ -3840,9 +3858,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
   const handleSetQuickRange = (rangeType) => {
     const today = new Date();
     if (rangeType === 'yesterday') {
-      const d = new Date();
-      d.setDate(d.getDate() - 1);
-      const str = d.toISOString().substring(0, 10);
+      const str = getPreviousWorkdayStr(today);
       setStartDate(str);
       setEndDate(str);
     } else if (rangeType === 'week') {
@@ -4003,19 +4019,27 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
   });
 
   const getHourlyChartData = () => {
-    const hourlyMins = Array(24).fill(0).map((_, i) => ({
-      hour: `${String(i).padStart(2, '0')}:00`,
-      "Rüstzeit (Minuten)": 0,
-      "Produktionszeit (Minuten)": 0,
-      "Laufzeit (Minuten)": 0,
-      bookingsCount: 0
-    }));
+    const hourlyMins = [];
+    for (let i = 0; i < 24; i++) {
+      const h = (i + 6) % 24;
+      hourlyMins.push({
+        hour: `${String(h).padStart(2, '0')}:00`,
+        "Rüstzeit (Minuten)": 0,
+        "Produktionszeit (Minuten)": 0,
+        "Laufzeit (Minuten)": 0,
+        bookingsCount: 0,
+        rawHour: h
+      });
+    }
 
     const targetDayStr = drilldownDate || (dates.length > 0 ? dates[0] : '');
     if (!targetDayStr) return { hourlyMins, drilldownBookingsList: [] };
 
-    const dayStart = new Date(targetDayStr + 'T00:00:00');
-    const dayEnd = new Date(targetDayStr + 'T23:59:59.999');
+    const dayStart = new Date(targetDayStr + 'T06:00:00');
+    const nextDay = new Date(targetDayStr);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const nextDayStr = nextDay.toISOString().substring(0, 10);
+    const dayEnd = new Date(nextDayStr + 'T05:59:59.999');
 
     const drilldownBookingsList = data.filter(item => {
       const matchesGlobalMachine = selectedMachine === 'All' || item.MS_BEZEICHNUNG === selectedMachine;
@@ -4042,19 +4066,24 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
         if (minTime >= dayStart.getTime() && minTime <= dayEnd.getTime()) {
           const minDate = new Date(minTime);
           const hour = minDate.getHours();
-          
-          if (isRuest) {
-            hourlyMins[hour]["Rüstzeit (Minuten)"]++;
-          } else {
-            hourlyMins[hour]["Produktionszeit (Minuten)"]++;
+          const targetSlot = hourlyMins.find(slot => slot.rawHour === hour);
+          if (targetSlot) {
+            if (isRuest) {
+              targetSlot["Rüstzeit (Minuten)"]++;
+            } else {
+              targetSlot["Produktionszeit (Minuten)"]++;
+            }
+            targetSlot["Laufzeit (Minuten)"]++;
           }
-          hourlyMins[hour]["Laufzeit (Minuten)"]++;
         }
       }
       
       if (start >= dayStart && start <= dayEnd) {
         const startHour = start.getHours();
-        hourlyMins[startHour].bookingsCount++;
+        const targetSlot = hourlyMins.find(slot => slot.rawHour === startHour);
+        if (targetSlot) {
+          targetSlot.bookingsCount++;
+        }
       }
     });
 
@@ -6528,10 +6557,20 @@ function PlanningTab({ mode = 'machining' }) {
                                 </span>
                               ) : (
                                 <span style={{ color: '#38bdf8', fontWeight: 600 }}>
-                                  🔧 Rüsten: {step.directMisses ? `+${step.directMisses.length}` : `+${step.loadTools.length}`}
+                                  🔧 Rüsten: 
+                                  <span style={{ color: '#f59e0b', marginLeft: '0.2rem' }}>
+                                    +{step.directMisses ? step.directMisses.length : step.loadTools.length}
+                                  </span>
+                                  {step.unloadTools && step.unloadTools.length > 0 && (
+                                    <span style={{ color: '#f87171', marginLeft: '0.15rem' }}>
+                                      /-{step.unloadTools.length}
+                                    </span>
+                                  )}
                                   {step.directMisses && step.directMisses.length !== step.loadTools.length && (
                                     <span style={{ color: '#64748b', fontSize: '0.62rem', marginLeft: '0.25rem' }}>
-                                      (Sim: +{step.loadTools.length})
+                                      (Sim: +{step.loadTools.length}
+                                      {step.unloadTools && step.unloadTools.length > 0 && `/-${step.unloadTools.length}`}
+                                      )
                                     </span>
                                   )}
                                 </span>
@@ -6628,7 +6667,7 @@ function PlanningTab({ mode = 'machining' }) {
                                     </div>
                                   </div>
 
-                                  {step.directMisses && step.directMisses.length !== step.loadTools.length && (
+                                  {((step.unloadTools && step.unloadTools.length > 0) || (step.directMisses && step.directMisses.length !== step.loadTools.length)) && (
                                     <div style={{ borderTop: '1px dashed rgba(255,255,255,0.04)', paddingTop: '0.25rem', marginTop: '0.25rem' }}>
                                       <div style={{ fontSize: '0.58rem', fontWeight: 600, color: '#64748b', marginBottom: '0.1rem' }}>
                                         Simulierter Ablauf (Transitional):
