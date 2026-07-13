@@ -4368,7 +4368,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                         fill="rgba(239, 68, 68, 0.16)" 
                         stroke="rgba(239, 68, 68, 0.35)" 
                         strokeDasharray="3 3"
-                        label={area.label}
+                        label={{ value: area.label, angle: -90, position: 'center', fill: 'rgba(248, 113, 113, 0.75)', fontSize: 10, fontWeight: 700 }}
                       />
                     ))}
                     <XAxis 
@@ -5698,6 +5698,69 @@ function PlanningTab({ mode = 'machining' }) {
       }
     }
     return null;
+  };
+
+  const getStepsUntilNextUseVal = (tNr, step) => {
+    if (!step || !data || !data.board) return Infinity;
+    let sequence = [];
+    const days = [...(data.days || []), 'Überlauf'];
+    for (let m of Object.keys(data.board)) {
+      const seq = [];
+      let found = false;
+      for (let d of days) {
+        const list = data.board[m][d] || [];
+        seq.push(...list);
+        if (list.some(s => s.stepId === step.stepId)) found = true;
+      }
+      if (found) {
+        sequence = seq;
+        break;
+      }
+    }
+    if (sequence.length === 0) return Infinity;
+    const currentIdx = sequence.findIndex(s => s.stepId === step.stepId);
+    if (currentIdx === -1) return Infinity;
+    for (let i = currentIdx + 1; i < sequence.length; i++) {
+      const nextStep = sequence[i];
+      const nextNeeded = [...(nextStep.directMisses || []), ...(nextStep.directHits || [])].map(nt => nt.nr);
+      if (nextNeeded.includes(tNr)) return i - currentIdx;
+    }
+    return Infinity;
+  };
+
+  const getWeeklyNextUseIndex = (tNr, machineName) => {
+    if (!machineName || !data || !data.board) return Infinity;
+    const sequence = [];
+    const days = [...(data.days || []), 'Überlauf'];
+    for (let d of days) {
+      const list = data.board[machineName]?.[d] || [];
+      sequence.push(...list);
+    }
+    for (let i = 0; i < sequence.length; i++) {
+      const step = sequence[i];
+      const needed = [...(step.directMisses || []), ...(step.directHits || [])].map(nt => nt.nr);
+      if (needed.includes(tNr)) return i;
+    }
+    return Infinity;
+  };
+
+  const getWeeklyToolLifetimeInfo = (tNr, machineName) => {
+    if (!machineName || !data || !data.board) return "";
+    const sequence = [];
+    const days = [...(data.days || []), 'Überlauf'];
+    for (let d of days) {
+      const list = data.board[machineName]?.[d] || [];
+      sequence.push(...list);
+    }
+    for (let i = 0; i < sequence.length; i++) {
+      const step = sequence[i];
+      const needed = [...(step.directMisses || []), ...(step.directHits || [])].map(nt => nt.nr);
+      if (needed.includes(tNr)) {
+        const label = step.contractNumber || `Auftrag #${step.orderId}`;
+        return `Wird bei Schritt ${i + 1} (${label}) wieder benötigt`;
+      }
+    }
+    return "Wird in dieser Woche nicht mehr benötigt";
   };
 
   const getToolLifetimeInfo = (t, step, type) => {
@@ -7267,7 +7330,9 @@ function PlanningTab({ mode = 'machining' }) {
                     </div>
                     {activeModalStep.unloadTools && activeModalStep.unloadTools.length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '0.25rem' }}>
-                        {activeModalStep.unloadTools.map((t, tIdx) => (
+                        {[...activeModalStep.unloadTools]
+                          .sort((a, b) => getStepsUntilNextUseVal(a.nr, activeModalStep) - getStepsUntilNextUseVal(b.nr, activeModalStep))
+                          .map((t, tIdx) => (
                           <div key={tIdx} style={{ 
                             display: 'flex', 
                             flexDirection: 'column', 
@@ -7498,26 +7563,33 @@ function PlanningTab({ mode = 'machining' }) {
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', overflowY: 'auto', maxHeight: '450px' }}>
-                    {weeklyToolsModal.unloadTools.map((t, idx) => (
-                      <div key={idx} style={{ 
-                        background: 'rgba(248, 113, 113, 0.03)', 
-                        border: '1px solid rgba(248, 113, 113, 0.1)', 
-                        borderRadius: '6px', 
-                        padding: '0.45rem 0.6rem',
-                        fontSize: '0.75rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '0.5rem'
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', overflow: 'hidden' }}>
-                          <span style={{ color: '#f87171', fontWeight: 700, fontFamily: 'monospace' }}>T{t.nr}</span>
-                          <span style={{ color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.desc}>
-                            {t.desc}
-                          </span>
+                    {[...weeklyToolsModal.unloadTools]
+                      .sort((a, b) => getWeeklyNextUseIndex(a.nr, weeklyToolsModal.machineName) - getWeeklyNextUseIndex(b.nr, weeklyToolsModal.machineName))
+                      .map((t, idx) => (
+                        <div key={idx} style={{ 
+                          background: 'rgba(248, 113, 113, 0.03)', 
+                          border: '1px solid rgba(248, 113, 113, 0.1)', 
+                          borderRadius: '6px', 
+                          padding: '0.45rem 0.6rem',
+                          fontSize: '0.75rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '0.5rem'
+                        }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', overflow: 'hidden' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span style={{ color: '#f87171', fontWeight: 700, fontFamily: 'monospace' }}>T{t.nr}</span>
+                              <span style={{ color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.desc}>
+                                {t.desc}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 500 }}>
+                              ℹ {getWeeklyToolLifetimeInfo(t.nr, weeklyToolsModal.machineName)}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
                   </div>
                 )}
               </div>

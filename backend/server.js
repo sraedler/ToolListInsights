@@ -4765,8 +4765,8 @@ app.get('/api/machine-time-evaluation', async (req, res) => {
     
     const query = `
       ${selectAndFrom}
-      WHERE CONVERT(DATETIME, tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_START, 104) >= CONVERT(datetime, @start, 120)
-        AND CONVERT(DATETIME, tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_STOP, 104) <= CONVERT(datetime, @end, 120)
+      WHERE tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_START >= CONVERT(datetime, @start, 120)
+        AND tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_STOP <= CONVERT(datetime, @end, 120)
       ${orderByPart}
     `;
 
