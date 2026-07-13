@@ -3634,81 +3634,51 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
   const [showRuestFilter, setShowRuestFilter] = useState(true);
   const [showProdFilter, setShowProdFilter] = useState(true);
 
-  const [activeEvalOrder, setActiveEvalOrder] = useState(null);
-  const [evalRouting, setEvalRouting] = useState([]);
-  const [loadingEvalRouting, setLoadingEvalRouting] = useState(false);
-  const [selectedEvalStep, setSelectedEvalStep] = useState(null);
-  const [evalDrawingMeta, setEvalDrawingMeta] = useState(null);
-  const [loadingEvalDrawing, setLoadingEvalDrawing] = useState(false);
+  const [activeModalStep, setActiveModalStep] = useState(null);
+  const [fullRoutingSteps, setFullRoutingSteps] = useState([]);
+  const [loadingRouting, setLoadingRouting] = useState(false);
 
   useEffect(() => {
-    if (!activeEvalOrder) {
-      setEvalRouting([]);
-      setEvalDrawingMeta(null);
-      setSelectedEvalStep(null);
+    if (!activeModalStep) {
+      setFullRoutingSteps([]);
       return;
     }
 
-    const loadOrderDetails = async () => {
-      setLoadingEvalRouting(true);
+    const loadFullRouting = async () => {
+      setLoadingRouting(true);
       try {
-        const res = await fetch(`${API_BASE}/orders/${activeEvalOrder.orderId}/steps`);
+        const res = await fetch(`${API_BASE}/orders/${activeModalStep.orderId}/steps`);
         if (res.ok) {
           const json = await res.json();
-          const mapped = json.map(op => {
-            // Find actual bookings for this specific operation
-            const stepBookings = data.filter(item => 
-              item.ContractNumber === activeEvalOrder.contractNumber && 
-              String(item.AS_NUMMER) === String(op.StepPos)
-            );
-            const actualRuest = stepBookings.reduce((sum, item) => sum + (item.IST_ZEIT_RUESTUNG || 0), 0);
-            const actualProd = stepBookings.reduce((sum, item) => sum + (item.IST_ZEIT_PRODUKTION || 0), 0);
-            
-            return {
+          if (json.length > 0) {
+            const mapped = json.map(op => ({
               stepId: op.StepId,
               stepPos: op.StepPos,
               stepDesc: (op.StepDesc || '').trim(),
               setupTime: op.SetupTime || 0,
               prodTime: op.ProdTime || 0,
-              actualRuest,
-              actualProd,
               isCompleted: op.SPKO === 4,
               isExecuting: op.SPKO === 2,
               machineName: op.MachineName || (op.MachineId ? `Maschine #${op.MachineId}` : 'Pool'),
-              color: op.SPKO === 4 ? 'Green' : op.SPKO === 2 ? 'Yellow' : 'Blue',
-              targetQty: op.TargetQty || 0,
-              statusProduction: op.StatusProduction
-            };
-          });
-          setEvalRouting(mapped);
-          if (mapped.length > 0) {
-            setSelectedEvalStep(mapped[0]);
+              stepTyp: op.StepTyp,
+              stepTypName: op.StepTypName
+            }));
+            setFullRoutingSteps(mapped);
           }
         }
       } catch (err) {
-        console.error('Error fetching routing steps in evaluation:', err);
+        console.error('Error fetching full routing steps:', err);
       } finally {
-        setLoadingEvalRouting(false);
-      }
-
-      if (activeEvalOrder.articleNumber) {
-        setLoadingEvalDrawing(true);
-        try {
-          const res = await fetch(`${API_BASE}/dms/drawing/${activeEvalOrder.articleNumber}/meta`);
-          if (res.ok) {
-            const json = await res.json();
-            setEvalDrawingMeta(json);
-          }
-        } catch (err) {
-          console.error('Error fetching drawing meta in evaluation:', err);
-        } finally {
-          setLoadingEvalDrawing(false);
-        }
+        setLoadingRouting(false);
       }
     };
 
-    loadOrderDetails();
-  }, [activeEvalOrder, data]);
+    loadFullRouting();
+  }, [activeModalStep]);
+
+  useEffect(() => {
+    fetchEvaluation();
+  }, [startDate, endDate]);
 
   const getDatesInRange = (startStr, endStr) => {
     const datesList = [];
@@ -3860,10 +3830,6 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
   };
 
   useEffect(() => {
-    fetchEvaluation();
-  }, [startDate, endDate]);
-
-  useEffect(() => {
     if (dates.length > 0) {
       if (!drilldownDate || !dates.includes(drilldownDate)) {
         setDrilldownDate(dates[0]);
@@ -3910,23 +3876,6 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
     return matchesMachine && matchesSearch;
   });
 
-  // Deduplicate planned times by operation key (ContractNumber + AS_NUMMER) to prevent double counting
-  const uniqueOps = {};
-  filteredData.forEach(item => {
-    const opKey = `${item.ContractNumber}_${item.AS_NUMMER || 'N/A'}`;
-    if (!uniqueOps[opKey]) {
-      uniqueOps[opKey] = {
-        plannedRuest: item.SOLL_ZEIT_RUESTUNG || 0,
-        plannedProd: item.SOLL_ZEIT_PRODUKTION || 0
-      };
-    }
-  });
-
-  const totalPlannedRuest = Object.values(uniqueOps).reduce((sum, op) => sum + op.plannedRuest, 0);
-  const totalPlannedProd = Object.values(uniqueOps).reduce((sum, op) => sum + op.plannedProd, 0);
-  const totalPlannedGesamt = totalPlannedRuest + totalPlannedProd;
-
-  // Extract machine weekday capacities from data rows
   const machineCapMap = {};
   data.forEach(item => {
     const mName = item.MS_BEZEICHNUNG;
@@ -3943,8 +3892,6 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
     }
   });
 
-  // dates is already declared above
-
   const activeMachines = selectedMachine === 'All' 
     ? Object.keys(machineCapMap) 
     : [selectedMachine];
@@ -3957,7 +3904,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
     dates.forEach(dateStr => {
       const dateObj = new Date(dateStr);
       const day = dateObj.getDay();
-      if (day === 0 || day === 6) return; // skip Saturday and Sunday capacity
+      if (day === 0 || day === 6) return;
       let weekdayKey = 'MO';
       if (day === 1) weekdayKey = 'MO';
       else if (day === 2) weekdayKey = 'DI';
@@ -3983,7 +3930,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
     dates.forEach(dateStr => {
       const dateObj = new Date(dateStr);
       const day = dateObj.getDay();
-      if (day === 0 || day === 6) return; // skip Saturday and Sunday capacity
+      if (day === 0 || day === 6) return;
       let weekdayKey = 'MO';
       if (day === 1) weekdayKey = 'MO';
       else if (day === 2) weekdayKey = 'DI';
@@ -4014,92 +3961,12 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
     return order.indexOf(a.name) - order.indexOf(b.name);
   });
 
-  const uniqueMachines = Array.from(new Set(data.map(item => item.MS_BEZEICHNUNG)))
-    .filter(Boolean)
-    .sort((a, b) => {
-      const order = ['C40', 'C42', 'RS2_1', 'RS2_2', 'Chiron', 'C400', 'Brother'];
-      return order.indexOf(a) - order.indexOf(b);
-    });
-
-  const detailedTableData = filteredData;
-
-  const groupedOrders = {};
-  detailedTableData.forEach(item => {
-    const orderKey = item.ContractNumber || 'Ohne P-Nummer';
-    if (!groupedOrders[orderKey]) {
-      groupedOrders[orderKey] = {
-        contractNumber: orderKey,
-        orderId: item.OrderId,
-        machines: new Set(),
-        minDate: null,
-        maxDate: null,
-        articleDesc: item.ArticleDesc || 'N/A',
-        articleNumber: item.ArticleNumber || 'N/A',
-        actualRuest: 0,
-        actualProd: 0,
-        operations: {} // opKey -> { sollRuest, sollProd, desc }
-      };
-    }
-
-    const order = groupedOrders[orderKey];
-    if (item.MS_BEZEICHNUNG) {
-      order.machines.add(item.MS_BEZEICHNUNG);
-    }
-    if (item.ZB_DATUM_START) {
-      const d = new Date(item.ZB_DATUM_START);
-      if (!order.minDate || d < order.minDate) order.minDate = d;
-      if (!order.maxDate || d > order.maxDate) order.maxDate = d;
-    }
-
-    order.actualRuest += (item.IST_ZEIT_RUESTUNG || 0);
-    order.actualProd += (item.IST_ZEIT_PRODUKTION || 0);
-
-    const opKey = `${item.AS_NUMMER || 'N/A'}`;
-    if (!order.operations[opKey]) {
-      order.operations[opKey] = {
-        sollRuest: item.SOLL_ZEIT_RUESTUNG || 0,
-        sollProd: item.SOLL_ZEIT_PRODUKTION || 0,
-        desc: item.AS_BEZEICHNUNG || 'N/A'
-      };
-    }
-  });
-
-  const groupedOrdersList = Object.values(groupedOrders).map(order => {
-    let plannedRuest = 0;
-    let plannedProd = 0;
-    const opStrings = [];
-
-    Object.entries(order.operations).forEach(([opNum, op]) => {
-      plannedRuest += op.sollRuest;
-      plannedProd += op.sollProd;
-      opStrings.push(`AS ${opNum}${op.desc && op.desc !== 'N/A' ? ': ' + op.desc : ''}`);
-    });
-
-    return {
-      contractNumber: order.contractNumber,
-      orderId: order.orderId,
-      machinesStr: Array.from(order.machines).join(', '),
-      dateStr: order.minDate 
-        ? (order.minDate.toLocaleDateString('de-DE') + (order.maxDate && order.maxDate.getTime() !== order.minDate.getTime() ? ` - ${order.maxDate.toLocaleDateString('de-DE')}` : ''))
-        : 'N/A',
-      articleDesc: order.articleDesc,
-      articleNumber: order.articleNumber,
-      actualRuest: order.actualRuest,
-      actualProd: order.actualProd,
-      plannedRuest,
-      plannedProd,
-      opDetailsStr: opStrings.join(' | ')
-    };
-  }).sort((a, b) => b.actualRuest + b.actualProd - (a.plannedRuest + a.plannedProd));
-
-  // Compute chart datasets for Zeitauswertung
   const machineChartData = machineAggList.map(m => ({
     name: m.name,
     "Kapazität": parseFloat((m.plannedCapacity / 60).toFixed(1)),
     "Ist-Zeit": parseFloat((m.actualTotal / 60).toFixed(1))
   }));
 
-  console.log('[Debug Chart] Render activeMachines:', activeMachines, 'selectedMachine:', selectedMachine);
   const dailyChartData = dates.map(dateStr => {
     let dailyCapacity = 0;
     let dailyActual = 0;
@@ -4107,7 +3974,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
     activeMachines.forEach(mName => {
       const dateObj = new Date(dateStr);
       const day = dateObj.getDay();
-      if (day !== 0 && day !== 6) { // skip Saturday and Sunday capacity
+      if (day !== 0 && day !== 6) {
         let weekdayKey = 'MO';
         if (day === 1) weekdayKey = 'MO';
         else if (day === 2) weekdayKey = 'DI';
@@ -4135,7 +4002,6 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
     };
   });
 
-  // Compute hourly drilldown data
   const getHourlyChartData = () => {
     const hourlyMins = Array(24).fill(0).map((_, i) => ({
       hour: `${String(i).padStart(2, '0')}:00`,
@@ -4196,6 +4062,54 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
   };
 
   const { hourlyMins: drilldownChartData, drilldownBookingsList } = getHourlyChartData();
+
+  const groupedOrders = {};
+  data.forEach(item => {
+    const orderKey = `${item.ContractNumber || 'N/A'}_${item.AS_NUMMER || 'N/A'}`;
+    if (!groupedOrders[orderKey]) {
+      groupedOrders[orderKey] = {
+        contractNumber: item.ContractNumber || 'N/A',
+        orderId: item.OrderId || null,
+        stepPos: item.AS_NUMMER || 'N/A',
+        stepDesc: item.AS_BEZEICHNUNG || 'N/A',
+        articleDesc: item.ArticleDesc || 'N/A',
+        articleNumber: item.ArticleNumber || 'N/A',
+        articleId: item.ArticleId,
+        positionNumber: item.PositionNumber || null,
+        machines: new Set(),
+        minDate: null,
+        maxDate: null,
+        actualRuest: 0,
+        actualProd: 0,
+        plannedRuest: item.SOLL_ZEIT_RUESTUNG || 0,
+        plannedProd: item.SOLL_ZEIT_PRODUKTION || 0,
+        stepId: item.StepId || null
+      };
+    }
+
+    const order = groupedOrders[orderKey];
+    if (item.MS_BEZEICHNUNG) {
+      order.machines.add(item.MS_BEZEICHNUNG);
+    }
+    if (item.ZB_DATUM_START) {
+      const d = new Date(item.ZB_DATUM_START);
+      if (!order.minDate || d < order.minDate) order.minDate = d;
+      if (!order.maxDate || d > order.maxDate) order.maxDate = d;
+    }
+
+    order.actualRuest += (item.IST_ZEIT_RUESTUNG || 0);
+    order.actualProd += (item.IST_ZEIT_PRODUKTION || 0);
+  });
+
+  const groupedOrdersList = Object.values(groupedOrders).map(order => {
+    return {
+      ...order,
+      machinesStr: Array.from(order.machines).join(', '),
+      dateStr: order.minDate 
+        ? (order.minDate.toLocaleDateString('de-DE') + (order.maxDate && order.maxDate.getTime() !== order.minDate.getTime() ? ` - ${order.maxDate.toLocaleDateString('de-DE')}` : ''))
+        : 'N/A'
+    };
+  }).sort((a, b) => b.actualRuest + b.actualProd - (a.plannedRuest + a.plannedProd));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minHeight: 0 }}>
@@ -4308,13 +4222,11 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
             </div>
           </div>
 
-          {/* Charts Row */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1.5rem' }}>
-            {/* Chart 1: Machine Comparison */}
             <div className="card" style={{ padding: '1.5rem', minHeight: '350px', display: 'flex', flexDirection: 'column' }}>
               <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', marginBottom: '1.25rem' }}>Auslastung nach Maschine (in Stunden)</h3>
               <div style={{ flex: 1, width: '100%', minHeight: '280px' }}>
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                   <BarChart 
                     data={machineChartData} 
                     margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
@@ -4386,11 +4298,10 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
               </div>
             </div>
 
-            {/* Chart 2: Daily Development */}
             <div className="card" style={{ padding: '1.5rem', minHeight: '350px', display: 'flex', flexDirection: 'column' }}>
               <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', marginBottom: '1.25rem' }}>Täglicher Verlauf der Belegungszeiten (in Stunden)</h3>
               <div style={{ flex: 1, width: '100%', minHeight: '280px' }}>
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                   <AreaChart 
                     data={dailyChartData} 
                     margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
@@ -4454,7 +4365,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                 </ResponsiveContainer>
               </div>
             </div>
-          </div>          {/* Drilldown Section */}
+          </div>
           <div id="drilldown-section" className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', borderLeft: '4px solid #10b981' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
               <div>
@@ -4503,12 +4414,11 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                 </div>
               </div>
             </div>
-            {/* Drilldown Chart */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem', alignItems: 'start' }}>
               <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem', borderRadius: '12px', height: '260px', display: 'flex', flexDirection: 'column' }}>
                 <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, marginBottom: '0.75rem' }}>Laufzeitverteilung (Minuten pro Stunde)</span>
                 <div style={{ flex: 1, width: '100%', minHeight: 0 }}>
-                  <ResponsiveContainer width="100%" height="100%">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                     <BarChart data={drilldownChartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.02)" />
                       <XAxis dataKey="hour" stroke="#64748b" style={{ fontSize: '0.65rem' }} />
@@ -4539,7 +4449,6 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                 </div>
               </div>
 
-              {/* Drilldown list of bookings */}
               <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '1rem', borderRadius: '12px', height: '260px', display: 'flex', flexDirection: 'column' }}>
                 <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, marginBottom: '0.75rem' }}>Aktive Belegungen an diesem Tag ({drilldownBookingsList.length})</span>
                 <div style={{ flex: 1, overflowY: 'auto', fontSize: '0.75rem' }}>
@@ -4654,10 +4563,11 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
               </div>
             </div>
 
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+            <div style={{ width: '100%' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left', tableLayout: 'auto' }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid rgba(255,255,255,0.06)', color: '#94a3b8', fontWeight: 700 }}>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>AS</th>
                     <th style={{ padding: '0.75rem 0.5rem' }}>Auftrag (P-Nummer)</th>
                     <th style={{ padding: '0.75rem 0.5rem' }}>Maschine(n)</th>
                     <th style={{ padding: '0.75rem 0.5rem' }}>Datum</th>
@@ -4666,7 +4576,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                     <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Ist-Rüsten</th>
                     <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Soll-Prod</th>
                     <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Ist-Prod</th>
-                    <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Ist/Soll-Abw.</th>
+                    <th style={{ padding: '0.75rem 0.5rem', textAlign: 'right' }}>Abweichung</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -4677,11 +4587,26 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                     
                     return (
                       <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                        <td style={{ padding: '0.75rem 0.5rem', fontWeight: 600, color: '#38bdf8' }}>
+                          AS {order.stepPos}
+                        </td>
                         <td style={{ padding: '0.75rem 0.5rem' }}>
                           <span 
                             onClick={() => {
                               if (order.orderId) {
-                                setActiveEvalOrder(order);
+                                setActiveModalStep({
+                                  stepId: order.stepId,
+                                  stepPos: order.stepPos,
+                                  stepDesc: order.stepDesc,
+                                  orderDesc: order.articleDesc,
+                                  articleId: order.articleId,
+                                  contractNumber: order.contractNumber,
+                                  machineName: order.machinesStr,
+                                  setupTime: order.plannedRuest,
+                                  prodTime: order.plannedProd,
+                                  isCompleted: true,
+                                  orderId: order.orderId
+                                });
                               } else {
                                 alert(`Keine interne ID für den Auftrag ${order.contractNumber} gefunden.`);
                               }
@@ -4694,14 +4619,14 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                             }}
                             title={order.orderId ? "Klicken für Arbeitsplan-Details" : "Keine D4-Verknüpfung"}
                           >
-                            {order.contractNumber}
+                            {order.contractNumber}{order.positionNumber ? ` / Pos ${order.positionNumber}` : ''}
                           </span>
                         </td>
                         <td style={{ padding: '0.75rem 0.5rem', color: '#fff', fontWeight: 600 }}>{order.machinesStr || 'Keine'}</td>
                         <td style={{ padding: '0.75rem 0.5rem', color: '#cbd5e1' }}>{order.dateStr}</td>
-                        <td style={{ padding: '0.75rem 0.5rem', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${order.articleDesc} (${order.opDetailsStr})`}>
+                        <td style={{ padding: '0.75rem 0.5rem', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${order.articleDesc} (${order.stepDesc})`}>
                           <div style={{ color: '#fff', fontWeight: 500 }}>{order.articleDesc}</div>
-                          <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>{order.opDetailsStr}</div>
+                          <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>{order.stepDesc}</div>
                         </td>
                         <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', color: '#94a3b8', fontWeight: 500 }}>{formatMinutes(order.plannedRuest)}</td>
                         <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', color: '#fff', fontWeight: 600 }}>{formatMinutes(order.actualRuest)}</td>
@@ -4720,309 +4645,206 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
         </>
       )}
 
-      {/* Modal for Detailed Order/Arbeitsplan Information */}
-      {activeEvalOrder && (
+      {/* Modal for Detailed Step Information (Evaluation View) */}
+      {activeModalStep && (
         <div style={{
           position: 'fixed',
           top: 0,
           left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(15, 23, 42, 0.75)',
-          backdropFilter: 'blur(8px)',
+          width: '100%',
+          height: '100%',
+          background: 'rgba(4, 6, 10, 0.85)',
+          backdropFilter: 'blur(10px)',
           display: 'flex',
-          justifyContent: 'center',
           alignItems: 'center',
-          zIndex: 1000,
-          padding: '1.5rem',
-          animation: 'fadeIn 0.15s ease-out'
-        }} onClick={() => setActiveEvalOrder(null)}>
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '2rem',
+          transition: 'all 0.3s ease'
+        }} onClick={() => setActiveModalStep(null)}>
           <div style={{
-            background: 'radial-gradient(100% 100% at 0% 0%, var(--bg-card-glow) 0%, var(--bg-card) 100%)',
-            border: '1px solid var(--border-glow)',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-dim)',
             borderRadius: '16px',
-            width: '1000px',
-            maxWidth: '95vw',
+            width: '100%',
+            maxWidth: '650px',
             maxHeight: '90vh',
-            display: 'flex',
-            flexDirection: 'column',
-            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
-            animation: 'scaleUp 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)'
-          }} onClick={(e) => e.stopPropagation()}>
+            overflowY: 'auto',
+            padding: '2.25rem',
+            boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)',
+            position: 'relative',
+            transition: 'all 0.3s ease'
+          }} onClick={e => e.stopPropagation()}>
             
-            {/* Header */}
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              padding: '1.25rem 1.5rem',
-              borderBottom: '1px solid var(--border-dim)'
-            }}>
-              <div>
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-                  Auftrag Details: <span style={{ color: '#38bdf8' }}>{activeEvalOrder.contractNumber}</span>
-                </h3>
-                <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: '0.15rem 0 0 0' }}>
-                  Artikel: <strong>{activeEvalOrder.articleNumber}</strong> | {activeEvalOrder.articleDesc}
-                </p>
+            {/* Close Button */}
+            <button
+              onClick={() => setActiveModalStep(null)}
+              style={{
+                position: 'absolute',
+                top: '1.25rem',
+                right: '1.25rem',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid var(--border-dim)',
+                color: '#94a3b8',
+                cursor: 'pointer',
+                padding: '0.4rem',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s',
+                width: '32px',
+                height: '32px'
+              }}
+            >
+              ✕
+            </button>
+
+            {/* Modal Header */}
+            <div style={{ marginBottom: '1.5rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '1rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.7rem', fontWeight: 700 }}>
+                  ✓ Abgeschlossen
+                </span>
               </div>
-              <button 
-                onClick={() => setActiveEvalOrder(null)}
-                style={{
-                  background: 'rgba(255,255,255,0.03)',
-                  border: '1px solid var(--border-dim)',
-                  color: '#64748b',
-                  cursor: 'pointer',
-                  borderRadius: '8px',
-                  width: '32px',
-                  height: '32px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  transition: 'all 0.2s'
-                }}
-                className="btn-hover"
-              >
-                ✕
-              </button>
+              <h3 style={{ color: '#fff', fontSize: '1.4rem', fontWeight: 700, margin: '0.25rem 0' }}>
+                Arbeitsschritt-Details (Historisch)
+              </h3>
+              <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: 0 }}>
+                Ist-Rückmeldedaten aus D4
+              </p>
             </div>
 
-            {/* Content Body */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: '1.5rem',
-              padding: '1.5rem',
-              overflowY: 'auto',
-              minHeight: 0,
-              flex: 1
-            }}>
+            {/* Modal Body */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               
-              {/* Left Column: Routing Plan */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', minHeight: 0 }}>
-                <h4 style={{ fontSize: '0.85rem', color: '#94a3b8', margin: 0, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  Gesamter Arbeitsplan (D4-Routing)
-                </h4>
-                
-                {loadingEvalRouting ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#cbd5e1', padding: '2rem', justifyContent: 'center' }}>
-                    <div className="spinner-mini" style={{ border: '2px solid rgba(255,255,255,0.1)', borderTop: '2px solid #38bdf8', borderRadius: '50%', width: '16px', height: '16px', animation: 'spin 1s linear infinite' }} />
+              {/* Row 1: P-Nummer & Date */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>P-Nummer (Projekt)</div>
+                  <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>
+                    {activeModalStep.contractNumber || 'Keine P-Nummer'}
+                    {activeModalStep.positionNumber ? ` / Pos ${activeModalStep.positionNumber}` : ''}
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Geplant auf</div>
+                  <div style={{ fontSize: '1.05rem', color: '#fff', fontWeight: 700 }}>
+                    {activeModalStep.machineName || 'N/A'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 2: Artikel */}
+              <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Artikel (Teil)</div>
+                <div style={{ fontSize: '0.95rem', color: '#fff', fontWeight: 600 }}>{activeModalStep.orderDesc}</div>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>Artikel-ID: {activeModalStep.articleId}</div>
+              </div>
+
+              {/* Row 3: Position & Beschreibung */}
+              <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Arbeitsplan-Position (Arbeitsschritt)</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                  <span style={{ color: '#38bdf8', fontWeight: 700, fontSize: '1.1rem' }}>{activeModalStep.stepPos || 'N/A'}</span>
+                  <span style={{ color: '#fff', fontWeight: 600 }}>- {activeModalStep.stepDesc}</span>
+                </div>
+              </div>
+
+              {/* Row 4: Zeiten (Soll vs Ist) */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Soll-Rüsten / Soll-Prod</div>
+                  <div style={{ fontSize: '1.05rem', color: '#94a3b8', fontWeight: 700, marginTop: '0.25rem' }}>
+                    {formatMinutes(activeModalStep.setupTime)} / {formatMinutes(activeModalStep.prodTime)}
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Soll-Gesamtzeit</div>
+                  <div style={{ fontSize: '1.1rem', color: '#fff', fontWeight: 700, marginTop: '0.15rem' }}>
+                    {formatMinutes(activeModalStep.setupTime + activeModalStep.prodTime)}
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Typ</div>
+                  <div style={{ fontSize: '1.1rem', color: '#38bdf8', fontWeight: 700, marginTop: '0.15rem' }}>Auswertung</div>
+                </div>
+              </div>
+
+              {/* Gesamter Arbeitsplan Section */}
+              <div>
+                <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <span>Gesamter Arbeitsplan (Routing)</span>
+                  <span style={{ fontSize: '0.7rem', background: 'rgba(255, 255, 255, 0.04)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#94a3b8' }}>
+                    {loadingRouting ? 'Lade...' : `${fullRoutingSteps.length} Operationen`}
+                  </span>
+                </div>
+                {loadingRouting ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                    <RefreshCw size={14} className="animate-spin" />
                     <span>Lade Arbeitsplan...</span>
                   </div>
-                ) : evalRouting.length === 0 ? (
-                  <div style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic', padding: '2rem', textAlign: 'center' }}>
-                    Kein Arbeitsplan zu diesem Auftrag hinterlegt.
-                  </div>
-                ) : (
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.5rem',
-                    overflowY: 'auto',
-                    flex: 1,
-                    background: 'rgba(0,0,0,0.15)',
-                    border: '1px solid var(--border-dim)',
-                    borderRadius: '10px',
-                    padding: '0.75rem'
-                  }}>
-                    {evalRouting.map((op) => {
-                      const isSelected = selectedEvalStep && selectedEvalStep.stepId === op.stepId;
-                      const hasAbweichung = (op.actualRuest + op.actualProd) > (op.setupTime + op.prodTime);
-                      
+                ) : fullRoutingSteps.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem', border: '1px solid var(--border-dim)', padding: '0.75rem', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                    {fullRoutingSteps.map((op, opIdx) => {
+                      const isCurrent = op.stepId === activeModalStep.stepId;
+                      const isCompleted = op.isCompleted;
+                      const isExecuting = op.isExecuting;
+
+                      let statusBadge = null;
+                      let bgStyle = 'rgba(255, 255, 255, 0.01)';
+                      let borderStyle = '1px solid rgba(255, 255, 255, 0.03)';
+
+                      if (isCurrent) {
+                        statusBadge = <span style={{ background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#38bdf8', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>Aktueller Schritt</span>;
+                        bgStyle = 'rgba(59, 130, 246, 0.04)';
+                        borderStyle = '1px solid rgba(59, 130, 246, 0.25)';
+                      } else if (isCompleted) {
+                        statusBadge = <span style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.15)', color: '#10b981', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>✓ Erledigt</span>;
+                      } else if (isExecuting) {
+                        statusBadge = <span style={{ background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#f59e0b', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 700 }}>⚡ In Arbeit</span>;
+                      } else {
+                        statusBadge = <span style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#ef4444', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>Offen</span>;
+                      }
+
+                      let stepTypeBadge = null;
+                      if (op.stepTyp === 3) {
+                        stepTypeBadge = <span style={{ background: 'rgba(148, 163, 184, 0.12)', border: '1px solid rgba(148, 163, 184, 0.25)', color: '#94a3b8', fontSize: '0.62rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 600, marginRight: '0.35rem', flexShrink: 0 }}>ℹ Info</span>;
+                      } else if (op.stepTyp === 2) {
+                        stepTypeBadge = <span style={{ background: 'rgba(249, 115, 22, 0.12)', border: '1px solid rgba(249, 115, 22, 0.25)', color: '#fdba74', fontSize: '0.62rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 600, marginRight: '0.35rem', flexShrink: 0 }}>📦 Material</span>;
+                      } else if (op.stepTyp === 1) {
+                        stepTypeBadge = <span style={{ background: 'rgba(168, 85, 247, 0.12)', border: '1px solid rgba(168, 85, 247, 0.25)', color: '#c084fc', fontSize: '0.62rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 600, marginRight: '0.35rem', flexShrink: 0 }}>🤝 Ext. Dienstl.</span>;
+                      }
+
                       return (
-                        <div
-                          key={op.stepId}
-                          onClick={() => setSelectedEvalStep(op)}
-                          style={{
-                            background: isSelected ? 'rgba(56, 189, 248, 0.05)' : 'rgba(255,255,255,0.01)',
-                            border: isSelected ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.04)',
-                            borderRadius: '8px',
-                            padding: '0.65rem',
-                            cursor: 'pointer',
-                            transition: 'all 0.15s'
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                              <span style={{
-                                width: '8px',
-                                height: '8px',
-                                borderRadius: '50%',
-                                background: op.color === 'Green' ? '#10b981' : op.color === 'Yellow' ? '#f59e0b' : '#38bdf8'
-                              }} />
-                              <strong style={{ color: '#fff', fontSize: '0.8rem' }}>AS {op.stepPos}</strong>
+                        <div key={opIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: bgStyle, border: borderStyle, padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', transition: 'all 0.2s' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexGrow: 1, overflow: 'hidden' }}>
+                            <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px' }}>AS {op.stepPos}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexGrow: 1 }}>
+                              {stepTypeBadge}
+                              <span style={{ color: isCompleted ? '#64748b' : '#fff', fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={op.stepDesc}>{op.stepDesc}</span>
                             </div>
-                            <span style={{ fontSize: '0.7rem', color: '#94a3b8', background: 'rgba(255,255,255,0.03)', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>
-                              {op.machineName}
-                            </span>
                           </div>
-                          <div style={{ fontSize: '0.75rem', color: '#cbd5e1', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {op.stepDesc}
-                          </div>
-                          
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.4rem', fontSize: '0.68rem', color: '#64748b' }}>
-                            <div>Soll: {formatMinutes(op.setupTime + op.prodTime)}</div>
-                            <div style={{ textAlign: 'right', color: hasAbweichung ? '#f87171' : '#cbd5e1' }}>
-                              Ist: {formatMinutes(op.actualRuest + op.actualProd)}
-                            </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+                            <span style={{ color: '#94a3b8', fontSize: '0.75rem' }} title="Maschine">{op.machineName}</span>
+                            <span style={{ color: '#475569', fontSize: '0.75rem' }}>{op.setupTime}m / {op.prodTime}m</span>
+                            {statusBadge}
                           </div>
                         </div>
                       );
                     })}
                   </div>
-                )}
-              </div>
-
-              {/* Right Column: Step Details & Drawings */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', minHeight: 0 }}>
-                <h4 style={{ fontSize: '0.85rem', color: '#94a3b8', margin: 0, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  Arbeitsschritt-Details
-                </h4>
-                
-                {selectedEvalStep ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', overflowY: 'auto', flex: 1 }}>
-                    
-                    {/* General Step KPI block */}
-                    <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px', padding: '0.75rem 1rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Soll-Menge</span>
-                        <strong style={{ color: '#fff', fontSize: '0.8rem' }}>{selectedEvalStep.targetQty} Stück</strong>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Status D4</span>
-                        <span style={{
-                          fontSize: '0.7rem',
-                          background: selectedEvalStep.color === 'Green' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(56, 189, 248, 0.1)',
-                          color: selectedEvalStep.color === 'Green' ? '#10b981' : '#38bdf8',
-                          padding: '0.1rem 0.35rem',
-                          borderRadius: '4px',
-                          fontWeight: 600
-                        }}>
-                          {selectedEvalStep.color === 'Green' ? 'Rückgemeldet' : selectedEvalStep.color === 'Yellow' ? 'In Arbeit' : 'Eingeplant'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Soll vs Ist Times Comparison Grid */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                      <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px', padding: '0.75rem' }}>
-                        <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.35rem' }}>Rüstzeiten</div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
-                          <span style={{ color: '#94a3b8' }}>Soll:</span>
-                          <span style={{ color: '#fff', fontWeight: 500 }}>{formatMinutes(selectedEvalStep.setupTime)}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                          <span style={{ color: '#94a3b8' }}>Ist:</span>
-                          <strong style={{ color: '#fff' }}>{formatMinutes(selectedEvalStep.actualRuest)}</strong>
-                        </div>
-                      </div>
-
-                      <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px', padding: '0.75rem' }}>
-                        <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.35rem' }}>Produktionszeiten</div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
-                          <span style={{ color: '#94a3b8' }}>Soll:</span>
-                          <span style={{ color: '#fff', fontWeight: 500 }}>{formatMinutes(selectedEvalStep.prodTime)}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                          <span style={{ color: '#94a3b8' }}>Ist:</span>
-                          <strong style={{ color: '#fff' }}>{formatMinutes(selectedEvalStep.actualProd)}</strong>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Drawings and PDF View */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                        <span>Zeichnung (DMS)</span>
-                      </div>
-                      
-                      {loadingEvalDrawing ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#cbd5e1', padding: '1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px' }}>
-                          <div className="spinner-mini" style={{ border: '2px solid rgba(255,255,255,0.1)', borderTop: '2px solid #38bdf8', borderRadius: '50%', width: '16px', height: '16px', animation: 'spin 1s linear infinite' }} />
-                          <span>Lade Zeichnungs-Metadata...</span>
-                        </div>
-                      ) : evalDrawingMeta ? (
-                        <div style={{
-                          background: 'rgba(255,255,255,0.01)',
-                          border: '1px solid var(--border-dim)',
-                          borderRadius: '10px',
-                          padding: '0.75rem 1rem',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.5rem'
-                        }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
-                            <span style={{ color: '#94a3b8' }}>Zeichnungsnummer:</span>
-                            <strong style={{ color: '#fff' }}>{evalDrawingMeta.drawingNumber || 'N/A'}</strong>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
-                            <span style={{ color: '#94a3b8' }}>Revision:</span>
-                            <span style={{ color: '#fff' }}>{evalDrawingMeta.drawingRevision || 'N/A'}</span>
-                          </div>
-                          {evalDrawingMeta.pdfInlineUri && (
-                            <a
-                              href={`${API_BASE}${evalDrawingMeta.pdfInlineUri}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.4rem',
-                                background: 'rgba(16, 185, 129, 0.1)',
-                                border: '1px solid rgba(16, 185, 129, 0.2)',
-                                color: '#10b981',
-                                textDecoration: 'none',
-                                padding: '0.45rem',
-                                borderRadius: '8px',
-                                fontSize: '0.75rem',
-                                fontWeight: 700,
-                                marginTop: '0.25rem',
-                                transition: 'all 0.2s'
-                              }}
-                              className="btn-hover"
-                            >
-                              📄 PDF Zeichnung öffnen
-                            </a>
-                          )}
-                        </div>
-                      ) : (
-                        <div style={{ color: '#64748b', fontSize: '0.75rem', fontStyle: 'italic', padding: '0.75rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', borderRadius: '10px' }}>
-                          Keine Zeichnungsdaten im DMS gefunden.
-                        </div>
-                      )}
-                    </div>
-
-                  </div>
                 ) : (
-                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', fontStyle: 'italic', fontSize: '0.8rem' }}>
-                    Wählen Sie einen Arbeitsschritt links aus, um Details anzuzeigen.
+                  <div style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic', padding: '0.5rem', textAlign: 'center' }}>
+                    Kein Arbeitsplan für diesen Auftrag hinterlegt.
                   </div>
                 )}
               </div>
-
             </div>
-
-            {/* Footer */}
-            <div style={{
-              padding: '1rem 1.5rem',
-              borderTop: '1px solid var(--border-dim)',
-              display: 'flex',
-              justifyContent: 'flex-end',
-              background: 'rgba(0,0,0,0.1)'
-            }}>
-              <button
-                className="btn btn-secondary"
-                onClick={() => setActiveEvalOrder(null)}
-                style={{ padding: '0.45rem 1.25rem', fontSize: '0.8rem' }}
-              >
-                Schließen
-              </button>
-            </div>
-
           </div>
         </div>
       )}
+
     </div>
   );
 }
@@ -6637,11 +6459,11 @@ function PlanningTab({ mode = 'machining' }) {
                             </div>
                           )}
                           {/* Header Row */}
-                          <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
-                            <span className="card-order-id" style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                              {step.contractNumber || 'Auftrag'}
+                          <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.25rem', marginBottom: '0.25rem' }}>
+                            <span className="card-order-id" style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.25rem', flex: 1, minWidth: 0 }}>
+                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{step.contractNumber || 'Auftrag'}</span>
                               {step.deliveryDate && (
-                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 600, marginLeft: '0.25rem' }}>
+                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 600, whiteSpace: 'nowrap' }}>
                                   (Lief: {formatDate(step.deliveryDate)})
                                 </span>
                               )}
@@ -6653,7 +6475,7 @@ function PlanningTab({ mode = 'machining' }) {
                                 <Info size={12} style={{ color: '#64748b' }} />
                               </span>
                             </span>
-                            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                               {highlightRobotFlow && !isNonRobot && (
                                 <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.58rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 700 }}>
                                   🤖 ROBOTER-FLOW
@@ -6675,12 +6497,12 @@ function PlanningTab({ mode = 'machining' }) {
                               </span>
                             )}
                             {step.isLookahead && (
-                              <span className="badge" style={{ background: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fda4af', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 700 }} title={`Vorgezogen aus der eigentlichen Woche: ${formatDate(step.originalStartDate)}`}>
-                                🔮 VORGEZOGEN
+                              <span className="badge" style={{ background: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fda4af', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 600, whiteSpace: 'nowrap' }} title={`Vorgezogen aus der eigentlichen Woche: ${formatDate(step.originalStartDate)}`}>
+                                🔮 Vorgezogen
                               </span>
                             )}
                             {step.isNightRunCapable && (
-                              <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', color: '#d8b4fe', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px' }}>
+                              <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', color: '#d8b4fe', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px', whiteSpace: 'nowrap' }}>
                                 🌙 Nacht
                               </span>
                             )}

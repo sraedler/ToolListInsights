@@ -1135,7 +1135,7 @@ app.get('/api/orders/:id/steps', async (req, res) => {
               ) THEN 4
               ELSE 1
             END
-          ELSE 4
+          ELSE p.PSP_PP_STATUS_PRODUKTION
         END AS SPKO,
         CASE
           WHEN b.BP_PP_DATUM_TERMIN IS NOT NULL THEN b.BP_PP_DATUM_TERMIN
@@ -2502,12 +2502,10 @@ function extractLagerortFromDesc(desc) {
   }
   return null;
 }
-
 // 7b. Planning Tab Kanban Data Endpoint
 app.get('/api/planning', async (req, res) => {
   try {
     if (!cachedSetupData) {
-      console.log('cachedSetupData is null. Recalculating base cache dynamically...');
       await cacheSetupData();
     }
 
@@ -4737,4 +4735,10 @@ app.get('/api/machine-time-evaluation', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   warmupAllCaches();
+  
+  // Periodic background cache update every 5 minutes
+  setInterval(() => {
+    console.log('Running periodic background cache update...');
+    warmupAllCaches();
+  }, 5 * 60 * 1000);
 });
