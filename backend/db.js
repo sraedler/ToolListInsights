@@ -19,7 +19,7 @@ function buildConfig(serverEnv, databaseEnv, userEnv, passwordEnv, portEnv, encr
   if (serverEnv) {
     const serverParts = serverEnv.split('\\');
     const host = serverParts[0];
-    const instance = serverParts[1] || null;
+    const instance = serverParts[1] || undefined;
     return {
       server: host,
       database: databaseEnv,
@@ -78,7 +78,7 @@ function buildConfig(serverEnv, databaseEnv, userEnv, passwordEnv, portEnv, encr
     options: {
       encrypt: parsed.encrypt || false,
       trustServerCertificate: true,
-      instanceName: parsed.instanceName || null
+      instanceName: parsed.instanceName || undefined
     },
     pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
   };
