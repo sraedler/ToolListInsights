@@ -4765,8 +4765,8 @@ app.get('/api/machine-time-evaluation', async (req, res) => {
     
     const query = `
       ${selectAndFrom}
-      WHERE tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_START >= CONVERT(datetime, @start, 120)
-        AND tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_STOP <= CONVERT(datetime, @end, 120)
+      WHERE tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_START >= @start
+        AND tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_STOP <= @end
       ${orderByPart}
     `;
 
@@ -4774,12 +4774,12 @@ app.get('/api/machine-time-evaluation', async (req, res) => {
     nextDay.setDate(nextDay.getDate() + 1);
     const nextDayStr = nextDay.toISOString().substring(0, 10);
 
-    const startDateTimeStr = `${startDate} 06:00:00`;
-    const endDateTimeStr = `${nextDayStr} 05:59:59`;
+    const startVal = new Date(`${startDate}T06:00:00`);
+    const endVal = new Date(`${nextDayStr}T05:59:59`);
 
     const result = await poolD4.request()
-      .input('start', sql.VarChar, startDateTimeStr)
-      .input('end', sql.VarChar, endDateTimeStr)
+      .input('start', sql.DateTime, startVal)
+      .input('end', sql.DateTime, endVal)
       .query(query);
 
     machineTimeEvaluationCache[cacheKey] = result.recordset;
