@@ -57,12 +57,14 @@ function formatMinutes(mins) {
 }
 
 export default function App() {
+  const isDocker = import.meta.env.VITE_API_BASE === '/api' || window.location.port === '2005';
+
   const [systemStatus, setSystemStatus] = useState({
     status: 'loading',
     progress: 'Verbindung zum Analyse-Server wird hergestellt...',
     cachedItems: { toolLists: false, dashboard: false, standardization: false, demand: false, setup: false }
   });
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(isDocker ? 'planning' : 'overview');
   const [summary, setSummary] = useState(null);
 
   // Helper to format date as YYYY-MM-DD with offset in days from today
@@ -248,53 +250,57 @@ export default function App() {
           </div>
           
           <nav className="nav-links">
-            <div 
-              className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
-              onClick={() => setActiveTab('overview')}
-            >
-              <LayoutDashboard size={18} />
-              <span>Übersicht</span>
-            </div>
-            
-            <div 
-              className={`nav-item ${activeTab === 'explorer' ? 'active' : ''}`}
-              onClick={() => setActiveTab('explorer')}
-            >
-              <Database size={18} />
-              <span>ERP Explorer</span>
-            </div>
-            
-            <div 
-              className={`nav-item ${activeTab === 'standardization' ? 'active' : ''}`}
-              onClick={() => setActiveTab('standardization')}
-            >
-              <Wrench size={18} />
-              <span>Standardisierung</span>
-            </div>
-            
-            <div 
-              className={`nav-item ${activeTab === 'demand' ? 'active' : ''}`}
-              onClick={() => setActiveTab('demand')}
-            >
-              <CalendarRange size={18} />
-              <span>Bedarfsanalyse</span>
-            </div>
-            
-            <div 
-              className={`nav-item ${activeTab === 'simulation' ? 'active' : ''}`}
-              onClick={() => setActiveTab('simulation')}
-            >
-              <Sliders size={18} />
-              <span>Rüstoptimierung</span>
-            </div>
-            
-            <div 
-              className={`nav-item ${activeTab === 'machines' ? 'active' : ''}`}
-              onClick={() => setActiveTab('machines')}
-            >
-              <Server size={18} />
-              <span>Maschinenanalyse</span>
-            </div>
+            {!isDocker && (
+              <>
+                <div 
+                  className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('overview')}
+                >
+                  <LayoutDashboard size={18} />
+                  <span>Übersicht</span>
+                </div>
+                
+                <div 
+                  className={`nav-item ${activeTab === 'explorer' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('explorer')}
+                >
+                  <Database size={18} />
+                  <span>ERP Explorer</span>
+                </div>
+                
+                <div 
+                  className={`nav-item ${activeTab === 'standardization' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('standardization')}
+                >
+                  <Wrench size={18} />
+                  <span>Standardisierung</span>
+                </div>
+                
+                <div 
+                  className={`nav-item ${activeTab === 'demand' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('demand')}
+                >
+                  <CalendarRange size={18} />
+                  <span>Bedarfsanalyse</span>
+                </div>
+                
+                <div 
+                  className={`nav-item ${activeTab === 'simulation' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('simulation')}
+                >
+                  <Sliders size={18} />
+                  <span>Rüstoptimierung</span>
+                </div>
+                
+                <div 
+                  className={`nav-item ${activeTab === 'machines' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('machines')}
+                >
+                  <Server size={18} />
+                  <span>Maschinenanalyse</span>
+                </div>
+              </>
+            )}
 
             <div 
               className={`nav-item ${activeTab === 'planning' ? 'active' : ''}`}
