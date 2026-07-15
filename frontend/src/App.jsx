@@ -8,6 +8,7 @@ import {
   Search, 
   Activity, 
   ChevronRight, 
+  ChevronLeft,
   ChevronDown,
   ChevronUp,
   X, 
@@ -25,6 +26,7 @@ import {
   RefreshCw,
   Server,
   Moon,
+  Sun,
   Maximize2,
   Minimize2,
   Cpu
@@ -58,6 +60,27 @@ function formatMinutes(mins) {
 
 export default function App() {
   const isDocker = import.meta.env.VITE_API_BASE === '/api' || window.location.port === '2005';
+
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('theme') || 'dark';
+  });
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('sidebarCollapsed') === 'true';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebarCollapsed', sidebarCollapsed);
+  }, [sidebarCollapsed]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  };
 
   const [systemStatus, setSystemStatus] = useState({
     status: 'loading',
@@ -240,13 +263,40 @@ export default function App() {
 
   // 2. Main Dashboard Application (Mounted when system is ready)
   return (
-    <div className="app-container">
+    <div className={`app-container ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       {/* Sidebar Navigation */}
       <aside className="sidebar">
+        {/* Toggle Button */}
+        <button 
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          className="sidebar-toggle-btn"
+          title={sidebarCollapsed ? "Navigationsleiste ausklappen" : "Navigationsleiste einklappen"}
+          style={{
+            position: 'absolute',
+            top: '24px',
+            right: '-12px',
+            width: '24px',
+            height: '24px',
+            borderRadius: '50%',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-dim)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            color: '#cbd5e1',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+            zIndex: 10,
+            transition: 'background 0.2s, color 0.2s'
+          }}
+        >
+          {sidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+        </button>
+
         <div>
           <div className="logo-section">
-            <Layers className="logo-icon" style={{ color: '#3b82f6' }} />
-            <h1>ToolListInsights</h1>
+            <Layers className="logo-icon" style={{ color: '#3b82f6', flexShrink: 0 }} />
+            {!sidebarCollapsed && <h1>Werkstattplanung</h1>}
           </div>
           
           <nav className="nav-links">
@@ -255,49 +305,55 @@ export default function App() {
                 <div 
                   className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
                   onClick={() => setActiveTab('overview')}
+                  title={sidebarCollapsed ? "Übersicht" : undefined}
                 >
-                  <LayoutDashboard size={18} />
-                  <span>Übersicht</span>
+                  <LayoutDashboard size={18} style={{ flexShrink: 0 }} />
+                  {!sidebarCollapsed && <span>Übersicht</span>}
                 </div>
                 
                 <div 
                   className={`nav-item ${activeTab === 'explorer' ? 'active' : ''}`}
                   onClick={() => setActiveTab('explorer')}
+                  title={sidebarCollapsed ? "ERP Explorer" : undefined}
                 >
-                  <Database size={18} />
-                  <span>ERP Explorer</span>
+                  <Database size={18} style={{ flexShrink: 0 }} />
+                  {!sidebarCollapsed && <span>ERP Explorer</span>}
                 </div>
                 
                 <div 
                   className={`nav-item ${activeTab === 'standardization' ? 'active' : ''}`}
                   onClick={() => setActiveTab('standardization')}
+                  title={sidebarCollapsed ? "Standardisierung" : undefined}
                 >
-                  <Wrench size={18} />
-                  <span>Standardisierung</span>
+                  <Wrench size={18} style={{ flexShrink: 0 }} />
+                  {!sidebarCollapsed && <span>Standardisierung</span>}
                 </div>
                 
                 <div 
                   className={`nav-item ${activeTab === 'demand' ? 'active' : ''}`}
                   onClick={() => setActiveTab('demand')}
+                  title={sidebarCollapsed ? "Bedarfsanalyse" : undefined}
                 >
-                  <CalendarRange size={18} />
-                  <span>Bedarfsanalyse</span>
+                  <CalendarRange size={18} style={{ flexShrink: 0 }} />
+                  {!sidebarCollapsed && <span>Bedarfsanalyse</span>}
                 </div>
                 
                 <div 
                   className={`nav-item ${activeTab === 'simulation' ? 'active' : ''}`}
                   onClick={() => setActiveTab('simulation')}
+                  title={sidebarCollapsed ? "Rüstoptimierung" : undefined}
                 >
-                  <Sliders size={18} />
-                  <span>Rüstoptimierung</span>
+                  <Sliders size={18} style={{ flexShrink: 0 }} />
+                  {!sidebarCollapsed && <span>Rüstoptimierung</span>}
                 </div>
                 
                 <div 
                   className={`nav-item ${activeTab === 'machines' ? 'active' : ''}`}
                   onClick={() => setActiveTab('machines')}
+                  title={sidebarCollapsed ? "Maschinenanalyse" : undefined}
                 >
-                  <Server size={18} />
-                  <span>Maschinenanalyse</span>
+                  <Server size={18} style={{ flexShrink: 0 }} />
+                  {!sidebarCollapsed && <span>Maschinenanalyse</span>}
                 </div>
               </>
             )}
@@ -305,44 +361,63 @@ export default function App() {
             <div 
               className={`nav-item ${activeTab === 'planning' ? 'active' : ''}`}
               onClick={() => setActiveTab('planning')}
+              title={sidebarCollapsed ? "Planung Maschinen" : undefined}
             >
-              <Layers size={18} />
-              <span>Planung Maschinen</span>
+              <Layers size={18} style={{ flexShrink: 0 }} />
+              {!sidebarCollapsed && <span>Planung Maschinen</span>}
+            </div>
+
+            <div 
+              className={`nav-item ${activeTab === 'planning_tools' ? 'active' : ''}`}
+              onClick={() => setActiveTab('planning_tools')}
+              title={sidebarCollapsed ? "Planung Werkzeugrüsten" : undefined}
+            >
+              <Wrench size={18} style={{ flexShrink: 0 }} />
+              {!sidebarCollapsed && <span>Planung Werkzeugrüsten</span>}
             </div>
 
             <div 
               className={`nav-item ${activeTab === 'planning_deburring' ? 'active' : ''}`}
               onClick={() => setActiveTab('planning_deburring')}
+              title={sidebarCollapsed ? "Planung Entgraten/Montieren" : undefined}
             >
-              <CalendarRange size={18} />
-              <span>Planung Entgraten/Montieren</span>
+              <CalendarRange size={18} style={{ flexShrink: 0 }} />
+              {!sidebarCollapsed && <span>Planung Entgraten/Montieren</span>}
             </div>
 
             <div 
               className={`nav-item ${activeTab === 'time_evaluation' ? 'active' : ''}`}
               onClick={() => setActiveTab('time_evaluation')}
+              title={sidebarCollapsed ? "Zeitauswertung" : undefined}
             >
-              <BarChart4 size={18} />
-              <span>Zeitauswertung</span>
+              <BarChart4 size={18} style={{ flexShrink: 0 }} />
+              {!sidebarCollapsed && <span>Zeitauswertung</span>}
             </div>
 
             <div 
               className={`nav-item ${activeTab === 'missing_data' ? 'active' : ''}`}
               onClick={() => setActiveTab('missing_data')}
+              title={sidebarCollapsed ? "Datenvollständigkeit" : undefined}
               style={{ 
-                borderLeft: activeTab === 'missing_data' ? '3px solid #ef4444' : 'none',
+                borderLeft: !sidebarCollapsed && activeTab === 'missing_data' ? '3px solid #ef4444' : 'none',
                 background: activeTab === 'missing_data' ? 'rgba(239, 68, 68, 0.05)' : 'transparent'
               }}
             >
-              <AlertTriangle size={18} style={{ color: activeTab === 'missing_data' ? '#ef4444' : '#94a3b8' }} />
-              <span style={{ color: activeTab === 'missing_data' ? '#ef4444' : '#cbd5e1' }}>Datenvollständigkeit</span>
+              <AlertTriangle size={18} style={{ color: activeTab === 'missing_data' ? '#ef4444' : '#94a3b8', flexShrink: 0 }} />
+              {!sidebarCollapsed && <span style={{ color: activeTab === 'missing_data' ? '#ef4444' : '#cbd5e1' }}>Datenvollständigkeit</span>}
             </div>
           </nav>
         </div>
 
-        <div className="footer-section">
-          <p>Version 1.0.0</p>
-          <p>© 2026 Rädler & Reutemann</p>
+        <div className="footer-section" style={{ textAlign: 'center', fontSize: '0.7rem' }}>
+          {sidebarCollapsed ? (
+            <p style={{ margin: 0, color: '#475569', fontWeight: 600 }}>v1.0</p>
+          ) : (
+            <>
+              <p style={{ margin: 0 }}>Version 1.0.0</p>
+              <p style={{ margin: '0.2rem 0 0 0' }}>© 2026 Rädler & Reutemann</p>
+            </>
+          )}
         </div>
       </aside>
 
@@ -358,6 +433,7 @@ export default function App() {
               {activeTab === 'simulation' && 'Rüstzeit-Optimierungs-Simulator'}
               {activeTab === 'machines' && 'Maschinen-Werkzeugbedarf'}
               {activeTab === 'planning' && 'Kanban-Maschinenbelegungsplanung'}
+              {activeTab === 'planning_tools' && 'Werkzeugrüst-Planung'}
               {activeTab === 'planning_deburring' && 'Kanban-Belegungsplanung Entgraten/Montieren'}
               {activeTab === 'time_evaluation' && 'Zeitauswertung: Soll vs. Ist Maschinenzeiten'}
               {activeTab === 'missing_data' && 'Datenvollständigkeit: Fehlende NC / Vorrichtungen'}
@@ -405,9 +481,36 @@ export default function App() {
             </div>
           </div>
 
-          <div className="system-status">
-            <div className="status-dot"></div>
-            <span>ERP & WinTool Verbunden</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            {/* Theme Toggle Button */}
+            <button
+              onClick={toggleTheme}
+              style={{
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid var(--border-dim)',
+                color: '#fff',
+                padding: '0.4rem 0.5rem',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s',
+                outline: 'none',
+                height: '32px',
+                width: '32px'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)'}
+              title={theme === 'dark' ? 'Hellen Modus aktivieren' : 'Dunklen Modus aktivieren'}
+            >
+              {theme === 'dark' ? <Sun size={15} style={{ color: '#fbbf24' }} /> : <Moon size={15} style={{ color: '#3b82f6' }} />}
+            </button>
+
+            <div className="system-status">
+              <div className="status-dot"></div>
+              <span>ERP & WinTool Verbunden</span>
+            </div>
           </div>
         </header>
 
@@ -419,6 +522,7 @@ export default function App() {
           {activeTab === 'simulation' && <SimulationTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'machines' && <MachinesTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'planning' && <PlanningTab mode="machining" />}
+          {activeTab === 'planning_tools' && <PlanningTab mode="tools" />}
           {activeTab === 'planning_deburring' && <PlanningTab mode="deburring" />}
           {activeTab === 'time_evaluation' && (
             <TimeEvaluationTab 
@@ -5332,8 +5436,1028 @@ function MissingDataTab() {
   );
 }
 
+// A view listing tools that need to be prepared/built for the planning period
+function ToolsPlanningView({ 
+  board, 
+  selectedMachine, 
+  days, 
+  machines, 
+  getDayName, 
+  formatDate,
+  setActiveModalStep,
+  setIsExplanationCollapsed,
+  highlightRobotFlow,
+  isFollowedByRobot,
+  hideExecuting,
+  formatMinutes,
+  capacities
+}) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [viewType, setViewType] = useState('consolidated'); // 'consolidated' or 'grouped'
+  // Filter machines to process
+  const machinesToProcess = selectedMachine === 'All' ? machines : [selectedMachine];
+  const [expandedTool, setExpandedTool] = useState(null);
+  const [toolParts, setToolParts] = useState({}); // toolNr -> Array of parts
+  const [loadingParts, setLoadingParts] = useState({}); // toolNr -> boolean
+  const [expandedGroupedTool, setExpandedGroupedTool] = useState(null); // machine-day-toolNr
+  const [selectedOrders, setSelectedOrders] = useState([]);
+  const [orderDropdownOpen, setOrderDropdownOpen] = useState(false);
+  const [orderSearchTerm, setOrderSearchTerm] = useState('');
+  const dropdownRef = useRef(null);
+
+  const [sortKey, setSortKey] = useState('nr'); // 'nr' | 'desc' | 'count'
+  const [sortDirection, setSortDirection] = useState('asc'); // 'asc' | 'desc'
+  const [showPoolOrders, setShowPoolOrders] = useState(true);
+
+  const handleSort = (key) => {
+    if (sortKey === key) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDirection('asc');
+    }
+  };
+
+  const isPoolMachineSelected = selectedMachine === 'All' || ['RS2_1', 'RS2_2', 'C40', 'C42'].includes(selectedMachine);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setOrderDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  const allOrders = React.useMemo(() => {
+    const orders = new Set();
+    machinesToProcess.forEach(mName => {
+      days.forEach(day => {
+        const daySteps = board[mName]?.[day] || [];
+        daySteps.forEach(step => {
+          if (step.contractNumber) {
+            orders.add(step.contractNumber);
+          }
+        });
+      });
+    });
+    return Array.from(orders).sort();
+  }, [board, machinesToProcess, days]);
+
+  const handleToggleExpand = async (toolNr) => {
+    const isExpanded = expandedTool === toolNr;
+    setExpandedTool(isExpanded ? null : toolNr);
+    
+    if (!isExpanded && !toolParts[toolNr]) {
+      setLoadingParts(prev => ({ ...prev, [toolNr]: true }));
+      try {
+        const res = await fetch(`${API_BASE}/tools/${toolNr}/parts`);
+        if (res.ok) {
+          const parts = await res.json();
+          setToolParts(prev => ({ ...prev, [toolNr]: parts }));
+        }
+      } catch (err) {
+        console.error('Error fetching tool parts:', err);
+      } finally {
+        setLoadingParts(prev => ({ ...prev, [toolNr]: false }));
+      }
+    }
+  };
+
+  const handleGroupedExpandToggle = async (e, machineName, day, toolNr) => {
+    e.stopPropagation();
+    const key = `${machineName}-${day}-${toolNr}`;
+    const isExpanded = expandedGroupedTool === key;
+    setExpandedGroupedTool(isExpanded ? null : key);
+    
+    if (!isExpanded && !toolParts[toolNr]) {
+      setLoadingParts(prev => ({ ...prev, [toolNr]: true }));
+      try {
+        const res = await fetch(`${API_BASE}/tools/${toolNr}/parts`);
+        if (res.ok) {
+          const parts = await res.json();
+          setToolParts(prev => ({ ...prev, [toolNr]: parts }));
+        }
+      } catch (err) {
+        console.error('Error fetching tool parts:', err);
+      } finally {
+        setLoadingParts(prev => ({ ...prev, [toolNr]: false }));
+      }
+    }
+  };
+
+
+
+  // Gather all tool requirements
+  const toolRequirements = []; // Array of { tool, machineName, day, step }
+  const uniqueToolsMap = new Map(); // toolNr -> aggregated tool info
+
+  machinesToProcess.forEach(mName => {
+    days.forEach(day => {
+      const daySteps = board[mName]?.[day] || [];
+      daySteps.forEach(step => {
+        // Filter by selected orders if any are selected
+        if (selectedOrders.length > 0 && !selectedOrders.includes(step.contractNumber)) {
+          return;
+        }
+
+        // Filter by pool orders setting if pool machine is active
+        const isFromPool = step.machinePoolId && (!step.machineId || step.machineId === 0);
+        if (isPoolMachineSelected && !showPoolOrders && isFromPool) {
+          return;
+        }
+
+        const stepWithMachine = { ...step, machineName: mName };
+        const toolsToLoad = step.directMisses || step.loadTools || [];
+        toolsToLoad.forEach(t => {
+          toolRequirements.push({
+            tool: t,
+            machineName: mName,
+            day: day,
+            step: stepWithMachine
+          });
+
+          const key = t.nr;
+          if (!uniqueToolsMap.has(key)) {
+            uniqueToolsMap.set(key, {
+              nr: t.nr,
+              desc: t.desc,
+              dia: t.dia,
+              len: t.len,
+              machines: new Set([mName]),
+              days: new Set([day]),
+              steps: [stepWithMachine],
+              count: 1
+            });
+          } else {
+            const existing = uniqueToolsMap.get(key);
+            existing.machines.add(mName);
+            existing.days.add(day);
+            if (!existing.steps.some(st => st.stepId === step.stepId)) {
+              existing.steps.push(stepWithMachine);
+              existing.count += 1;
+            }
+          }
+        });
+      });
+    });
+  });
+
+  const consolidatedTools = React.useMemo(() => {
+    const list = Array.from(uniqueToolsMap.values())
+      .filter(t => {
+        const term = searchTerm.toLowerCase().trim();
+        if (!term) return true;
+        return String(t.nr).includes(term) || (t.desc && t.desc.toLowerCase().includes(term));
+      });
+
+    list.sort((a, b) => {
+      let valA, valB;
+      if (sortKey === 'desc') {
+        valA = (a.desc || '').toLowerCase();
+        valB = (b.desc || '').toLowerCase();
+        return sortDirection === 'asc' 
+          ? valA.localeCompare(valB) 
+          : valB.localeCompare(valA);
+      } else if (sortKey === 'count') {
+        valA = a.count || 0;
+        valB = b.count || 0;
+      } else {
+        // default: 'nr'
+        valA = Number(a.nr) || 0;
+        valB = Number(b.nr) || 0;
+      }
+
+      if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return list;
+  }, [uniqueToolsMap, searchTerm, sortKey, sortDirection]);
+
+  // Stats
+  const totalUniqueTools = uniqueToolsMap.size;
+  const totalSetupOps = toolRequirements.length;
+  
+  // Find most frequent tool
+  let mostFrequentTool = null;
+  let maxCount = 0;
+  uniqueToolsMap.forEach((val) => {
+    if (val.count > maxCount) {
+      maxCount = val.count;
+      mostFrequentTool = val;
+    }
+  });
+
+  // Group tool requirements by machine & day
+  const groupedData = {};
+  machinesToProcess.forEach(mName => {
+    groupedData[mName] = {};
+    days.forEach(day => {
+      groupedData[mName][day] = [];
+    });
+  });
+
+  toolRequirements.forEach(req => {
+    const term = searchTerm.toLowerCase().trim();
+    if (term) {
+      const matches = String(req.tool.nr).includes(term) || (req.tool.desc && req.tool.desc.toLowerCase().includes(term));
+      if (!matches) return;
+    }
+    groupedData[req.machineName]?.[req.day]?.push(req);
+  });
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', flexGrow: 1 }}>
+      {/* Sub-view Toggle and Search */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '1rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255,255,255,0.03)', padding: '0.25rem', borderRadius: '10px', border: '1px solid var(--border-dim)' }}>
+          <button
+            onClick={() => setViewType('consolidated')}
+            style={{
+              background: viewType === 'consolidated' ? 'var(--primary-gradient)' : 'transparent',
+              color: viewType === 'consolidated' ? '#fff' : '#94a3b8',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '0.4rem 1rem',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              transition: 'all 0.2s'
+            }}
+          >
+            <Layers size={14} />
+            <span>Konsolidierte Werkzeugliste</span>
+          </button>
+          <button
+            onClick={() => setViewType('grouped')}
+            style={{
+              background: viewType === 'grouped' ? 'var(--primary-gradient)' : 'transparent',
+              color: viewType === 'grouped' ? '#fff' : '#94a3b8',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '0.4rem 1rem',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              transition: 'all 0.2s'
+            }}
+          >
+            <CalendarRange size={14} />
+            <span>Nach Maschine & Tag</span>
+          </button>
+        </div>
+
+        {/* Search & Order Filter Wrapper */}
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Order Multiselect Dropdown */}
+          <div ref={dropdownRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => setOrderDropdownOpen(prev => !prev)}
+              style={{
+                background: 'rgba(13, 20, 35, 0.4)',
+                border: '1px solid var(--border-dim)',
+                borderRadius: '8px',
+                color: '#fff',
+                fontSize: '0.8rem',
+                padding: '0.4rem 1rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                minWidth: '180px',
+                justifyContent: 'space-between',
+                outline: 'none',
+                transition: 'border-color 0.2s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'}
+              onMouseLeave={(e) => { if (!orderDropdownOpen) e.currentTarget.style.borderColor = 'var(--border-dim)'; }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>
+                <Layers size={12} style={{ color: '#fbbf24' }} />
+                <span>
+                  {selectedOrders.length === 0 
+                    ? 'Alle Aufträge' 
+                    : selectedOrders.length === 1 
+                    ? `1 Auftrag: ${selectedOrders[0]}` 
+                    : `${selectedOrders.length} Aufträge`}
+                </span>
+              </div>
+              <ChevronDown size={14} style={{ color: '#64748b', transform: orderDropdownOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+            </button>
+
+            {orderDropdownOpen && (
+              <div style={{
+                position: 'absolute',
+                top: 'calc(100% + 5px)',
+                right: 0,
+                background: '#0a0f1d',
+                border: '1px solid var(--border-dim)',
+                borderRadius: '10px',
+                boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
+                width: '280px',
+                zIndex: 1000,
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
+              }}>
+                {/* Search inside Dropdown */}
+                <div style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-dim)', position: 'relative' }}>
+                  <Search size={12} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }} />
+                  <input
+                    type="text"
+                    placeholder="Auftrag suchen..."
+                    value={orderSearchTerm}
+                    onChange={(e) => setOrderSearchTerm(e.target.value)}
+                    style={{
+                      width: '100%',
+                      background: 'rgba(0,0,0,0.2)',
+                      border: '1px solid var(--border-dim)',
+                      borderRadius: '6px',
+                      color: '#fff',
+                      fontSize: '0.75rem',
+                      padding: '0.3rem 0.5rem 0.3rem 1.75rem',
+                      outline: 'none'
+                    }}
+                  />
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.4rem 0.75rem', borderBottom: '1px solid var(--border-dim)', background: 'rgba(255,255,255,0.01)' }}>
+                  <button
+                    onClick={() => setSelectedOrders([])}
+                    style={{ background: 'transparent', border: 'none', color: '#64748b', fontSize: '0.68rem', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    Alle abwählen
+                  </button>
+                  <button
+                    onClick={() => setSelectedOrders([...allOrders])}
+                    style={{ background: 'transparent', border: 'none', color: '#64748b', fontSize: '0.68rem', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    Alle auswählen
+                  </button>
+                </div>
+
+                {/* Options List */}
+                <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '0.25rem' }}>
+                  {allOrders
+                    .filter(ord => ord.toLowerCase().includes(orderSearchTerm.toLowerCase()))
+                    .map(ord => {
+                      const isChecked = selectedOrders.includes(ord);
+                      return (
+                        <label
+                          key={ord}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            padding: '0.35rem 0.5rem',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            color: isChecked ? '#fff' : '#cbd5e1',
+                            background: isChecked ? 'rgba(59, 130, 246, 0.08)' : 'transparent',
+                            userSelect: 'none',
+                            transition: 'all 0.1s'
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {
+                              if (isChecked) {
+                                setSelectedOrders(prev => prev.filter(x => x !== ord));
+                              } else {
+                                setSelectedOrders(prev => [...prev, ord]);
+                              }
+                            }}
+                            style={{ accentColor: '#3b82f6', width: '13px', height: '13px', cursor: 'pointer' }}
+                          />
+                          <span>{ord}</span>
+                        </label>
+                      );
+                    })}
+                  {allOrders.filter(ord => ord.toLowerCase().includes(orderSearchTerm.toLowerCase())).length === 0 && (
+                    <div style={{ padding: '1rem', color: '#64748b', fontSize: '0.72rem', textAlign: 'center', fontStyle: 'italic' }}>
+                      Keine Aufträge gefunden
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Pool orders toggle (only for pool machines) */}
+          {isPoolMachineSelected && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', userSelect: 'none', background: 'rgba(168, 85, 247, 0.05)', border: '1px solid rgba(168, 85, 247, 0.2)', padding: '0.4rem 0.8rem', borderRadius: '8px', color: '#c084fc', fontSize: '0.8rem', height: '36px', transition: 'all 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.borderColor = 'rgba(168, 85, 247, 0.4)'} onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(168, 85, 247, 0.2)'}>
+              <input
+                type="checkbox"
+                checked={showPoolOrders}
+                onChange={(e) => setShowPoolOrders(e.target.checked)}
+                style={{ width: '14px', height: '14px', accentColor: '#a855f7', cursor: 'pointer' }}
+              />
+              <span>Pool-Aufträge</span>
+            </label>
+          )}
+
+          {/* Search Input */}
+          <div style={{ position: 'relative', width: '280px' }}>
+          <Search size={14} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }} />
+          <input
+            type="text"
+            placeholder="Werkzeug suchen (Nr. oder Bez.)..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              width: '100%',
+              background: 'rgba(13, 20, 35, 0.4)',
+              border: '1px solid var(--border-dim)',
+              borderRadius: '8px',
+              color: '#fff',
+              fontSize: '0.8rem',
+              padding: '0.4rem 0.75rem 0.4rem 2rem',
+              outline: 'none',
+              transition: 'border-color 0.2s'
+            }}
+            onFocus={(e) => e.target.style.borderColor = 'rgba(59, 130, 246, 0.5)'}
+            onBlur={(e) => e.target.style.borderColor = 'var(--border-dim)'}
+          />
+          {searchTerm && (
+            <X 
+              size={12} 
+              onClick={() => setSearchTerm('')} 
+              style={{ position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: '#64748b', cursor: 'pointer' }} 
+            />
+          )}
+        </div>
+      </div>
+    </div>
+
+      {/* Stats Cards */}
+      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+        <div style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-dim)',
+          borderRadius: '12px',
+          padding: '1rem 1.25rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '1rem',
+          flex: '1 1 200px',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+        }}>
+          <div style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#38bdf8', padding: '0.75rem', borderRadius: '10px' }}>
+            <Wrench size={20} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Aufzubauende Werkzeuge</div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#fff' }}>{totalUniqueTools}</div>
+          </div>
+        </div>
+
+        <div style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-dim)',
+          borderRadius: '12px',
+          padding: '1rem 1.25rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '1rem',
+          flex: '1 1 200px',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+        }}>
+          <div style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#34d399', padding: '0.75rem', borderRadius: '10px' }}>
+            <Layers size={20} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Gesamt-Rüstbeladungen</div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#fff' }}>{totalSetupOps}</div>
+          </div>
+        </div>
+
+        <div style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-dim)',
+          borderRadius: '12px',
+          padding: '1rem 1.25rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '1rem',
+          flex: '1 1 250px',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+        }}>
+          <div style={{ background: 'rgba(245, 158, 11, 0.1)', color: '#fbbf24', padding: '0.75rem', borderRadius: '10px' }}>
+            <Activity size={20} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Häufigster Rüstbedarf</div>
+            {mostFrequentTool ? (
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginTop: '0.2rem' }}>
+                <span style={{ fontSize: '1rem', fontWeight: 700, color: '#fbbf24' }}>T{mostFrequentTool.nr}</span>
+                <span style={{ fontSize: '0.8rem', color: '#cbd5e1', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={mostFrequentTool.desc}>{mostFrequentTool.desc}</span>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>({mostFrequentTool.count}x)</span>
+              </div>
+            ) : (
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#cbd5e1' }}>-</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      {viewType === 'consolidated' ? (
+        /* Consolidated Table View */
+        <div className="card" style={{ padding: '0', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
+          {consolidatedTools.length === 0 ? (
+            <div style={{ padding: '3rem', textAlign: 'center', color: '#64748b' }}>
+              Keine Werkzeuge entsprechen dem Suchfilter oder müssen in diesem Zeitraum gerüstet werden.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                <thead>
+                  <tr style={{ background: 'rgba(0, 0, 0, 0.2)', borderBottom: '1px solid var(--border-dim)' }}>
+                    <th 
+                      onClick={() => handleSort('nr')}
+                      style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8', width: '120px', cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' }}
+                      onMouseEnter={(e) => e.currentTarget.style.color = '#fff'}
+                      onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span>T-Nummer</span>
+                        <span style={{ color: sortKey === 'nr' ? '#fbbf24' : '#475569', fontSize: '0.65rem' }}>
+                          {sortKey === 'nr' ? (sortDirection === 'asc' ? ' ▲' : ' ▼') : ' ⇅'}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleSort('desc')}
+                      style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8', cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' }}
+                      onMouseEnter={(e) => e.currentTarget.style.color = '#fff'}
+                      onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span>Werkzeugbezeichnung</span>
+                        <span style={{ color: sortKey === 'desc' ? '#fbbf24' : '#475569', fontSize: '0.65rem' }}>
+                          {sortKey === 'desc' ? (sortDirection === 'asc' ? ' ▲' : ' ▼') : ' ⇅'}
+                        </span>
+                      </div>
+                    </th>
+                    <th style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8', width: '130px' }}>Dimensionen</th>
+                    <th style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8' }}>Einsatz-Maschinen</th>
+                    <th 
+                      onClick={() => handleSort('count')}
+                      style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8', width: '120px', textAlign: 'center', cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' }}
+                      onMouseEnter={(e) => e.currentTarget.style.color = '#fff'}
+                      onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}>
+                        <span>Bedarfe</span>
+                        <span style={{ color: sortKey === 'count' ? '#fbbf24' : '#475569', fontSize: '0.65rem' }}>
+                          {sortKey === 'count' ? (sortDirection === 'asc' ? ' ▲' : ' ▼') : ' ⇅'}
+                        </span>
+                      </div>
+                    </th>
+                    <th style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8', width: '60px' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {consolidatedTools.map((t, idx) => {
+                    const isExpanded = expandedTool === t.nr;
+                    return (
+                      <React.Fragment key={t.nr}>
+                        <tr 
+                          onClick={() => handleToggleExpand(t.nr)}
+                          style={{ 
+                            borderBottom: '1px solid var(--border-dim)', 
+                            background: isExpanded ? 'rgba(59, 130, 246, 0.04)' : idx % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent',
+                            cursor: 'pointer',
+                            transition: 'background 0.2s'
+                          }}
+                          onMouseEnter={(e) => { if (!isExpanded) e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
+                          onMouseLeave={(e) => { if (!isExpanded) e.currentTarget.style.background = idx % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent'; }}
+                        >
+                          <td style={{ padding: '0.85rem 1.25rem', fontWeight: 700 }}>
+                            <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#38bdf8', padding: '0.2rem 0.5rem', borderRadius: '6px', fontSize: '0.78rem' }}>
+                              T{t.nr}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.85rem 1.25rem', color: '#fff', fontWeight: 500 }}>
+                            {t.desc || <span style={{ color: '#475569', fontStyle: 'italic' }}>Keine Beschreibung</span>}
+                          </td>
+                          <td style={{ padding: '0.85rem 1.25rem', color: '#cbd5e1' }}>
+                            {((t.dia && t.dia !== 0 && t.dia !== '0') || (t.len && t.len !== 0 && t.len !== '0')) ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', fontSize: '0.75rem' }}>
+                                {t.dia && t.dia !== '0' && t.dia !== 0 && <span>Ø {t.dia} mm</span>}
+                                {t.len && t.len !== '0' && t.len !== 0 && <span>L {t.len} mm</span>}
+                              </div>
+                            ) : (
+                              <span style={{ color: '#475569' }}>-</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.85rem 1.25rem' }}>
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                              {Array.from(t.machines).map(m => {
+                                const hasPoolStep = t.steps.some(st => st.machineName === m && st.machinePoolId && (!st.machineId || st.machineId === 0));
+                                return (
+                                  <div key={m} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', background: 'rgba(255,255,255,0.02)', padding: '0.15rem 0.35rem', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.04)' }}>
+                                    <span style={{ color: '#cbd5e1', fontSize: '0.68rem', fontWeight: 600 }}>
+                                      {m}
+                                    </span>
+                                    {hasPoolStep && (
+                                      <span style={{ fontSize: '0.55rem', background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700 }} title="Wurde für mindestens einen Pool-Auftrag auf dieser Maschine eingeplant">
+                                        Pool
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
+                          <td style={{ padding: '0.85rem 1.25rem', textAlign: 'center' }}>
+                            <span style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#34d399', padding: '0.2rem 0.5rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 700 }}>
+                              {t.count}x
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.85rem 1.25rem', textAlign: 'right' }}>
+                            {isExpanded ? <ChevronUp size={16} style={{ color: '#94a3b8' }} /> : <ChevronDown size={16} style={{ color: '#94a3b8' }} />}
+                          </td>
+                        </tr>
+
+                        {isExpanded && (
+                          <tr style={{ background: 'rgba(0, 0, 0, 0.2)' }}>
+                            <td colSpan={6} style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-dim)' }}>
+                              <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                                {/* Left Column: Jobs */}
+                                <div style={{ flex: '1 1 350px' }}>
+                                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.6rem' }}>
+                                    Benötigt für folgende Belegungen ({t.steps.length}):
+                                  </div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
+                                    {t.steps.map((st, sIdx) => {
+                                      const parentDay = days.find(d => (board[st.machineName]?.[d] || []).some(x => x.stepId === st.stepId));
+                                      return (
+                                        <div 
+                                          key={sIdx} 
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setActiveModalStep(st);
+                                            setIsExplanationCollapsed(true);
+                                          }}
+                                          style={{ 
+                                            background: 'rgba(13, 20, 35, 0.5)', 
+                                            border: '1px solid rgba(255,255,255,0.04)', 
+                                            padding: '0.5rem 0.75rem', 
+                                            borderRadius: '6px', 
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: '0.2rem'
+                                          }}
+                                          onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.3)'; e.currentTarget.style.background = 'rgba(13, 20, 35, 0.8)'; }}
+                                          onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; e.currentTarget.style.background = 'rgba(13, 20, 35, 0.5)'; }}
+                                        >
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span style={{ color: '#fff', fontWeight: 700, fontSize: '0.78rem' }}>{st.contractNumber}</span>
+                                            <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                                              {st.machinePoolId && (!st.machineId || st.machineId === 0) && (
+                                                <span style={{ fontSize: '0.65rem', background: 'rgba(168, 85, 247, 0.12)', color: '#c084fc', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 600 }} title="Auftrag wurde automatisch aus einem Maschinenpool zugewiesen">
+                                                  Pool
+                                                </span>
+                                              )}
+                                              <span style={{ fontSize: '0.65rem', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', padding: '0.05rem 0.25rem', borderRadius: '3px' }}>
+                                                {st.machineName || `Maschine #${st.machineId}`}
+                                              </span>
+                                            </div>
+                                          </div>
+                                          <div style={{ color: '#cbd5e1', fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            Pos {st.stepPos}: {st.stepDesc}
+                                          </div>
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.65rem', color: '#64748b', marginTop: '0.1rem' }}>
+                                            <span>Rüst: {st.setupTime}m | Prod: {st.prodTime}m</span>
+                                            {parentDay && <span style={{ color: '#94a3b8', fontWeight: 500 }}>{getDayName(parentDay)} ({formatDate(parentDay)})</span>}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+
+                                {/* Right Column: Components */}
+                                <div style={{ flex: '1 1 350px' }}>
+                                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.6rem' }}>
+                                    Benötigte Komponenten (WinTool-Stückliste):
+                                  </div>
+                                  {loadingParts[t.nr] ? (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: '#94a3b8', padding: '1rem', background: 'rgba(13,20,35,0.3)', borderRadius: '8px', border: '1px solid var(--border-dim)' }}>
+                                      <RefreshCw size={14} className="animate-spin" style={{ color: '#fbbf24' }} />
+                                      <span>Komponenten werden geladen...</span>
+                                    </div>
+                                  ) : toolParts[t.nr] && toolParts[t.nr].length > 0 ? (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                      {toolParts[t.nr].map((p, pIdx) => (
+                                        <div 
+                                          key={pIdx} 
+                                          style={{ 
+                                            display: 'flex', 
+                                            alignItems: 'center', 
+                                            gap: '0.75rem', 
+                                            fontSize: '0.72rem', 
+                                            background: 'rgba(13, 20, 35, 0.4)', 
+                                            padding: '0.45rem 0.65rem', 
+                                            borderRadius: '6px', 
+                                            border: '1px solid rgba(255,255,255,0.02)'
+                                          }}
+                                        >
+                                          <span style={{ background: 'rgba(245, 158, 11, 0.12)', color: '#fbbf24', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 700, minWidth: '24px', textAlign: 'center' }}>
+                                            {p.partQty}x
+                                          </span>
+                                          <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                                            <span style={{ color: '#fff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.partDesc}>{p.partDesc || 'Keine Beschreibung'}</span>
+                                          </div>
+                                          {p.partKeyWord && (
+                                            <span style={{ marginLeft: 'auto', color: '#64748b', fontSize: '0.62rem', background: 'rgba(255,255,255,0.04)', padding: '0.08rem 0.35rem', borderRadius: '4px', flexShrink: 0 }}>
+                                              {p.partKeyWord}
+                                            </span>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <div style={{ fontSize: '0.75rem', color: '#64748b', padding: '1.5rem', background: 'rgba(13,20,35,0.2)', borderRadius: '8px', border: '1px dashed var(--border-dim)', textAlign: 'center', fontStyle: 'italic' }}>
+                                      Keine Komponenten-Stückliste in WinTool hinterlegt.
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : selectedMachine !== 'All' ? (
+        /* Detailed Single Machine Kanban View but listing tools instead of steps */
+        <div className="kanban-board">
+          {days.map(day => {
+            const dayReqs = groupedData[selectedMachine]?.[day] || [];
+            
+            // Unique tools for this column
+            const dayToolsMap = new Map();
+            dayReqs.forEach(req => {
+              const key = req.tool.nr;
+              if (!dayToolsMap.has(key)) {
+                dayToolsMap.set(key, {
+                  tool: req.tool,
+                  steps: [req.step]
+                });
+              } else {
+                const existing = dayToolsMap.get(key);
+                if (!existing.steps.some(x => x.stepId === req.step.stepId)) {
+                  existing.steps.push(req.step);
+                }
+              }
+            });
+            const uniqueDayTools = Array.from(dayToolsMap.values());
+
+            return (
+              <div key={day} className="kanban-column">
+                <div className="column-header">
+                  <div className="day-name">{getDayName(day)}</div>
+                  <div className="day-date">{formatDate(day)}</div>
+                  <div className="column-summary" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                    <div style={{ color: '#fff', fontWeight: 600 }}>
+                      {uniqueDayTools.length} {uniqueDayTools.length === 1 ? 'Werkzeug' : 'Werkzeuge'} aufzubauen
+                    </div>
+                    <div style={{ color: '#64748b', fontSize: '0.65rem' }}>
+                      (für {dayReqs.map(r => r.step.stepId).filter((val, i, arr) => arr.indexOf(val) === i).length} Aufträge)
+                    </div>
+                  </div>
+                </div>
+
+                <div className="column-content">
+                  {uniqueDayTools.length === 0 ? (
+                    <div className="empty-column-state" style={{ color: '#10b981' }}>✓ Alle Werkzeuge auf Maschine</div>
+                  ) : (
+                    uniqueDayTools.map(({ tool, steps }, idx) => (
+                      <div
+                        key={`${tool.nr}-${idx}`}
+                        className="kanban-card"
+                        style={{
+                          padding: '0.65rem',
+                          borderLeft: '3px solid #fbbf24',
+                          background: 'var(--bg-card)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.25rem'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '0.15rem 0.4rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 700 }}>
+                            T{tool.nr}
+                          </span>
+                          <span style={{ fontSize: '0.65rem', color: '#64748b' }}>
+                            Ø{tool.dia || '-'} / L{tool.len || '-'}
+                          </span>
+                        </div>
+                        <div style={{ color: '#fff', fontSize: '0.78rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tool.desc}>
+                          {tool.desc || 'Keine Beschreibung'}
+                        </div>
+                        <div style={{ borderTop: '1px dashed var(--border-dim)', paddingTop: '0.3rem', marginTop: '0.15rem' }}>
+                          <div style={{ fontSize: '0.62rem', color: '#94a3b8', fontWeight: 600, marginBottom: '0.15rem' }}>Benötigt für:</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginBottom: '0.35rem' }}>
+                            {steps.map((st, stIdx) => (
+                              <div
+                                key={stIdx}
+                                onClick={() => {
+                                  setActiveModalStep(st);
+                                  setIsExplanationCollapsed(true);
+                                }}
+                                style={{
+                                  fontSize: '0.65rem',
+                                  color: '#38bdf8',
+                                  cursor: 'pointer',
+                                  textDecoration: 'underline',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap'
+                                }}
+                                title={`${st.contractNumber} (Pos ${st.stepPos}): ${st.stepDesc}`}
+                              >
+                                {st.contractNumber} ({st.stepDesc.substring(0, 12)}...)
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Components Accordion inside Card */}
+                          <div style={{ borderTop: '1px dotted rgba(255,255,255,0.06)', paddingTop: '0.3rem', marginTop: '0.2rem' }}>
+                            <button
+                              onClick={(e) => handleGroupedExpandToggle(e, selectedMachine, day, tool.nr)}
+                              style={{
+                                width: '100%',
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#fbbf24',
+                                fontSize: '0.62rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '0',
+                                outline: 'none'
+                              }}
+                            >
+                              <span>🔧 Komponenten ({toolParts[tool.nr] ? toolParts[tool.nr].length : '?'})</span>
+                              {expandedGroupedTool === `${selectedMachine}-${day}-${tool.nr}` ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                            </button>
+                            
+                            {expandedGroupedTool === `${selectedMachine}-${day}-${tool.nr}` && (
+                              <div style={{ marginTop: '0.3rem', display: 'flex', flexDirection: 'column', gap: '0.2rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '0.1rem' }}>
+                                {loadingParts[tool.nr] ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.58rem', color: '#94a3b8' }}>
+                                    <RefreshCw size={10} className="animate-spin" />
+                                    <span>Lade...</span>
+                                  </div>
+                                ) : toolParts[tool.nr] && toolParts[tool.nr].length > 0 ? (
+                                  toolParts[tool.nr].map((p, pIdx) => (
+                                    <div key={pIdx} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.58rem', background: 'rgba(0,0,0,0.15)', padding: '0.15rem 0.25rem', borderRadius: '3px', overflow: 'hidden' }}>
+                                      <span style={{ color: '#fbbf24', fontWeight: 700, flexShrink: 0 }}>{p.partQty}x</span>
+                                      <span style={{ color: '#fff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.partDesc}>{p.partDesc || 'Keine Beschreibung'}</span>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div style={{ fontSize: '0.58rem', color: '#64748b', fontStyle: 'italic' }}>Keine Stückliste</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* Swimlane Matrix View showing tools */
+        <div className="swimlane-view card">
+          <div className="swimlane-grid">
+            {/* Header Row */}
+            <div className="grid-row header-row" style={{ gridTemplateColumns: `180px repeat(${days.length}, 1fr)`, position: 'sticky', top: 0, zIndex: 10, background: '#0c1220', borderBottom: '2px solid rgba(255,255,255,0.08)' }}>
+              <div className="grid-cell machine-cell header-cell" style={{ fontWeight: 700 }}>Maschine</div>
+              {days.map(day => (
+                <div key={day} className="grid-cell header-cell">
+                  <div className="day-name">{getDayName(day)}</div>
+                  <div className="day-date">{formatDate(day)}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Content Rows */}
+            {machines.map(mName => {
+              return (
+                <div key={mName} className="grid-row content-row" style={{ gridTemplateColumns: `180px repeat(${days.length}, 1fr)` }}>
+                  <div className="grid-cell machine-cell" onClick={() => setSelectedMachine(mName)}>
+                    <div className="machine-title">{mName}</div>
+                    <div className="machine-click-hint">Filter anwenden</div>
+                  </div>
+                
+                  {days.map(day => {
+                    const dayReqs = groupedData[mName]?.[day] || [];
+                    
+                    // Deduplicate tools for display inside cell
+                    const dayToolsMap = new Map();
+                    dayReqs.forEach(r => {
+                      const key = r.tool.nr;
+                      if (!dayToolsMap.has(key)) {
+                        dayToolsMap.set(key, r.tool);
+                      }
+                    });
+                    const uniqueDayTools = Array.from(dayToolsMap.values());
+
+                    return (
+                      <div 
+                        key={day} 
+                        className="grid-cell cell-content" 
+                        onClick={() => setSelectedMachine(mName)} 
+                        style={{ 
+                          display: 'flex', 
+                          flexDirection: 'column', 
+                          gap: '0.35rem', 
+                          justifyContent: 'flex-start', 
+                          paddingTop: '0.65rem' 
+                        }}
+                      >
+                        {/* Cell Day Header */}
+                        <div style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 700, borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '0.2rem', marginBottom: '0.2rem', display: 'flex', justifyContent: 'space-between', width: '100%', textTransform: 'uppercase', letterSpacing: '0.02em', pointerEvents: 'none', userSelect: 'none' }}>
+                          <span style={{ color: '#38bdf8' }}>{getDayName(day)}</span>
+                          <span>{formatDate(day)}</span>
+                        </div>
+                        
+                        {uniqueDayTools.length === 0 ? (
+                          <div className="grid-empty" style={{ color: '#10b981', background: 'rgba(16, 185, 129, 0.02)', border: '1px dashed rgba(16, 185, 129, 0.1)' }}>✓ 0 Wz.</div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', width: '100%' }}>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#fbbf24' }}>
+                              {uniqueDayTools.length} {uniqueDayTools.length === 1 ? 'Wz.' : 'Wz.'}:
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.2rem' }}>
+                              {uniqueDayTools.map(t => (
+                                <span 
+                                  key={t.nr} 
+                                  title={t.desc}
+                                  style={{ 
+                                    background: 'rgba(245, 158, 11, 0.15)', 
+                                    color: '#fbbf24', 
+                                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                                    borderRadius: '4px',
+                                    padding: '0.08rem 0.25rem',
+                                    fontSize: '0.62rem',
+                                    fontWeight: 700
+                                  }}
+                                >
+                                  T{t.nr}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 7. Planning Tab (Kanban Board for next 5 working days)
 function PlanningTab({ mode = 'machining' }) {
+  const isDocker = import.meta.env.VITE_API_BASE === '/api' || window.location.port === '2005';
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -5366,8 +6490,12 @@ function PlanningTab({ mode = 'machining' }) {
   const [expandedCards, setExpandedCards] = useState({});
   const [fullRoutingSteps, setFullRoutingSteps] = useState([]);
   const [loadingRouting, setLoadingRouting] = useState(false);
+  const [modalBookings, setModalBookings] = useState([]);
+  const [loadingBookings, setLoadingBookings] = useState(false);
+  const [hoveredStepId, setHoveredStepId] = useState(null);
   const [weeklyToolsModal, setWeeklyToolsModal] = useState(null);
   const [kanbanFullscreen, setKanbanFullscreen] = useState(false);
+  const [controlsCollapsed, setControlsCollapsed] = useState(false);
 
   // d.velop DMS Drawing Slider States
   const [dmsSliderOpen, setDmsSliderOpen] = useState(false);
@@ -5496,6 +6624,7 @@ function PlanningTab({ mode = 'machining' }) {
   useEffect(() => {
     if (!activeModalStep) {
       setFullRoutingSteps([]);
+      setModalBookings([]);
       return;
     }
 
@@ -5527,7 +6656,26 @@ function PlanningTab({ mode = 'machining' }) {
       }
     };
 
+    const loadStepBookings = async () => {
+      setLoadingBookings(true);
+      try {
+        const res = await fetch(`${API_BASE}/planning/step-bookings?stepId=${activeModalStep.stepId}`);
+        if (res.ok) {
+          const json = await res.json();
+          setModalBookings(json);
+        } else {
+          setModalBookings([]);
+        }
+      } catch (err) {
+        console.error('Error fetching step bookings:', err);
+        setModalBookings([]);
+      } finally {
+        setLoadingBookings(false);
+      }
+    };
+
     loadFullRouting();
+    loadStepBookings();
   }, [activeModalStep]);
 
   const fetchPlanningData = async () => {
@@ -5889,46 +7037,86 @@ function PlanningTab({ mode = 'machining' }) {
 
   return (
     <div className="planning-tab">
-      {/* Controls Header */}
-      <div className="planning-controls card">
-        <div className="controls-row">
-          <div className="control-group">
-            <label>Planungs-Startdatum & Zeitraum:</label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <input
-                type="date"
-                value={startDate}
-                onChange={handleDateChange}
-                style={{
-                  background: 'rgba(13, 20, 35, 0.4)',
-                  border: '1px solid var(--border-dim)',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '0.85rem',
-                  padding: '0.4rem 0.75rem',
-                  outline: 'none'
-                }}
-              />
-              <select
-                value={daysCount}
-                onChange={(e) => setDaysCount(parseInt(e.target.value, 10))}
-                style={{
-                  background: 'rgba(13, 20, 35, 0.4)',
-                  border: '1px solid var(--border-dim)',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '0.85rem',
-                  padding: '0.4rem 0.75rem',
-                  outline: 'none',
-                  cursor: 'pointer'
-                }}
-              >
-                <option value={3}>3 Arbeitstage</option>
-                <option value={5}>5 Arbeitstage</option>
-                <option value={7}>7 Arbeitstage</option>
-                <option value={10}>10 Arbeitstage</option>
-                <option value={14}>14 Arbeitstage</option>
-              </select>
+      <div className="planning-controls card" style={{ padding: controlsCollapsed ? '0.5rem 1rem' : '1.25rem', transition: 'all 0.2s', display: 'flex', flexDirection: 'column', gap: controlsCollapsed ? 0 : '1rem' }}>
+        <div 
+          onClick={() => setControlsCollapsed(prev => !prev)}
+          style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center', 
+            cursor: 'pointer',
+            userSelect: 'none'
+          }}
+        >
+          <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Sliders size={15} style={{ color: 'var(--primary)' }} />
+            <span>Planungs- & Optimierungs-Einstellungen</span>
+            {controlsCollapsed && (
+              <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 500, marginLeft: '0.5rem' }}>
+                (Eingeklappt • Start: {formatDate(startDate)} • {daysCount} Tage)
+              </span>
+            )}
+          </h3>
+          <button
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#94a3b8',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '0.2rem',
+              borderRadius: '4px',
+              transition: 'all 0.2s'
+            }}
+          >
+            {controlsCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+          </button>
+        </div>
+
+        {!controlsCollapsed && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', borderTop: '1px solid var(--border-dim)', paddingTop: '0.85rem' }}>
+            <div className="controls-row">
+              <div className="control-group">
+                <label>Planungs-Startdatum & Zeitraum:</label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={handleDateChange}
+                    style={{
+                      background: 'rgba(13, 20, 35, 0.4)',
+                      border: '1px solid var(--border-dim)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.85rem',
+                      padding: '0.4rem 0.75rem',
+                      outline: 'none'
+                    }}
+                  />
+                  <select
+                    value={daysCount}
+                    onChange={(e) => setDaysCount(parseInt(e.target.value, 10))}
+                    style={{
+                      background: 'rgba(13, 20, 35, 0.4)',
+                      border: '1px solid var(--border-dim)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.85rem',
+                      padding: '0.4rem 0.75rem',
+                      outline: 'none',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value={3}>3 Arbeitstage</option>
+                    <option value={5}>5 Arbeitstage</option>
+                    <option value={7}>7 Arbeitstage</option>
+                    <option value={10}>10 Arbeitstage</option>
+                    <option value={14}>14 Arbeitstage</option>
+                  </select>
+                </div>
+              </div>
               <button onClick={handleApplyDate} className="btn btn-primary btn-sm">
                 Planung laden
               </button>
@@ -5949,202 +7137,207 @@ function PlanningTab({ mode = 'machining' }) {
                 <span>Cache leeren & neu laden</span>
               </button>
 
-              <div 
-                style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '0.5rem', 
-                  background: 'rgba(255,255,255,0.02)', 
-                  border: '1px solid var(--border-dim)', 
-                  padding: '0.35rem 0.75rem', 
-                  borderRadius: '8px', 
-                  cursor: 'pointer',
-                  userSelect: 'none'
-                }} 
-                onClick={handleToggleDbMode}
-                title="Klicken, um zwischen Entwicklungs- und Live-Datenbank umzuschalten"
-              >
-                <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Datenquelle:</span>
-                <span style={{ 
-                  background: dbMode === 'live' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', 
-                  border: dbMode === 'live' ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)', 
-                  color: dbMode === 'live' ? '#34d399' : '#f87171', 
-                  fontSize: '0.72rem', 
-                  padding: '0.15rem 0.5rem', 
-                  borderRadius: '6px', 
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.3rem'
-                }}>
-                  {dbMode === 'live' ? '🟢 LIVE-DB' : '🔴 DEV-DB'}
-                </span>
-              </div>
+              {!isDocker && (
+                <div 
+                  style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '0.5rem', 
+                    background: 'rgba(255,255,255,0.02)', 
+                    border: '1px solid var(--border-dim)', 
+                    padding: '0.35rem 0.75rem', 
+                    borderRadius: '8px', 
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    height: '36px',
+                    boxSizing: 'border-box'
+                  }} 
+                  onClick={handleToggleDbMode}
+                  title="Klicken, um zwischen Entwicklungs- und Live-Datenbank umzuschalten"
+                >
+                  <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Datenquelle:</span>
+                  <span style={{ 
+                    background: dbMode === 'live' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', 
+                    border: dbMode === 'live' ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)', 
+                    color: dbMode === 'live' ? '#34d399' : '#f87171', 
+                    fontSize: '0.72rem', 
+                    padding: '0.15rem 0.5rem', 
+                    borderRadius: '6px', 
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem'
+                  }}>
+                    {dbMode === 'live' ? '🟢 LIVE-DB' : '🔴 DEV-DB'}
+                  </span>
+                </div>
+              )}
             </div>
-          </div>
 
-          {mode !== 'deburring' && (
-            <div className="control-group" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-              <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                  <input
-                    type="checkbox"
-                    checked={optimize}
-                    onChange={(e) => setOptimize(e.target.checked)}
-                    style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
-                  />
-                  <span>Rüstoptimierung aktiv</span>
-                </label>
-
-                {selectedMachine !== 'Chiron' && selectedMachine !== 'C400' && selectedMachine !== 'Brother' && (
+            {mode !== 'deburring' && mode !== 'tools' && (
+              <div className="control-group" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
                     <input
                       type="checkbox"
-                      checked={optimizeNightRun}
-                      onChange={(e) => setOptimizeNightRun(e.target.checked)}
-                      style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
-                    />
-                    <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Moon size={14} /> Nachtlauf-Optimierung</span>
-                  </label>
-                )}
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }} title="Erlaubt es dem Algorithmus, Aufträge der Folgewochen (bis zu 14 Tage) vorzuziehen, falls dadurch Werkzeugwechsel eingespart werden können und freie Kapazitäten vorhanden sind.">
-                  <input
-                    type="checkbox"
-                    checked={allowLookahead}
-                    onChange={(e) => setAllowLookahead(e.target.checked)}
-                    style={{ width: '16px', height: '16px', accentColor: '#f43f5e' }}
-                  />
-                  <span style={{ color: '#fda4af', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🔮 Zukünftige Aufträge vorziehen</span>
-                </label>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                  <input
-                    type="checkbox"
-                    checked={hideExecuting}
-                    onChange={(e) => setHideExecuting(e.target.checked)}
-                    style={{ width: '16px', height: '16px', accentColor: '#10b981' }}
-                  />
-                  <span style={{ color: '#a7f3d0' }}>⚡ Laufende verblassen</span>
-                </label>
-
-                {['RS2_1', 'RS2_2', 'C40', 'C42'].includes(selectedMachine) && (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                    <input
-                      type="checkbox"
-                      checked={poolOptimization}
-                      onChange={(e) => setPoolOptimization(e.target.checked)}
+                      checked={optimize}
+                      onChange={(e) => setOptimize(e.target.checked)}
                       style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
                     />
-                    <span style={{ color: '#93c5fd' }}>🔄 Pool Optimierung</span>
+                    <span>Rüstoptimierung aktiv</span>
                   </label>
-                )}
 
-                {(selectedMachine === 'Chiron' || selectedMachine === 'Brother') && (
+                  {selectedMachine !== 'Chiron' && selectedMachine !== 'C400' && selectedMachine !== 'Brother' && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={optimizeNightRun}
+                        onChange={(e) => setOptimizeNightRun(e.target.checked)}
+                        style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                      />
+                      <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Moon size={14} /> Nachtlauf-Optimierung</span>
+                    </label>
+                  )}
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }} title="Erlaubt es dem Algorithmus, Aufträge der Folgewochen (bis zu 14 Tage) vorzuziehen, falls dadurch Werkzeugwechsel eingespart werden können und freie Kapazitäten vorhanden sind.">
+                    <input
+                      type="checkbox"
+                      checked={allowLookahead}
+                      onChange={(e) => setAllowLookahead(e.target.checked)}
+                      style={{ width: '16px', height: '16px', accentColor: '#f43f5e' }}
+                    />
+                    <span style={{ color: '#fda4af', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🔮 Zukünftige Aufträge vorziehen</span>
+                  </label>
+
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
                     <input
                       type="checkbox"
-                      checked={highlightRobotFlow}
-                      onChange={(e) => setHighlightRobotFlow(e.target.checked)}
-                      style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                      checked={hideExecuting}
+                      onChange={(e) => setHideExecuting(e.target.checked)}
+                      style={{ width: '16px', height: '16px', accentColor: '#10b981' }}
                     />
-                    <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                      🤖 Roboter-Folgeschritte
-                    </span>
+                    <span style={{ color: '#a7f3d0' }}>⚡ Laufende verblassen</span>
                   </label>
+
+                  {['RS2_1', 'RS2_2', 'C40', 'C42'].includes(selectedMachine) && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={poolOptimization}
+                        onChange={(e) => setPoolOptimization(e.target.checked)}
+                        style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
+                      />
+                      <span style={{ color: '#93c5fd' }}>🔄 Pool Optimierung</span>
+                    </label>
+                  )}
+
+                  {(selectedMachine === 'Chiron' || selectedMachine === 'Brother') && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={highlightRobotFlow}
+                        onChange={(e) => setHighlightRobotFlow(e.target.checked)}
+                        style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                      />
+                      <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        🤖 Roboter-Folgeschritte
+                      </span>
+                    </label>
+                  )}
+                </div>
+
+                {optimize && optimizeFixture && (
+                  <div style={{
+                    margin: '0.25rem 0',
+                    background: 'rgba(255, 255, 255, 0.02)',
+                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                    borderRadius: '8px',
+                    padding: '0.35rem 0.6rem',
+                    maxWidth: '550px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.6rem',
+                    flexWrap: 'wrap'
+                  }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '0.25rem' }} title="Steuert das Verhältnis zwischen Werkzeugwechselminimierung (Wzg.) und Vorrichtungswechselminimierung (Vorr.)">
+                      ⚖️ Gewichtung:
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexGrow: 1, minWidth: '150px' }}>
+                      <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>Werkzeug</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={tempFixtureWeight}
+                        onChange={(e) => setTempFixtureWeight(parseInt(e.target.value))}
+                        onMouseUp={() => setFixtureWeight(tempFixtureWeight)}
+                        onTouchEnd={() => setFixtureWeight(tempFixtureWeight)}
+                        className="custom-range"
+                        title={
+                          tempFixtureWeight === 50 ? "Ausgeglichene Gewichtung (Standard)." :
+                          tempFixtureWeight < 50 ? `${100 - tempFixtureWeight}% Werkzeug / ${tempFixtureWeight}% Vorrichtung (${tempFixtureWeight === 0 ? 'Ignoriert Vorrichtungswechsel' : 'Werkzeugfokus'})` :
+                          `${100 - tempFixtureWeight}% Werkzeug / ${tempFixtureWeight}% Vorrichtung (Vorrichtungsfokus)`
+                        }
+                        style={{
+                          flexGrow: 1,
+                          background: `linear-gradient(to right, #3b82f6 0%, #a855f7 ${tempFixtureWeight}%, rgba(255,255,255,0.08) ${tempFixtureWeight}%, rgba(255,255,255,0.08) 100%)`,
+                          height: '5px'
+                        }}
+                      />
+                      <span style={{ fontSize: '0.65rem', color: '#c084fc' }}>Vorrichtung</span>
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 700, minWidth: '115px', textAlign: 'right' }}>
+                      {100 - tempFixtureWeight}% Wzg / {tempFixtureWeight}% Vorr
+                    </span>
+                  </div>
+                )}
+
+                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                  Sortiert nach Werkzeugüberschneidung. Die Nachtlauf-Optimierung erkennt historische Nachtlauf-Kompatibilität und priorisiert diese entsprechend.
+                </span>
+
+                {optimize && !isDocker && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.35rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.75rem', borderRadius: '10px', width: 'fit-content', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Algorithmus:</span>
+                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                      <button
+                        onClick={() => setAlgo('greedy')}
+                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'greedy' ? '#3b82f6' : 'rgba(255,255,255,0.03)', border: algo === 'greedy' ? '1px solid #3b82f6' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                      >
+                        Greedy (NN)
+                      </button>
+                      <button
+                        onClick={() => setAlgo('hybrid')}
+                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'hybrid' ? '#ec4899' : 'rgba(255,255,255,0.03)', border: algo === 'hybrid' ? '1px solid #ec4899' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                      >
+                        Hybrid (Greedy+GA+RL)
+                      </button>
+                      <button
+                        onClick={() => setAlgo('ga')}
+                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'ga' ? '#10b981' : 'rgba(255,255,255,0.03)', border: algo === 'ga' ? '1px solid #10b981' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                      >
+                        Genetisch (GA)
+                      </button>
+                      <button
+                        onClick={() => setAlgo('rl')}
+                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'rl' ? '#06b6d4' : 'rgba(255,255,255,0.03)', border: algo === 'rl' ? '1px solid #06b6d4' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                      >
+                        Lernen (RL)
+                      </button>
+                      <button
+                        onClick={() => setAlgo('mip')}
+                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'mip' ? '#a855f7' : 'rgba(255,255,255,0.03)', border: algo === 'mip' ? '1px solid #a855f7' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                      >
+                        Exakt (MIP)
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
-
-              {optimize && optimizeFixture && (
-                <div style={{
-                  margin: '0.25rem 0',
-                  background: 'rgba(255, 255, 255, 0.02)',
-                  border: '1px solid rgba(255, 255, 255, 0.06)',
-                  borderRadius: '8px',
-                  padding: '0.35rem 0.6rem',
-                  maxWidth: '550px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.6rem',
-                  flexWrap: 'wrap'
-                }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '0.25rem' }} title="Steuert das Verhältnis zwischen Werkzeugwechselminimierung (Wzg.) und Vorrichtungswechselminimierung (Vorr.)">
-                    ⚖️ Gewichtung:
-                  </span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexGrow: 1, minWidth: '150px' }}>
-                    <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>Werkzeug</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={tempFixtureWeight}
-                      onChange={(e) => setTempFixtureWeight(parseInt(e.target.value))}
-                      onMouseUp={() => setFixtureWeight(tempFixtureWeight)}
-                      onTouchEnd={() => setFixtureWeight(tempFixtureWeight)}
-                      className="custom-range"
-                      title={
-                        tempFixtureWeight === 50 ? "Ausgeglichene Gewichtung (Standard)." :
-                        tempFixtureWeight < 50 ? `${100 - tempFixtureWeight}% Werkzeug / ${tempFixtureWeight}% Vorrichtung (${tempFixtureWeight === 0 ? 'Ignoriert Vorrichtungswechsel' : 'Werkzeugfokus'})` :
-                        `${100 - tempFixtureWeight}% Werkzeug / ${tempFixtureWeight}% Vorrichtung (Vorrichtungsfokus)`
-                      }
-                      style={{
-                        flexGrow: 1,
-                        background: `linear-gradient(to right, #3b82f6 0%, #a855f7 ${tempFixtureWeight}%, rgba(255,255,255,0.08) ${tempFixtureWeight}%, rgba(255,255,255,0.08) 100%)`,
-                        height: '5px'
-                      }}
-                    />
-                    <span style={{ fontSize: '0.65rem', color: '#c084fc' }}>Vorrichtung</span>
-                  </div>
-                  <span style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 700, minWidth: '115px', textAlign: 'right' }}>
-                    {100 - tempFixtureWeight}% Wzg / {tempFixtureWeight}% Vorr
-                  </span>
-                </div>
-              )}
-
-              <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                Sortiert nach Werkzeugüberschneidung. Die Nachtlauf-Optimierung erkennt historische Nachtlauf-Kompatibilität und priorisiert diese entsprechend.
-              </span>
-
-              {optimize && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.35rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.75rem', borderRadius: '10px', width: 'fit-content', border: '1px solid rgba(255,255,255,0.05)' }}>
-                  <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Algorithmus:</span>
-                  <div style={{ display: 'flex', gap: '0.35rem' }}>
-                    <button
-                      onClick={() => setAlgo('greedy')}
-                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'greedy' ? '#3b82f6' : 'rgba(255,255,255,0.03)', border: algo === 'greedy' ? '1px solid #3b82f6' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                    >
-                      Greedy (NN)
-                    </button>
-                    <button
-                      onClick={() => setAlgo('hybrid')}
-                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'hybrid' ? '#ec4899' : 'rgba(255,255,255,0.03)', border: algo === 'hybrid' ? '1px solid #ec4899' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                    >
-                      Hybrid (Greedy+GA+RL)
-                    </button>
-                    <button
-                      onClick={() => setAlgo('ga')}
-                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'ga' ? '#10b981' : 'rgba(255,255,255,0.03)', border: algo === 'ga' ? '1px solid #10b981' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                    >
-                      Genetisch (GA)
-                    </button>
-                    <button
-                      onClick={() => setAlgo('rl')}
-                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'rl' ? '#06b6d4' : 'rgba(255,255,255,0.03)', border: algo === 'rl' ? '1px solid #06b6d4' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                    >
-                      Lernen (RL)
-                    </button>
-                    <button
-                      onClick={() => setAlgo('mip')}
-                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'mip' ? '#a855f7' : 'rgba(255,255,255,0.03)', border: algo === 'mip' ? '1px solid #a855f7' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                    >
-                      Exakt (MIP)
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
+      </div>
 
         {/* Machine Tabs */}
         <div className="machine-pills">
@@ -6164,7 +7357,7 @@ function PlanningTab({ mode = 'machining' }) {
             </button>
           ))}
         </div>
-      </div>
+      
 
       {/* Optimization Savings Banner */}
       {(() => {
@@ -6183,7 +7376,7 @@ function PlanningTab({ mode = 'machining' }) {
         const scopeLabel = selectedMachine === 'All' ? 'alle Maschinen' : `Maschine ${selectedMachine}`;
 
         return (
-          <div style={{
+          <div className="savings-card" style={{
             background: 'radial-gradient(100% 100% at 0% 0%, rgba(16, 185, 129, 0.06) 0%, rgba(8, 12, 20, 0.4) 100%)',
             border: '1px solid rgba(16, 185, 129, 0.2)',
             borderRadius: '10px',
@@ -6454,7 +7647,23 @@ function PlanningTab({ mode = 'machining' }) {
           </div>
         )}
 
-        {selectedMachine !== 'All' ? (
+        {mode === 'tools' ? (
+          <ToolsPlanningView 
+            board={board} 
+            selectedMachine={selectedMachine} 
+            days={days} 
+            machines={machines} 
+            getDayName={getDayName} 
+            formatDate={formatDate}
+            setActiveModalStep={setActiveModalStep}
+            setIsExplanationCollapsed={setIsExplanationCollapsed}
+            highlightRobotFlow={highlightRobotFlow}
+            isFollowedByRobot={isFollowedByRobot}
+            hideExecuting={hideExecuting}
+            formatMinutes={formatMinutes}
+            capacities={capacities}
+          />
+        ) : selectedMachine !== 'All' ? (
           // Detailed Single Machine Kanban Board (5 columns)
           <div className="kanban-board">
           {days.map(day => {
@@ -6521,17 +7730,21 @@ function PlanningTab({ mode = 'machining' }) {
                     <div className="empty-column-state">Keine Aufträge geplant</div>
                   ) : (
                     daySteps.map((step, idx) => {
+                      const isHoveredGroup = hoveredStepId !== null && step.stepId === hoveredStepId;
+                      const isUnhoveredGroup = hoveredStepId !== null && step.stepId !== hoveredStepId;
                       const isNonRobot = highlightRobotFlow && (selectedMachine === 'Chiron' || selectedMachine === 'Brother') && !isFollowedByRobot(step);
                       const isBlurryExecuting = hideExecuting && step.isExecuting;
                       return (
                         <div 
                           key={step.isPoolRecommendationCopy ? `${step.stepId}-recommendation-${idx}` : `${step.stepId}-${idx}`} 
-                          className={`kanban-card ${step.isExecuting ? 'executing' : ''}`} 
+                          className={`kanban-card ${step.isExecuting ? 'executing' : ''} ${isHoveredGroup ? 'highlighted-split' : ''} ${isUnhoveredGroup ? 'dimmed-split' : ''}`} 
                           onClick={() => { setActiveModalStep(step); setIsExplanationCollapsed(true); }}
+                          onMouseEnter={() => setHoveredStepId(step.stepId)}
+                          onMouseLeave={() => setHoveredStepId(null)}
                           style={{
                             cursor: 'pointer',
                             padding: '0.65rem',
-                            transition: 'opacity 0.25s, filter 0.25s, border-color 0.25s',
+                            transition: 'opacity 0.25s, filter 0.25s, border-color 0.25s, box-shadow 0.25s',
                             opacity: isBlurryExecuting ? 0.6 : (isNonRobot ? 0.6 : 1),
                             filter: isBlurryExecuting ? 'blur(1px) grayscale(20%)' : (isNonRobot ? 'blur(0.8px) grayscale(15%)' : 'none'),
                             border: step.isPoolRecommendationCopy 
@@ -6564,55 +7777,61 @@ function PlanningTab({ mode = 'machining' }) {
                             </div>
                           )}
                           {/* Header Row */}
-                          <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.25rem', marginBottom: '0.25rem' }}>
-                            <span className="card-order-id" style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.25rem', flex: 1, minWidth: 0 }}>
+                          <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.15rem' }}>
+                            <span className="card-order-id" style={{ fontSize: '0.78rem', fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '0.25rem', minWidth: 0, flex: 1 }}>
                               <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{step.contractNumber || 'Auftrag'}</span>
-                              {step.deliveryDate && (
-                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                                  (Lief: {formatDate(step.deliveryDate)})
-                                </span>
-                              )}
                               <span 
                                 title={getStepPlacementExplanation(step, idx > 0 ? daySteps[idx - 1] : null)}
                                 style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
                                 onClick={(e) => e.stopPropagation()}
                               >
-                                <Info size={12} style={{ color: '#64748b' }} />
+                                <Info size={11} style={{ color: '#64748b' }} />
                               </span>
                             </span>
-                            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                              {highlightRobotFlow && !isNonRobot && (
-                                <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.58rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 700 }}>
-                                  🤖 ROBOTER-FLOW
+                            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexShrink: 0 }}>
+                              {step.isExecuting && (
+                                <span className="badge badge-aktiv" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.58rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                  ⚡ AKTIV
                                 </span>
                               )}
-                            {step.isExecuting && (
-                              <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 700 }}>
-                                ⚡ AKTIV
-                              </span>
-                            )}
-                            {step.isSplit && (
-                              <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px' }}>
-                                ✂ T{step.splitPart}
-                              </span>
-                            )}
-                            {step.isConflict && (
-                              <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px' }}>
-                                ⚠ {formatDate(step.originalStartDate)}
-                              </span>
-                            )}
-                            {step.isLookahead && (
-                              <span className="badge" style={{ background: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fda4af', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px', fontWeight: 600, whiteSpace: 'nowrap' }} title={`Vorgezogen aus der eigentlichen Woche: ${formatDate(step.originalStartDate)}`}>
-                                🔮 Vorgezogen
-                              </span>
-                            )}
-                            {step.isNightRunCapable && (
-                              <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', color: '#d8b4fe', fontSize: '0.6rem', padding: '0.05rem 0.25rem', borderRadius: '3px', whiteSpace: 'nowrap' }}>
-                                🌙 Nacht
-                              </span>
-                            )}
+                              {step.deliveryDate && (
+                                <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                  Lief: {formatDate(step.deliveryDate)}
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        </div>
+
+                          {/* Secondary Badges Row */}
+                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || (highlightRobotFlow && !isNonRobot)) && (
+                            <div style={{ display: 'flex', gap: '0.2rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.1rem', marginBottom: '0.15rem' }}>
+                              {highlightRobotFlow && !isNonRobot && (
+                                <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700 }}>
+                                  🤖 FLOW
+                                </span>
+                              )}
+                              {step.isSplit && (
+                                <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px' }}>
+                                  ✂ T{step.splitPart}
+                                </span>
+                              )}
+                              {step.isConflict && (
+                                <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px' }}>
+                                  ⚠ {formatDate(step.originalStartDate)}
+                                </span>
+                              )}
+                              {step.isLookahead && (
+                                <span className="badge" style={{ background: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fda4af', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 600, whiteSpace: 'nowrap' }} title={`Vorgezogen aus der eigentlichen Woche: ${formatDate(step.originalStartDate)}`}>
+                                  🔮 Vorgezogen
+                                </span>
+                              )}
+                              {step.isNightRunCapable && (
+                                <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', color: '#d8b4fe', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', whiteSpace: 'nowrap' }}>
+                                  🌙 Nacht
+                                </span>
+                              )}
+                            </div>
+                          )}
 
                         {/* Order Description */}
                         <div className="card-desc" title={step.orderDesc} style={{ fontSize: '0.75rem', fontWeight: 500, color: '#e2e8f0', margin: '0.25rem 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -6622,9 +7841,28 @@ function PlanningTab({ mode = 'machining' }) {
                         {/* Collapsed Compact Summary Row */}
                         {!expandedCards[step.stepId] ? (
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.35rem', fontSize: '0.68rem', color: '#64748b' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                              <span>⏱ {step.setupTime}m / {step.prodTime}m</span>
-                              <span style={{ color: 'var(--border-dim)' }}>|</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexGrow: 1, overflow: 'hidden' }}>
+                              {step.isExecuting ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexGrow: 1, minWidth: '90px' }} title={`Ist: ${Math.round(step.bookedTime)}m / Soll: ${Math.round((step.originalSetupTime || 0) + (step.originalProdTime || 0))}m (Rest: ${Math.round(step.prodTime)}m)`}>
+                                  <span style={{ fontSize: '0.62rem', color: '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                    {Math.round((step.bookedTime / Math.max(1, (step.originalSetupTime || 0) + (step.originalProdTime || 0))) * 100)}%
+                                  </span>
+                                  <div style={{ height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', flexGrow: 1, overflow: 'hidden', minWidth: '30px' }}>
+                                    <div style={{ 
+                                      width: `${Math.min(100, (step.bookedTime / Math.max(1, (step.originalSetupTime || 0) + (step.originalProdTime || 0))) * 100)}%`, 
+                                      height: '100%', 
+                                      background: '#10b981', 
+                                      borderRadius: '2px' 
+                                    }} />
+                                  </div>
+                                  <span style={{ fontSize: '0.62rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                                    Rest: {Math.round(step.prodTime)}m
+                                  </span>
+                                </div>
+                              ) : (
+                                <span>⏱ {Math.round(step.setupTime)}m / {Math.round(step.prodTime)}m</span>
+                              )}
+                              <span style={{ color: 'var(--border-dim)', flexShrink: 0 }}>|</span>
                               {!step.ncProgram ? (
                                 <span style={{ color: '#ef4444', fontWeight: 600 }}>NC fehlt</span>
                               ) : !step.matchedListNr ? (
@@ -6702,8 +7940,8 @@ function PlanningTab({ mode = 'machining' }) {
                               {step.ncProgram && <div><strong>NC-Prog:</strong> <code style={{ color: '#38bdf8' }}>{step.ncProgram}</code></div>}
                               {step.matchedListIdent && <div><strong>WinTool:</strong> {step.matchedListIdent}</div>}
                               <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.1rem' }}>
-                                <span className="card-badge" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.05rem 0.25rem', borderRadius: '3px', fontSize: '0.65rem' }}>Rüstzeit: {step.setupTime}m</span>
-                                <span className="card-badge" style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#34d399', padding: '0.05rem 0.25rem', borderRadius: '3px', fontSize: '0.65rem' }}>Prodzeit: {step.prodTime}m</span>
+                                <span className="card-badge" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.05rem 0.25rem', borderRadius: '3px', fontSize: '0.65rem' }}>Rüstzeit: {Math.round(step.setupTime)}m</span>
+                                <span className="card-badge" style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#34d399', padding: '0.05rem 0.25rem', borderRadius: '3px', fontSize: '0.65rem' }}>Prodzeit: {Math.round(step.prodTime)}m</span>
                               </div>
                             </div>
 
@@ -7111,36 +8349,132 @@ function PlanningTab({ mode = 'machining' }) {
                 <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>Schritt-ID: {activeModalStep.stepId}</div>
               </div>
 
-              {/* Row 4: Zeiten */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
-                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Rüstzeit</div>
-                  <div style={{ fontSize: '1.1rem', color: '#f59e0b', fontWeight: 700 }}>{activeModalStep.setupTime} Min</div>
-                </div>
-                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Produktion</div>
-                  <div style={{ fontSize: '1.1rem', color: '#10b981', fontWeight: 700 }}>{activeModalStep.prodTime} Min</div>
-                </div>
-                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Gesamt</div>
-                  <div style={{ fontSize: '1.1rem', color: '#38bdf8', fontWeight: 700 }}>{activeModalStep.setupTime + activeModalStep.prodTime} Min</div>
-                </div>
-              </div>
+              {/* Row 4: Soll vs Ist vs Rest Zeitvergleich */}
+              {(() => {
+                const originalSetup = activeModalStep.originalSetupTime || 0;
+                const originalProd = activeModalStep.originalProdTime || 0;
+                const originalTotal = originalSetup + originalProd;
+
+                const seenBookingIdsForSum = new Set();
+                let totalBookedSetup = 0;
+                let totalBookedProd = 0;
+                modalBookings.forEach(b => {
+                  const bookingId = b.ID;
+                  if (bookingId && !seenBookingIdsForSum.has(bookingId)) {
+                    seenBookingIdsForSum.add(bookingId);
+                    totalBookedSetup += b.ZBU_ZEIT_RUESTUNG_GESAMT || 0;
+                    totalBookedProd += (b.ZBU_ZEIT_PRODUKTION_AK || 0) + (b.ZBU_ZEIT_PRODUKTION_MS || 0);
+                  }
+                });
+                const totalBookedTotal = totalBookedSetup + totalBookedProd;
+
+                const remainingSetup = Math.round(activeModalStep.setupTime || 0);
+                const remainingProd = Math.round(activeModalStep.prodTime || 0);
+                const remainingTotal = remainingSetup + remainingProd;
+
+                const formatTime = (min) => {
+                  const roundedMin = Math.round(min);
+                  if (roundedMin === 0) return '0m';
+                  if (roundedMin >= 60) {
+                    const hours = Math.floor(roundedMin / 60);
+                    const mins = roundedMin % 60;
+                    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+                  }
+                  return `${roundedMin}m`;
+                };
+
+                const setupPct = originalSetup > 0 ? Math.min(100, (totalBookedSetup / originalSetup) * 100) : 0;
+                const prodPct = originalProd > 0 ? Math.min(100, (totalBookedProd / originalProd) * 100) : 0;
+                const totalPct = originalTotal > 0 ? Math.min(100, (totalBookedTotal / originalTotal) * 100) : 0;
+
+                return (
+                  <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-dim)', padding: '1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>Soll / Ist / Rest Zeitvergleich</span>
+                      <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Werte gerundet in Minuten & Stunden</span>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+                      {/* Rüsten */}
+                      <div style={{ background: 'rgba(249, 115, 22, 0.03)', border: '1px solid rgba(249, 115, 22, 0.15)', padding: '0.6rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.72rem', color: '#fdba74', fontWeight: 700 }}>🛠️ RÜSTEN</span>
+                          <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontFamily: 'monospace' }}>{Math.round(setupPct)}%</span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Soll:</span><span style={{ fontWeight: 600 }}>{formatTime(originalSetup)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: '#fdba74' }}>{formatTime(totalBookedSetup)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(249, 115, 22, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingSetup > 0 ? '#38bdf8' : '#64748b' }}>{formatTime(remainingSetup)}</span></div>
+                        </div>
+                        <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${setupPct}%`, height: '100%', background: '#f97316', borderRadius: '2px' }} />
+                        </div>
+                      </div>
+
+                      {/* Produktion */}
+                      <div style={{ background: 'rgba(59, 130, 246, 0.03)', border: '1px solid rgba(59, 130, 246, 0.15)', padding: '0.6rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.72rem', color: '#93c5fd', fontWeight: 700 }}>⚙️ PRODUKTION</span>
+                          <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontFamily: 'monospace' }}>{Math.round(prodPct)}%</span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Soll:</span><span style={{ fontWeight: 600 }}>{formatTime(originalProd)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: '#60a5fa' }}>{formatTime(totalBookedProd)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(59, 130, 246, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingProd > 0 ? '#38bdf8' : '#64748b' }}>{formatTime(remainingProd)}</span></div>
+                        </div>
+                        <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${prodPct}%`, height: '100%', background: '#3b82f6', borderRadius: '2px' }} />
+                        </div>
+                      </div>
+
+                      {/* Gesamt */}
+                      <div style={{ background: 'rgba(16, 185, 129, 0.03)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.72rem', color: '#6ee7b7', fontWeight: 700 }}>📊 GESAMT</span>
+                          <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontFamily: 'monospace' }}>{Math.round(totalPct)}%</span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Soll:</span><span style={{ fontWeight: 600 }}>{formatTime(originalTotal)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: '#10b981' }}>{formatTime(totalBookedTotal)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(16, 185, 129, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingTotal > 0 ? '#38bdf8' : '#64748b' }}>{formatTime(remainingTotal)}</span></div>
+                        </div>
+                        <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${totalPct}%`, height: '100%', background: '#10b981', borderRadius: '2px' }} />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Row 5: NC & WinTool */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>NC-Programm</div>
-                  <div style={{ fontSize: '0.9rem', color: activeModalStep.ncProgram ? '#fff' : '#ef4444', fontFamily: 'monospace', fontWeight: 600 }}>
-                    {activeModalStep.ncProgram || 'NC fehlt'}
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.1rem' }}>NC-Programm (Auftrag)</div>
+                    <div style={{ fontSize: '0.88rem', color: activeModalStep.ncProgram ? '#fff' : '#ef4444', fontFamily: 'monospace', fontWeight: 600 }}>
+                      {activeModalStep.ncProgram || 'NC fehlt'}
+                    </div>
                   </div>
                 </div>
-                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>WinTool-Liste</div>
-                  <div style={{ fontSize: '0.9rem', color: activeModalStep.matchedListNr ? '#fff' : '#f87171', fontWeight: 600 }}>
-                    {activeModalStep.matchedListNr ? activeModalStep.matchedListIdent : '💀 Keine Liste'}
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.1rem' }}>WinTool-Liste</div>
+                    {activeModalStep.matchedListNr ? (
+                      <div>
+                        <div style={{ fontSize: '0.88rem', color: '#fff', fontWeight: 600, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={activeModalStep.matchedListIdent}>
+                          {activeModalStep.matchedListIdent}
+                        </div>
+                        {activeModalStep.matchedListNcp && (
+                          <div style={{ fontSize: '0.82rem', color: '#cbd5e1', fontFamily: 'monospace', marginTop: '0.15rem' }}>
+                            ({activeModalStep.matchedListNcp})
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: '0.85rem', color: '#ef4444', fontWeight: 600 }}>💀 Keine Liste</span>
+                    )}
                   </div>
-                  {activeModalStep.matchedListNr && <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Liste: #{activeModalStep.matchedListNr}</div>}
                 </div>
               </div>
 
@@ -7279,6 +8613,116 @@ function PlanningTab({ mode = 'machining' }) {
                 ) : (
                   <div style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic', padding: '0.5rem', textAlign: 'center' }}>
                     Kein Arbeitsplan für diesen Auftrag hinterlegt.
+                  </div>
+                )}
+              </div>
+
+              {/* Abgeschlossene Laufzeit Section */}
+              <div style={{ borderTop: '1px dashed rgba(255,255,255,0.06)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+                <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <span>Abgeschlossene Laufzeit (Ist-Zeiterfassung)</span>
+                  <span style={{ fontSize: '0.7rem', background: 'rgba(255, 255, 255, 0.04)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#94a3b8' }}>
+                    {loadingBookings ? 'Lade...' : `${modalBookings.length} Einträge`}
+                  </span>
+                </div>
+                {loadingBookings ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span>Lade Ist-Zeiten...</span>
+                  </div>
+                ) : modalBookings.length > 0 ? (
+                  <div style={{ border: '1px solid var(--border-dim)', borderRadius: '10px', background: 'rgba(0,0,0,0.15)', overflow: 'hidden' }}>
+                    <div style={{ maxHeight: '180px', overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem', color: '#cbd5e1', textAlign: 'left' }}>
+                        <thead>
+                          <tr style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid var(--border-dim)', color: '#94a3b8', fontSize: '0.68rem', textTransform: 'uppercase' }}>
+                            <th style={{ padding: '0.4rem 0.6rem' }}>Mitarbeiter / Maschine</th>
+                            <th style={{ padding: '0.4rem 0.6rem' }}>Datum</th>
+                            <th style={{ padding: '0.4rem 0.6rem' }}>Uhrzeit</th>
+                            <th style={{ padding: '0.4rem 0.6rem' }}>Typ</th>
+                            <th style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>Dauer (Std. / Min.)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            // Sum up unique booking totals
+                            const seenBookingIds = new Set();
+                            let totalMinutes = 0;
+                            
+                            const rowsHtml = modalBookings.map((b, bIdx) => {
+                              let typeStr = 'Sonstige';
+                              if (b.ZBUBW_TYP_ZEIT === 0) {
+                                typeStr = '🛠️ Rüstzeit';
+                              } else if (b.ZBUBW_TYP_ZEIT === 1) {
+                                if (b.ZBUBW_TYP_PRODUKTION === 1) {
+                                  typeStr = '🤖 Maschine';
+                                } else {
+                                  typeStr = '👤 Manuell';
+                                }
+                              }
+
+                              const bookingId = b.ID;
+                              let showDurationText = '';
+                              if (bookingId && !seenBookingIds.has(bookingId)) {
+                                seenBookingIds.add(bookingId);
+                                const durationMin = b.ZBU_ZEIT_GESAMT || 0;
+                                totalMinutes += durationMin;
+                                
+                                if (durationMin >= 60) {
+                                  const hours = Math.floor(durationMin / 60);
+                                  const mins = Math.round(durationMin % 60);
+                                  showDurationText = `${hours}h ${mins}m`;
+                                } else {
+                                  showDurationText = `${Math.round(durationMin)}m`;
+                                }
+                              }
+
+                              return (
+                                <tr key={bIdx} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.03)', background: bIdx % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+                                  <td style={{ padding: '0.45rem 0.6rem', fontWeight: 600, color: '#f1f5f9' }}>{b.ZBU_MARB_MASTA || 'Unbekannt'}</td>
+                                  <td style={{ padding: '0.45rem 0.6rem' }}>{b.ZB_DATUM_START ? new Date(b.ZB_DATUM_START).toLocaleDateString('de-DE') : '-'}</td>
+                                  <td style={{ padding: '0.45rem 0.6rem', fontFamily: 'monospace', color: '#94a3b8' }}>
+                                    {b.ZBUBW_ZEIT_START || '-'} – {b.ZBUBW_ZEIT_STOP || 'laufend'}
+                                  </td>
+                                  <td style={{ padding: '0.45rem 0.6rem' }}>
+                                    <span style={{ 
+                                      fontSize: '0.62rem', 
+                                      padding: '0.08rem 0.3rem', 
+                                      borderRadius: '4px',
+                                      fontWeight: 600,
+                                      background: b.ZBUBW_TYP_ZEIT === 0 ? 'rgba(249, 115, 22, 0.12)' : b.ZBUBW_TYP_PRODUKTION === 1 ? 'rgba(16, 185, 129, 0.12)' : 'rgba(14, 165, 233, 0.12)',
+                                      border: b.ZBUBW_TYP_ZEIT === 0 ? '1px solid rgba(249, 115, 22, 0.25)' : b.ZBUBW_TYP_PRODUKTION === 1 ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(14, 165, 233, 0.25)',
+                                      color: b.ZBUBW_TYP_ZEIT === 0 ? '#fdba74' : b.ZBUBW_TYP_PRODUKTION === 1 ? '#34d399' : '#38bdf8'
+                                    }}>
+                                      {typeStr}
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: showDurationText ? '#fff' : '#475569' }}>
+                                    {showDurationText || '↳'}
+                                  </td>
+                                </tr>
+                              );
+                            });
+
+                            return (
+                              <>
+                                {rowsHtml}
+                                <tr style={{ background: 'rgba(255,255,255,0.03)', borderTop: '2px solid var(--border-dim)' }}>
+                                  <td colSpan={4} style={{ padding: '0.5rem 0.6rem', fontWeight: 700, color: '#94a3b8' }}>Summe erfasste Ist-Laufzeit (D4)</td>
+                                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'right', fontWeight: 800, fontFamily: 'monospace', color: '#10b981', fontSize: '0.85rem' }}>
+                                    {totalMinutes >= 60 ? `${Math.floor(totalMinutes / 60)}h ${Math.round(totalMinutes % 60)}m` : `${Math.round(totalMinutes)}m`}
+                                  </td>
+                                </tr>
+                              </>
+                            );
+                          })()}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic', padding: '0.5rem', textAlign: 'center' }}>
+                    Bisher keine Ist-Zeiterfassung für diesen Arbeitsschritt erfasst.
                   </div>
                 )}
               </div>

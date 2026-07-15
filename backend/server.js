@@ -83,6 +83,33 @@ async function fetchActiveStepsAndMaterials(poolD4) {
       p.PSP_BEZEICHNUNG as StepDesc,
       p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
       p.PSP_ZEIT_MINUTEN_PRODUKTION_GESAMT_SOLL as ProdTime,
+      (
+        SELECT ISNULL(SUM(
+          CASE
+            WHEN zbw.ZBUBW_DATUM_ZEIT_START IS NOT NULL AND zbw.ZBUBW_DATUM_ZEIT_START <> '1900-01-01' THEN
+              CASE 
+                WHEN zbw.ZBUBW_DATUM_ZEIT_STOP IS NOT NULL AND zbw.ZBUBW_DATUM_ZEIT_STOP <> '1900-01-01' THEN
+                  CASE
+                    WHEN zbw.ZBUBW_TYP_PRODUKTION = 1 THEN
+                      ROUND(CAST(DATEDIFF(second, zbw.ZBUBW_DATUM_ZEIT_START, zbw.ZBUBW_DATUM_ZEIT_STOP) AS FLOAT) / 60, 4)
+                    ELSE
+                      ROUND(CAST(DATEDIFF(minute, zbw.ZBUBW_DATUM_ZEIT_START, zbw.ZBUBW_DATUM_ZEIT_STOP) AS FLOAT), 4)
+                  END
+                ELSE
+                  CASE
+                    WHEN zbw.ZBUBW_TYP_PRODUKTION = 1 THEN
+                      ROUND(CAST(DATEDIFF(second, zbw.ZBUBW_DATUM_ZEIT_START, GETDATE()) AS FLOAT) / 60, 4)
+                    ELSE
+                      ROUND(CAST(DATEDIFF(minute, zbw.ZBUBW_DATUM_ZEIT_START, GETDATE()) AS FLOAT), 4)
+                  END
+              END
+            ELSE 0
+          END
+        ), 0)
+        FROM [D4].[dbo].[tZE_BUCH] zb
+        LEFT JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbw ON zbw.ZBUBW_IDZBU = zb.ID
+        WHERE zb.ZBU_IDPSKP = OuterTemp.ID
+      ) as BookedTime,
       p.PSP_IDMS as MachineId,
       (
         SELECT TOP 1 zb.ZBU_IDMS
@@ -433,7 +460,19 @@ async function cacheSetupData() {
         row.MachineId = row.BookedMachineId;
       }
       row.isNightRunCapable = nightSteps.has(row.ArticleId + '-' + row.StepPos);
-      row.prodTime = row.ProdTime || 0;
+      
+      row.originalSetupTime = row.SetupTime || 0;
+      row.originalProdTime = row.ProdTime || 0;
+      
+      // Calculate remaining production and setup time if work step already started
+      if (row.BookedTime && row.BookedTime > 0) {
+        const totalSoll = (row.SetupTime || 0) + (row.ProdTime || 0);
+        const remaining = Math.max(0, totalSoll - row.BookedTime);
+        row.SetupTime = 0; // Setup is already completed if we have booked time on this operation
+        row.prodTime = remaining;
+      } else {
+        row.prodTime = row.ProdTime || 0;
+      }
 
       if (!ordersMap[row.OrderId]) {
         ordersMap[row.OrderId] = [];
@@ -550,7 +589,7 @@ async function cacheSetupData() {
         desc.includes('prüf') || desc.includes('abnahme') || desc.includes('serienprüfung') || desc.includes('stempeln') ||
         desc.includes('entgrat');
 
-      const isMachining = step.SetupTime > 0 &&
+      const isMachining = (step.SetupTime > 0 || step.SPKO === 2) &&
         ((step.MachineId !== null && step.MachineId !== 0) || (step.MachinePoolId !== null && step.MachinePoolId !== 0));
 
       return isDeburringAssembly || isMachining;
@@ -632,6 +671,7 @@ async function cacheSetupData() {
             matchCache[cacheKey] = {
               Nr: matches[0].Nr,
               Ident: matches[0].Ident,
+              NCP: matches[0].NCP,
               matchType: matches[0].matchType,
               score: matches[0].score
             };
@@ -644,6 +684,7 @@ async function cacheSetupData() {
         if (match) {
           step.MatchedListNr = match.Nr;
           step.MatchedListIdent = match.Ident;
+          step.MatchedListNcp = match.NCP;
           step.MatchedType = match.matchType;
           step.MatchedScore = match.score;
         }
@@ -705,23 +746,29 @@ async function cacheSetupData() {
             }
             step.masterMatchedListNr = masterMatches[0].Nr;
             step.masterMatchedListIdent = masterMatches[0].Ident;
+            step.masterMatchedListNcp = masterMatches[0].NCP;
             step.masterMatchedType = masterMatches[0].matchType;
             step.masterMatchedScore = masterMatches[0].score;
           } else {
             step.masterMatchedListNr = null;
             step.masterMatchedListIdent = null;
+            step.masterMatchedListNcp = null;
             step.masterMatchedType = null;
             step.masterMatchedScore = null;
           }
         } else {
           step.masterNcProgram = null;
           step.masterMatchedListNr = null;
+          step.masterMatchedListIdent = null;
+          step.masterMatchedListNcp = null;
           step.masterMatchedType = null;
           step.masterMatchedScore = null;
         }
       } else {
         step.masterNcProgram = null;
         step.masterMatchedListNr = null;
+        step.masterMatchedListIdent = null;
+        step.masterMatchedListNcp = null;
         step.masterMatchedType = null;
         step.masterMatchedScore = null;
       }
@@ -1430,6 +1477,34 @@ app.get('/api/tool-lists/:nr', async (req, res) => {
     });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tools/:nr/parts', async (req, res) => {
+  try {
+    const { nr } = req.params;
+    const poolWT = await getPoolWT();
+    const partsReq = poolWT.request();
+    partsReq.input('toolNr', sql.Int, parseInt(nr, 10));
+    const partsResult = await partsReq.query(`
+      SELECT
+        tp.Pos as PartPos, tp.Nbr as PartQty,
+        p.Nr as PartNr, p.Descript as PartDesc, p.KeyWord as PartKeyWord
+      FROM [WTDATA].[dbo].[ToolParts] tp
+      INNER JOIN [WTDATA].[dbo].[Parts] p ON p.ID = tp.PartID
+      WHERE tp.ToolNr = @toolNr
+      ORDER BY tp.Pos
+    `);
+    res.json(partsResult.recordset.map(row => ({
+      partPos: row.PartPos,
+      partQty: row.PartQty,
+      partNr: row.PartNr ? row.PartNr.toString().trim() : '',
+      partDesc: row.PartDesc ? row.PartDesc.toString().trim() : '',
+      partKeyWord: row.PartKeyWord ? row.PartKeyWord.toString().trim() : ''
+    })));
+  } catch (err) {
+    console.error('Error fetching tool parts:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2529,6 +2604,248 @@ function extractLagerortFromDesc(desc) {
   }
   return null;
 }
+
+// 7a. Get step bookings detailed logs
+app.get('/api/planning/step-bookings', async (req, res) => {
+  try {
+    const { stepId } = req.query;
+    if (!stepId) {
+      return res.status(400).json({ error: 'Missing stepId' });
+    }
+    const poolD4 = await getPoolD4();
+    const result = await poolD4.request()
+      .input('stepId', sql.Int, parseInt(stepId, 10))
+      .query(`
+        SELECT CONVERT(datetime, CONVERT(varchar, ZBUBW_DATUM_ZEIT_START, 104), 104) AS ZB_DATUM_START,
+               tADRS.AD_NAME1 + CASE
+                                    WHEN ISNULL(MS_BEZEICHNUNG, '') <> '' THEN
+                                        ' / ' + ISNULL(MS_BEZEICHNUNG, '')
+                                    ELSE
+                                        ''
+                                END AS ZBU_MARB_MASTA,
+               CONVERT(VARCHAR(8), ZBUBW_DATUM_ZEIT_START, 108) AS ZBUBW_ZEIT_START,
+               CONVERT(VARCHAR(8), ZBUBW_DATUM_ZEIT_STOP, 108) AS ZBUBW_ZEIT_STOP,
+               ZBUBW_TYP_ZEIT,
+               ZBUBW_TYP_PRODUKTION,
+               ZBU_ZEIT_RUESTUNG_GESAMT,
+               ZBU_ZEIT_PRODUKTION_AK,
+               ZBU_ZEIT_PRODUKTION_MS,
+               ISNULL(ZBU_ZEIT_RUESTUNG_GESAMT, 0) + ISNULL(ZBU_ZEIT_PRODUKTION_GESAMT, 0) AS ZBU_ZEIT_GESAMT,
+               ZBUBW_TYP_PRODUKTION AS D4IV_ZBUBW_TYP_PRODUKTION,
+               tZE_BUCH.ID
+        FROM(((((((((((((((((((
+        (
+            SELECT *
+            FROM(((tZE_BUCH
+                LEFT JOIN
+                (
+                    SELECT ZBUBW_IDZBU AS ZBUBW_IDZBU_RUESTUNG,
+                           SUM(ZBUBW_ZEIT_RUESTUNG) AS ZBU_ZEIT_RUESTUNG_GESAMT
+                    FROM
+                    (
+                        SELECT *,
+                               'ZBUBW_ZEIT_RUESTUNG' = CASE
+                                                           WHEN ISNULL(ZBUBW_DATUM_ZEIT_START, 0) <> 0
+                                                                AND ISNULL(ZBUBW_DATUM_ZEIT_STOP, 0) <> 0 THEN
+                                                               CASE
+                                                                   WHEN ZBUBW_TYP_PRODUKTION = 1 THEN
+                                                                       ROUND(
+                                                                                CAST(DATEDIFF(
+                                                                                                 ss,
+                                                                                                 ZBUBW_DATUM_ZEIT_START,
+                                                                                                 ZBUBW_DATUM_ZEIT_STOP
+                                                                                             ) AS FLOAT) / 60,
+                                                                                4
+                                                                            )
+                                                                   ELSE
+                                                                       ROUND(
+                                                                                CAST(DATEDIFF(
+                                                                                                 mi,
+                                                                                                 ZBUBW_DATUM_ZEIT_START,
+                                                                                                 ZBUBW_DATUM_ZEIT_STOP
+                                                                                             ) AS FLOAT),
+                                                                                4
+                                                                            )
+                                                               END
+                                                           ELSE
+                                                               CASE
+                                                                   WHEN ISNULL(ZBUBW_DATUM_ZEIT_START, 0) <> 0
+                                                                        AND ISNULL(ZBUBW_DATUM_ZEIT_STOP, 0) = 0 THEN
+                                                                       CASE
+                                                                           WHEN ZBUBW_TYP_PRODUKTION = 1 THEN
+                                                                               ROUND(
+                                                                                        CAST(DATEDIFF(
+                                                                                                         ss,
+                                                                                                         ZBUBW_DATUM_ZEIT_START,
+                                                                                                         GETDATE()
+                                                                                                     ) AS FLOAT) / 60,
+                                                                                        4
+                                                                                    )
+                                                                           ELSE
+                                                                               ROUND(
+                                                                                        CAST(DATEDIFF(
+                                                                                                         mi,
+                                                                                                         ZBUBW_DATUM_ZEIT_START,
+                                                                                                         GETDATE()
+                                                                                                     ) AS FLOAT),
+                                                                                        4
+                                                                                    )
+                                                                       END
+                                                                   ELSE
+                                                                       0
+                                                               END
+                                                       END
+                        FROM tZE_BUCH_BEWE
+                        WHERE ZBUBW_TYP_ZEIT = 0
+                    ) AS MATRIX1
+                    GROUP BY ZBUBW_IDZBU
+                ) AS tZE_BUCH_BEWE_RUESTUNG
+                    ON tZE_BUCH_BEWE_RUESTUNG.ZBUBW_IDZBU_RUESTUNG = tZE_BUCH.ID)
+                LEFT JOIN
+                (
+                    SELECT ZBUBW_IDZBU AS ZBUBW_IDZBU_PRODUKTION,
+                           SUM(ZBUBW_ZEIT_PRODUKTION) AS ZBU_ZEIT_PRODUKTION_GESAMT,
+                           SUM(   CASE
+                                      WHEN ZBUBW_TYP_PRODUKTION = 0 THEN
+                                          ZBUBW_ZEIT_PRODUKTION
+                                      ELSE
+                                          0
+                                  END
+                              ) AS ZBU_ZEIT_PRODUKTION_AK,
+                           SUM(   CASE
+                                      WHEN ZBUBW_TYP_PRODUKTION = 1 THEN
+                                          ZBUBW_ZEIT_PRODUKTION
+                                      ELSE
+                                          0
+                                  END
+                              ) AS ZBU_ZEIT_PRODUKTION_MS
+                    FROM
+                    (
+                        SELECT *,
+                               'ZBUBW_ZEIT_PRODUKTION' = CASE
+                                                             WHEN ISNULL(ZBUBW_DATUM_ZEIT_START, 0) <> 0
+                                                                  AND ISNULL(ZBUBW_DATUM_ZEIT_STOP, 0) <> 0 THEN
+                                                                 CASE
+                                                                     WHEN ZBUBW_TYP_PRODUKTION = 1 THEN
+                                                                         ROUND(
+                                                                                  CAST(DATEDIFF(
+                                                                                                   ss,
+                                                                                                   ZBUBW_DATUM_ZEIT_START,
+                                                                                                   ZBUBW_DATUM_ZEIT_STOP
+                                                                                               ) AS FLOAT) / 60,
+                                                                                  4
+                                                                              )
+                                                                     ELSE
+                                                                         ROUND(
+                                                                                  CAST(DATEDIFF(
+                                                                                                   mi,
+                                                                                                   ZBUBW_DATUM_ZEIT_START,
+                                                                                                   ZBUBW_DATUM_ZEIT_STOP
+                                                                                               ) AS FLOAT),
+                                                                                  4
+                                                                              )
+                                                                 END
+                                                             ELSE
+                                                                 CASE
+                                                                     WHEN ISNULL(ZBUBW_DATUM_ZEIT_START, 0) <> 0
+                                                                          AND ISNULL(ZBUBW_DATUM_ZEIT_STOP, 0) = 0 THEN
+                                                                         CASE
+                                                                             WHEN ZBUBW_TYP_PRODUKTION = 1 THEN
+                                                                                 ROUND(
+                                                                                          CAST(DATEDIFF(
+                                                                                                           ss,
+                                                                                                           ZBUBW_DATUM_ZEIT_START,
+                                                                                                           GETDATE()
+                                                                                                       ) AS FLOAT) / 60,
+                                                                                          4
+                                                                                      )
+                                                                             ELSE
+                                                                                 ROUND(
+                                                                                          CAST(DATEDIFF(
+                                                                                                           mi,
+                                                                                                           ZBUBW_DATUM_ZEIT_START,
+                                                                                                           GETDATE()
+                                                                                                       ) AS FLOAT),
+                                                                                          4
+                                                                                      )
+                                                                         END
+                                                                     ELSE
+                                                                         0
+                                                                 END
+                                                         END
+                        FROM tZE_BUCH_BEWE
+                        WHERE ZBUBW_TYP_ZEIT = 1
+                    ) AS MATRIX2
+                    GROUP BY ZBUBW_IDZBU
+                ) AS tZE_BUCH_BEWE_PRODUKTION
+                    ON tZE_BUCH_BEWE_PRODUKTION.ZBUBW_IDZBU_PRODUKTION = tZE_BUCH.ID)
+                LEFT JOIN
+                (
+                    SELECT ID AS IDZBU_MENGE_IST,
+                           ISNULL(ZBU_MENGE_IST, 0) AS MENGE_IST
+                    FROM tZE_BUCH
+                ) AS tZE_BUCH_MENGE_IST
+                    ON tZE_BUCH_MENGE_IST.IDZBU_MENGE_IST = tZE_BUCH.ID)
+        ) AS tZE_BUCH
+            LEFT JOIN tZE_BEWE
+                ON tZE_BUCH.ZBU_IDZB = tZE_BEWE.ID)
+            LEFT JOIN tMARB
+                ON tZE_BEWE.ZB_IDMR = tMARB.ID)
+            LEFT JOIN tZE_STAR
+                ON tZE_BUCH.ZBU_IDZS = tZE_STAR.ID)
+            LEFT JOIN tKAGO
+                ON tKAGO.ID = tZE_BUCH.ZBU_IDKAGO_AUSSCHUSS)
+            LEFT JOIN tZE_BUCH_BEWE
+                ON tZE_BUCH_BEWE.ZBUBW_IDZBU = tZE_BUCH.ID)
+            LEFT JOIN tBE_BELK_BKBE
+                ON tZE_BUCH.ZBU_IDBEBK = tBE_BELK_BKBE.BK_BKBE_IDBEBK)
+            LEFT JOIN tBE_BELP
+                ON tZE_BUCH.ZBU_IDBEBP = tBE_BELP.ID)
+            LEFT JOIN tARST
+                ON tARST.ID = tBE_BELP.BP_IDAR)
+            LEFT JOIN tPPS_SKKALP
+                ON tPPS_SKKALP.ID = tZE_BUCH.ZBU_IDPSKP)
+            LEFT JOIN tBE_BELK_ALLG
+                ON tZE_BUCH.ZBU_IDBEBK = tBE_BELK_ALLG.BK_ALLG_IDBEBK)
+            LEFT JOIN tPPS_ARBSCHR
+                ON tPPS_ARBSCHR.ID = tPPS_SKKALP.PSP_IDAS)
+            LEFT JOIN tARDI
+                ON tARDI.ID = tBE_BELP.BP_FE_IDAD)
+            LEFT JOIN tKUND
+                ON tKUND.ID = tBE_BELK_BKBE.BK_BKBE_IDKU_RE)
+            LEFT JOIN tADRS AS tADRS_KUND
+                ON tADRS_KUND.ID = tKUND.KU_IDAD)
+            LEFT JOIN tZE_BUCH_PR
+                ON tZE_BUCH_PR.ID = tZE_BUCH.ZBU_IDZBUPR)
+            LEFT JOIN tPPS_MASTA
+                ON tPPS_MASTA.ID = tZE_BUCH.ZBU_IDMS)
+            LEFT JOIN tPPS_MASTA_PALETTEN
+                ON tPPS_MASTA_PALETTEN.ID = tZE_BUCH.ZBU_IDMSP)
+            LEFT JOIN tADRS
+                ON tMARB.MA_IDAD = tADRS.ID)
+            LEFT JOIN
+            (
+                SELECT AKB_IDPSKP,
+                       AKB_IDMS,
+                       MAX(ID) AS AKB_ID
+                FROM tANSP_KOMM_BEN
+                GROUP BY AKB_IDPSKP,
+                         AKB_IDMS
+            ) AS AKB_MAX
+                ON AKB_MAX.AKB_IDPSKP = tPPS_SKKALP.ID
+                   AND AKB_MAX.AKB_IDMS = tPPS_MASTA.ID)
+        WHERE ZBU_IDPSKP = @stepId
+        ORDER BY ZB_DATUM_START ASC,
+                 ZBU_MARB_MASTA ASC
+      `);
+
+    res.json(result.recordset);
+  } catch (e) {
+    console.error('Error fetching step bookings:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 7b. Planning Tab Kanban Data Endpoint
 app.get('/api/planning', async (req, res) => {
   try {
@@ -3053,6 +3370,8 @@ app.get('/api/planning', async (req, res) => {
             stepDesc: s.StepDesc.trim(),
             setupTime: s.SetupTime,
             prodTime: s.prodTime || 0,
+            originalSetupTime: s.originalSetupTime !== undefined ? s.originalSetupTime : (s.SetupTime || 0),
+            originalProdTime: s.originalProdTime !== undefined ? s.originalProdTime : (s.ProdTime || 0),
             isNightRunCapable: s.isNightRunCapable || false,
             isConflict: isConflict || false,
             originalStartDate: originalDateStr || null,
@@ -3065,20 +3384,25 @@ app.get('/api/planning', async (req, res) => {
              ) || false,
              splitPart: s.splitPart || null,
              isExecuting: s.SPKO === 2,
-            ncProgram: s.NCProgram || null,
-            matchedListNr: s.MatchedListNr || null,
+             bookedTime: s.BookedTime || 0,
+             ncProgram: s.NCProgram || null,
+             matchedListNr: s.MatchedListNr || null,
             matchedListIdent: s.MatchedListIdent || null,
+            matchedListNcp: s.MatchedListNcp || null,
             matchedType: s.MatchedType || null,
             matchedScore: s.MatchedScore || null,
             masterNcProgram: s.masterNcProgram || null,
             masterMatchedListNr: s.masterMatchedListNr || null,
             masterMatchedListIdent: s.masterMatchedListIdent || null,
+            masterMatchedListNcp: s.masterMatchedListNcp || null,
             masterMatchedType: s.masterMatchedType || null,
             masterMatchedScore: s.masterMatchedScore || null,
             color: s.color,
             fixture: s.fixture || extractFixture(s.StepDesc),
             fixtureLocation: s.fixtureLocation || (s.fixture ? (fixtureLocationMap[s.fixture.trim().toLowerCase()] || extractLagerortFromDesc(s.StepDesc)) : null),
             fixtureLocationFromDb: s.fixtureLocationFromDb !== undefined ? s.fixtureLocationFromDb : (s.fixture ? !!fixtureLocationMap[s.fixture.trim().toLowerCase()] : false),
+            machinePoolId: s.MachinePoolId || null,
+            machineId: s.MachineId || null,
             entireArbeitsplan,
             missesCount: s.loadTools ? s.loadTools.length : 0,
             loadTools: (s.loadTools || []).map(tNr => {
