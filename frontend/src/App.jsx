@@ -7776,6 +7776,15 @@ function PlanningTab({ mode = 'machining' }) {
                 .map(s => ({ ...s, isPoolRecommendationCopy: true }));
               daySteps = [...daySteps, ...recommendedFromPartner];
             }
+
+            // Deduplicate daySteps by stepId + splitPart + isPoolRecommendationCopy to prevent key conflicts and double rendering
+            const seenKeys = new Set();
+            daySteps = daySteps.filter(s => {
+              const key = `${s.stepId}-${s.splitPart || 0}-${!!s.isPoolRecommendationCopy}`;
+              if (seenKeys.has(key)) return false;
+              seenKeys.add(key);
+              return true;
+            });
             const actualSteps = daySteps.filter(s => !s.isPoolRecommendationCopy);
             const totalSetupTime = actualSteps.reduce((acc, s) => acc + s.setupTime, 0);
             const totalProdTime = actualSteps.reduce((acc, s) => acc + s.prodTime, 0);
@@ -7836,7 +7845,7 @@ function PlanningTab({ mode = 'machining' }) {
                       const isBlurryExecuting = hideExecuting && step.isExecuting;
                       return (
                         <div 
-                          key={step.isPoolRecommendationCopy ? `${step.stepId}-recommendation-${idx}` : `${step.stepId}-${idx}`} 
+                          key={step.isPoolRecommendationCopy ? `recommendation-${step.stepId}-${step.splitPart || 0}` : `${step.stepId}-${step.splitPart || 0}`} 
                           className={`kanban-card ${step.isExecuting ? 'executing' : ''} ${isHoveredGroup ? 'highlighted-split' : ''} ${isUnhoveredGroup ? 'dimmed-split' : ''}`} 
                           onClick={() => { setActiveModalStep(step); setIsExplanationCollapsed(true); }}
                           onMouseEnter={() => setHoveredStepId(step.stepId)}
@@ -7945,14 +7954,15 @@ function PlanningTab({ mode = 'machining' }) {
 
                         {/* Collapsed Compact Summary Row */}
                         {!expandedCards[step.stepId] ? (
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.35rem', fontSize: '0.68rem', color: '#64748b' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexGrow: 1, overflow: 'hidden' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.4rem', fontSize: '0.68rem', color: '#64748b' }}>
+                            {/* Row 1: Time / Execution Progress */}
+                            <div>
                               {step.isExecuting ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexGrow: 1, minWidth: '90px' }} title={`Ist: ${Math.round(step.bookedTime)}m / Soll: ${Math.round((step.originalSetupTime || 0) + (step.originalProdTime || 0))}m (Rest: ${Math.round(step.prodTime)}m)`}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', width: '100%' }} title={`Ist: ${Math.round(step.bookedTime)}m / Soll: ${Math.round((step.originalSetupTime || 0) + (step.originalProdTime || 0))}m (Rest: ${Math.round(step.prodTime)}m)`}>
                                   <span style={{ fontSize: '0.62rem', color: '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                                     {Math.round((step.bookedTime / Math.max(1, (step.originalSetupTime || 0) + (step.originalProdTime || 0))) * 100)}%
                                   </span>
-                                  <div style={{ height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', flexGrow: 1, overflow: 'hidden', minWidth: '30px' }}>
+                                  <div style={{ height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', flexGrow: 1, overflow: 'hidden' }}>
                                     <div style={{ 
                                       width: `${Math.min(100, (step.bookedTime / Math.max(1, (step.originalSetupTime || 0) + (step.originalProdTime || 0))) * 100)}%`, 
                                       height: '100%', 
@@ -7965,55 +7975,57 @@ function PlanningTab({ mode = 'machining' }) {
                                   </span>
                                 </div>
                               ) : (
-                                <span>⏱ {Math.round(step.setupTime)}m / {Math.round(step.prodTime)}m</span>
-                              )}
-                              <span style={{ color: 'var(--border-dim)', flexShrink: 0 }}>|</span>
-                              {!step.ncProgram ? (
-                                <span style={{ color: '#ef4444', fontWeight: 600 }}>NC fehlt</span>
-                              ) : !step.matchedListNr ? (
-                                <span style={{ color: '#f87171', fontWeight: 600 }} title="Keine WinTool-Liste gefunden">
-                                  💀 WT fehlt
-                                </span>
-                              ) : (
-                                <span style={{ color: '#38bdf8', fontWeight: 600 }}>
-                                  🔧 Rüsten: 
-                                  <span style={{ color: '#f59e0b', marginLeft: '0.2rem' }}>
-                                    +{step.directMisses ? step.directMisses.length : step.loadTools.length}
-                                  </span>
-                                  {step.unloadTools && step.unloadTools.length > 0 && (
-                                    <span style={{ color: '#f87171', marginLeft: '0.15rem' }}>
-                                      /-{step.unloadTools.length}
-                                    </span>
-                                  )}
-                                  {step.directMisses && step.directMisses.length !== step.loadTools.length && (
-                                    <span style={{ color: '#64748b', fontSize: '0.62rem', marginLeft: '0.25rem' }}>
-                                      (Sim: +{step.loadTools.length}
-                                      {step.unloadTools && step.unloadTools.length > 0 && `/-${step.unloadTools.length}`}
-                                      )
-                                    </span>
-                                  )}
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.15rem' }}>⏱ {Math.round(step.setupTime)}m / {Math.round(step.prodTime)}m</span>
+                                </div>
                               )}
                             </div>
-                            <button
-                              onClick={(e) => toggleCardDetails(e, step.stepId)}
-                              style={{
-                                background: 'rgba(255,255,255,0.03)',
-                                border: '1px solid var(--border-dim)',
-                                borderRadius: '4px',
-                                color: '#94a3b8',
-                                fontSize: '0.6rem',
-                                padding: '0.05rem 0.25rem',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.15rem'
-                              }}
-                              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#fff'; }}
-                              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.color = '#94a3b8'; }}
-                            >
-                              Details <ChevronDown size={8} />
-                            </button>
+
+                            {/* Row 2: Status Indicators & Details button */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingTop: '0.2rem', borderTop: '1px solid rgba(255,255,255,0.02)' }}>
+                              <div>
+                                {!step.ncProgram ? (
+                                  <span style={{ color: '#ef4444', fontWeight: 600 }}>NC fehlt</span>
+                                ) : !step.matchedListNr ? (
+                                  <span style={{ color: '#f87171', fontWeight: 600 }} title="Keine WinTool-Liste gefunden">
+                                    💀 WT fehlt
+                                  </span>
+                                ) : (
+                                  <span style={{ color: '#38bdf8', fontWeight: 600 }}>
+                                    🔧 Rüsten: 
+                                    <span style={{ color: '#f59e0b', marginLeft: '0.2rem' }}>
+                                      +{step.directMisses ? step.directMisses.length : step.loadTools.length}
+                                    </span>
+                                    {step.unloadTools && step.unloadTools.length > 0 && (
+                                      <span style={{ color: '#f87171', marginLeft: '0.15rem' }}>
+                                        /-{step.unloadTools.length}
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+
+                              <button
+                                onClick={(e) => toggleCardDetails(e, step.stepId)}
+                                style={{
+                                  background: 'rgba(255,255,255,0.03)',
+                                  border: '1px solid var(--border-dim)',
+                                  borderRadius: '4px',
+                                  color: '#94a3b8',
+                                  fontSize: '0.62rem',
+                                  padding: '0.1rem 0.35rem',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.15rem'
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#fff'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.color = '#94a3b8'; }}
+                              >
+                                <span>Details</span>
+                                <ChevronDown size={10} />
+                              </button>
+                            </div>
                           </div>
                         ) : (
                           /* Expanded Details View */
