@@ -2846,6 +2846,40 @@ app.get('/api/planning/step-bookings', async (req, res) => {
   }
 });
 
+// 7a-2. Save manual machine override for a step
+app.post('/api/planning/override', (req, res) => {
+  try {
+    const { stepId, machine } = req.body;
+    if (!stepId) {
+      return res.status(400).json({ error: 'stepId is required' });
+    }
+
+    const fs = require('fs');
+    const path = require('path');
+    const overridesPath = path.join(__dirname, 'planning_overrides.json');
+    let overrides = {};
+    if (fs.existsSync(overridesPath)) {
+      try {
+        overrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
+      } catch (err) {
+        console.error('Error reading planning overrides:', err);
+      }
+    }
+
+    if (machine) {
+      overrides[String(stepId)] = machine;
+    } else {
+      delete overrides[String(stepId)];
+    }
+
+    fs.writeFileSync(overridesPath, JSON.stringify(overrides, null, 2), 'utf8');
+    res.json({ success: true, overrides });
+  } catch (err) {
+    console.error('Error saving planning override:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 7b. Planning Tab Kanban Data Endpoint
 app.get('/api/planning', async (req, res) => {
   try {
@@ -2858,6 +2892,39 @@ app.get('/api/planning', async (req, res) => {
     const shouldOptimizeFixture = optimizeFixture === 'true';
     const parsedFixtureWeight = fixtureWeight !== undefined ? parseFloat(fixtureWeight) : 1.5;
     let { steps, listToToolsMap, toolsDetails, listToMachineMap, fixtureLocationMap } = cachedSetupData;
+
+    // Load manual overrides
+    const fs = require('fs');
+    const path = require('path');
+    const overridesPath = path.join(__dirname, 'planning_overrides.json');
+    let overrides = {};
+    if (fs.existsSync(overridesPath)) {
+      try {
+        overrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
+      } catch (err) {
+        console.error('Error loading planning overrides:', err);
+      }
+    }
+
+    // Clone steps to apply overrides and prevent mutating memory cache
+    const clonedSteps = steps.map(s => {
+      const copy = { ...s };
+      if (overrides[String(copy.StepId)]) {
+        const overrideMachine = overrides[String(copy.StepId)];
+        copy.manualMachineOverride = overrideMachine; // expose override to UI
+
+        // Map machine name to D4 database IDs
+        if (overrideMachine === 'Brother') { copy.MachineId = 8; copy.MachinePoolId = 0; }
+        else if (overrideMachine === 'Chiron') { copy.MachineId = 21; copy.MachinePoolId = 0; }
+        else if (overrideMachine === 'C400') { copy.MachineId = 2; copy.MachinePoolId = 0; }
+        else if (overrideMachine === 'C40') { copy.MachineId = 4; copy.MachinePoolId = 0; }
+        else if (overrideMachine === 'C42') { copy.MachineId = 25; copy.MachinePoolId = 0; }
+        else if (overrideMachine === 'RS2_1') { copy.MachineId = 5; copy.MachinePoolId = 0; }
+        else if (overrideMachine === 'RS2_2') { copy.MachineId = 6; copy.MachinePoolId = 0; }
+      }
+      return copy;
+    });
+    steps = clonedSteps;
 
     const orderStepsMap = {};
     steps.forEach(s => {
@@ -3403,6 +3470,7 @@ app.get('/api/planning', async (req, res) => {
             fixtureLocationFromDb: s.fixtureLocationFromDb !== undefined ? s.fixtureLocationFromDb : (s.fixture ? !!fixtureLocationMap[s.fixture.trim().toLowerCase()] : false),
             machinePoolId: s.MachinePoolId || null,
             machineId: s.MachineId || null,
+            manualMachineOverride: s.manualMachineOverride || null,
             entireArbeitsplan,
             missesCount: s.loadTools ? s.loadTools.length : 0,
             loadTools: (s.loadTools || []).map(tNr => {

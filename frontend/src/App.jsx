@@ -52,9 +52,10 @@ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
 
 function formatMinutes(mins) {
   if (mins < 0 || mins === undefined || mins === null) return '0m';
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  const remainingMins = mins % 60;
+  const roundedMins = Math.round(mins);
+  if (roundedMins < 60) return `${roundedMins}m`;
+  const hrs = Math.floor(roundedMins / 60);
+  const remainingMins = roundedMins % 60;
   return remainingMins > 0 ? `${hrs}h ${remainingMins}m` : `${hrs}h`;
 }
 
@@ -6146,7 +6147,7 @@ function ToolsPlanningView({
                                             Pos {st.stepPos}: {st.stepDesc}
                                           </div>
                                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.65rem', color: '#64748b', marginTop: '0.1rem' }}>
-                                            <span>Rüst: {st.setupTime}m | Prod: {st.prodTime}m</span>
+                                            <span>Rüst: {Math.round(st.setupTime)}m | Prod: {Math.round(st.prodTime)}m</span>
                                             {parentDay && <span style={{ color: '#94a3b8', fontWeight: 500 }}>{getDayName(parentDay)} ({formatDate(parentDay)})</span>}
                                           </div>
                                         </div>
@@ -6677,6 +6678,105 @@ function PlanningTab({ mode = 'machining' }) {
     loadFullRouting();
     loadStepBookings();
   }, [activeModalStep]);
+
+  const handleMachineOverride = async (machineName) => {
+    if (!activeModalStep) return;
+    try {
+      const res = await fetch(`${API_BASE}/planning/override`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stepId: activeModalStep.stepId,
+          machine: machineName || null
+        })
+      });
+      if (!res.ok) {
+        throw new Error('Fehler beim Speichern der Übersteuerung');
+      }
+      // Update local modal state immediately
+      setActiveModalStep(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          manualMachineOverride: machineName || null
+        };
+      });
+      // Recalculate board planning
+      fetchPlanningData();
+    } catch (err) {
+      console.error('Error override machine:', err);
+      alert('Fehler beim Zuweisen der Maschine: ' + err.message);
+    }
+  };
+
+  const renderOverrideButtons = () => {
+    if (!activeModalStep) return null;
+
+    const { machinePoolId, machineId, manualMachineOverride } = activeModalStep;
+
+    let options = [];
+    let title = "";
+
+    if (machinePoolId === 9 || machinePoolId === 12 || machineId === 5 || machineId === 6) {
+      title = "RS2 Pool";
+      options = [
+        { label: 'Auto', value: null },
+        { label: 'RS2-1', value: 'RS2_1' },
+        { label: 'RS2-2', value: 'RS2_2' }
+      ];
+    } else if (machinePoolId === 13 || machineId === 4 || machineId === 25) {
+      title = "C40-C42 Pool";
+      options = [
+        { label: 'Auto', value: null },
+        { label: 'C40', value: 'C40' },
+        { label: 'C42', value: 'C42' }
+      ];
+    } else if (machineId === 21 || machineId === 8) {
+      title = "Chiron/Brother";
+      options = [
+        { label: 'Auto', value: null },
+        { label: 'Chiron', value: 'Chiron' },
+        { label: 'Brother', value: 'Brother' }
+      ];
+    }
+
+    if (options.length === 0) return null;
+
+    const currentVal = manualMachineOverride || null;
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
+        <span style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          Zuweisung ({title})
+        </span>
+        <div style={{ display: 'inline-flex', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-dim)', borderRadius: '8px', padding: '2px', overflow: 'hidden' }}>
+          {options.map((opt) => {
+            const isActive = currentVal === opt.value;
+            return (
+              <button
+                key={opt.label}
+                onClick={() => handleMachineOverride(opt.value)}
+                style={{
+                  background: isActive ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                  border: isActive ? '1px solid rgba(59, 130, 246, 0.4)' : '1px solid transparent',
+                  color: isActive ? '#38bdf8' : '#94a3b8',
+                  fontSize: '0.75rem',
+                  fontWeight: isActive ? 700 : 500,
+                  padding: '0.3rem 0.65rem',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  margin: 0
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const fetchPlanningData = async () => {
     if (abortControllerRef.current) {
@@ -7704,7 +7804,7 @@ function PlanningTab({ mode = 'machining' }) {
                       Gesamt: {formatMinutes(totalWorkloadTime)}
                     </div>
                     <div style={{ color: '#64748b', fontSize: '0.65rem' }}>
-                      (Rüst: {totalSetupTime}m | Prod: {totalProdTime}m)
+                      (Rüst: {Math.round(totalSetupTime)}m | Prod: {Math.round(totalProdTime)}m)
                     </div>
                   </div>
                   {dayCapacity && day !== 'Überlauf' && (
@@ -7803,11 +7903,16 @@ function PlanningTab({ mode = 'machining' }) {
                           </div>
 
                           {/* Secondary Badges Row */}
-                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || (highlightRobotFlow && !isNonRobot)) && (
+                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || step.manualMachineOverride || (highlightRobotFlow && !isNonRobot)) && (
                             <div style={{ display: 'flex', gap: '0.2rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.1rem', marginBottom: '0.15rem' }}>
                               {highlightRobotFlow && !isNonRobot && (
                                 <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700 }}>
                                   🤖 FLOW
+                                </span>
+                              )}
+                              {step.manualMachineOverride && (
+                                <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#93c5fd', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700 }} title={`Manuell zugewiesen zu ${step.manualMachineOverride}`}>
+                                  🔧 {step.manualMachineOverride}
                                 </span>
                               )}
                               {step.isSplit && (
@@ -8126,7 +8231,7 @@ function PlanningTab({ mode = 'machining' }) {
                           </div>
                           <div className="summary-time" style={{ display: 'flex', flexDirection: 'column', gap: '0.05rem', margin: '0.15rem 0' }}>
                             <span>Gesamt: <strong style={{ color: '#38bdf8' }}>{formatMinutes(totalWorkloadTime)}</strong></span>
-                            <span style={{ fontSize: '0.65rem', color: '#64748b' }}>(Rüst: {totalSetupTime}m | Prod: {totalProdTime}m)</span>
+                            <span style={{ fontSize: '0.65rem', color: '#64748b' }}>(Rüst: {Math.round(totalSetupTime)}m | Prod: {Math.round(totalProdTime)}m)</span>
                           </div>
                           {dayCapacity && day !== 'Überlauf' && (
                             <div style={{ marginTop: '0.2rem', width: '100%' }}>
@@ -8233,42 +8338,49 @@ function PlanningTab({ mode = 'machining' }) {
             </button>
 
             {/* Modal Header */}
-            <div style={{ marginBottom: '1.5rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '1rem' }}>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-                {activeModalStep.isExecuting ? (
-                  <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.7rem', fontWeight: 700 }}>
-                    ⚡ IN AUSFÜHRUNG
-                  </span>
-                ) : (
-                  <span className="badge badge-success" style={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>Aktivierbar</span>
-                )}
-                {activeModalStep.isSplit && (
-                  <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
-                    ✂ Teil {activeModalStep.splitPart}
-                  </span>
-                )}
-                {activeModalStep.isConflict && (
-                  <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
-                    <AlertTriangle size={12} /> Soll: {formatDate(activeModalStep.originalStartDate)}
-                  </span>
-                )}
-                {activeModalStep.isLookahead && (
-                  <span className="badge" style={{ background: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fda4af', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 700 }}>
-                    🔮 Vorgezogen (Soll: {formatDate(activeModalStep.originalStartDate)})
-                  </span>
-                )}
-                {activeModalStep.isNightRunCapable && (
-                  <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
-                    <Moon size={12} /> Nachtlauf
-                  </span>
-                )}
+            <div style={{ marginBottom: '1.5rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                  {activeModalStep.isExecuting ? (
+                    <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.7rem', fontWeight: 700 }}>
+                      ⚡ IN AUSFÜHRUNG
+                    </span>
+                  ) : (
+                    <span className="badge badge-success" style={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>Aktivierbar</span>
+                  )}
+                  {activeModalStep.isSplit && (
+                    <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
+                      ✂ Teil {activeModalStep.splitPart}
+                    </span>
+                  )}
+                  {activeModalStep.isConflict && (
+                    <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
+                      <AlertTriangle size={12} /> Soll: {formatDate(activeModalStep.originalStartDate)}
+                    </span>
+                  )}
+                  {activeModalStep.isLookahead && (
+                    <span className="badge" style={{ background: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fda4af', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 700 }}>
+                      🔮 Vorgezogen (Soll: {formatDate(activeModalStep.originalStartDate)})
+                    </span>
+                  )}
+                  {activeModalStep.isNightRunCapable && (
+                    <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', fontWeight: 600 }}>
+                      <Moon size={12} /> Nachtlauf
+                    </span>
+                  )}
+                </div>
+                <h3 style={{ color: '#fff', fontSize: '1.4rem', fontWeight: 700, margin: '0.25rem 0' }}>
+                  Arbeitsschritt-Details
+                </h3>
+                <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: 0 }}>
+                  Detaillierte Belegungsdaten des Arbeitsschritts
+                </p>
               </div>
-              <h3 style={{ color: '#fff', fontSize: '1.4rem', fontWeight: 700, margin: '0.25rem 0' }}>
-                Arbeitsschritt-Details
-              </h3>
-              <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: 0 }}>
-                Detaillierte Belegungsdaten des Arbeitsschritts
-              </p>
+
+              {/* Manual Override Action Buttons */}
+              <div style={{ flexShrink: 0 }}>
+                {renderOverrideButtons()}
+              </div>
             </div>
 
             {/* Modal Body */}
@@ -8477,7 +8589,6 @@ function PlanningTab({ mode = 'machining' }) {
                   </div>
                 </div>
               </div>
-
               {/* Row 6: Vorrichtung (Fixture) */}
               {activeModalStep.fixture && (
                 <div style={{ background: 'rgba(168, 85, 247, 0.03)', border: '1px solid rgba(168, 85, 247, 0.15)', padding: '0.75rem 1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>

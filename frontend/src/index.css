@@ -1029,11 +1029,11 @@ body {
 [data-theme='light'] {
   color-scheme: light;
   color: #1e293b !important;
-  background-color: #e2e8f0 !important;
+  background-color: #f1f5f9 !important;
 
-  --bg-main: #e2e8f0;
+  --bg-main: #f1f5f9;
   --bg-card: #ffffff;
-  --bg-sidebar: #cbd5e1;
+  --bg-sidebar: #e2e8f0;
   --border-glow: rgba(59, 130, 246, 0.04);
   --border-dim: rgba(15, 23, 42, 0.06);
 }
@@ -1042,8 +1042,8 @@ body {
 [data-theme='light'] body {
   background: var(--bg-main) !important;
   background-image: 
-    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.03) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.02) 0px, transparent 50%) !important;
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.02) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.01) 0px, transparent 50%) !important;
   color: #1e293b !important;
 }
 
