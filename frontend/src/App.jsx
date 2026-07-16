@@ -4927,12 +4927,12 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                   </span>
                 </div>
                 {loadingRouting ? (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                  <div className="modal-routing-loading" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px' }}>
                     <RefreshCw size={14} className="animate-spin" />
                     <span>Lade Arbeitsplan...</span>
                   </div>
                 ) : fullRoutingSteps.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem', border: '1px solid var(--border-dim)', padding: '0.75rem', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                  <div className="modal-routing-container" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem', border: '1px solid var(--border-dim)', padding: '0.75rem', borderRadius: '10px' }}>
                     {fullRoutingSteps.map((op, opIdx) => {
                       const isCurrent = op.stepId === activeModalStep.stepId;
                       const isCompleted = op.isCompleted;
@@ -4964,17 +4964,19 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                       }
 
                       return (
-                        <div key={opIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: bgStyle, border: borderStyle, padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', transition: 'all 0.2s' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexGrow: 1, overflow: 'hidden' }}>
-                            <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px' }}>AS {op.stepPos}</span>
-                            <div style={{ display: 'flex', alignItems: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexGrow: 1 }}>
+                        <div key={opIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: bgStyle, border: borderStyle, padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', transition: 'all 0.2s', gap: '1rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexGrow: 1, overflow: 'hidden', minWidth: 0 }}>
+                            <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px', flexShrink: 0 }}>AS {op.stepPos}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', overflow: 'hidden', flexGrow: 1, minWidth: 0, gap: '0.35rem' }}>
                               {stepTypeBadge}
-                              <span style={{ color: isCompleted ? '#64748b' : '#fff', fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={op.stepDesc}>{op.stepDesc}</span>
+                              <span style={{ color: isCompleted ? '#64748b' : '#fff', fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', flexGrow: 1, minWidth: 0 }} title={op.stepDesc}>
+                                {op.stepDesc ? op.stepDesc.replace(/\r?\n/g, ' ') : ''}
+                              </span>
                             </div>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
-                            <span style={{ color: '#94a3b8', fontSize: '0.75rem' }} title="Maschine">{op.machineName}</span>
-                            <span style={{ color: '#475569', fontSize: '0.75rem' }}>{op.setupTime}m / {op.prodTime}m</span>
+                            <span style={{ color: '#94a3b8', fontSize: '0.75rem', whiteSpace: 'nowrap' }} title="Maschine">{op.machineName}</span>
+                            <span style={{ color: '#475569', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{op.setupTime}m / {op.prodTime}m</span>
                             {statusBadge}
                           </div>
                         </div>
@@ -7234,11 +7236,10 @@ function PlanningTab({ mode = 'machining' }) {
                       cursor: 'pointer'
                     }}
                   >
-                    <option value={3}>3 Arbeitstage</option>
                     <option value={5}>5 Arbeitstage</option>
-                    <option value={7}>7 Arbeitstage</option>
                     <option value={10}>10 Arbeitstage</option>
-                    <option value={14}>14 Arbeitstage</option>
+                    <option value={15}>15 Arbeitstage</option>
+                    <option value={20}>20 Arbeitstage</option>
                   </select>
                 </div>
               </div>
@@ -8198,23 +8199,7 @@ function PlanningTab({ mode = 'machining' }) {
 
                     {(weeklyLoadTools.length > 0 || weeklyUnloadTools.length > 0) && (
                       <div 
-                        style={{ 
-                          marginTop: '0.4rem', 
-                          background: 'rgba(56, 189, 248, 0.05)', 
-                          border: '1px dashed rgba(56, 189, 248, 0.25)', 
-                          borderRadius: '6px', 
-                          padding: '0.25rem 0.4rem', 
-                          fontSize: '0.65rem', 
-                          color: '#38bdf8', 
-                          display: 'flex', 
-                          flexDirection: 'column', 
-                          gap: '0.1rem',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s',
-                          textAlign: 'left'
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(56, 189, 248, 0.1)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(56, 189, 248, 0.05)'; }}
+                        className="weekly-summary-box"
                         onClick={(e) => {
                           e.stopPropagation();
                           setWeeklyToolsModal({
@@ -8224,14 +8209,14 @@ function PlanningTab({ mode = 'machining' }) {
                           });
                         }}
                       >
-                        <div style={{ fontWeight: 600, display: 'flex', justifyContent: 'space-between', color: '#38bdf8' }}>
+                        <div className="weekly-summary-title">
                           <span>Wochen-Rüsten:</span>
                         </div>
-                        <div style={{ display: 'flex', gap: '0.4rem', color: '#cbd5e1' }}>
-                          <span style={{ color: '#34d399', fontWeight: 700 }}>+{weeklyLoadTools.length} rein</span>
-                          <span style={{ color: '#f87171', fontWeight: 700 }}>-{weeklyUnloadTools.length} raus</span>
+                        <div className="weekly-summary-counts">
+                          <span className="weekly-summary-rein">+{weeklyLoadTools.length} rein</span>
+                          <span className="weekly-summary-raus">-{weeklyUnloadTools.length} raus</span>
                         </div>
-                        <span style={{ color: '#64748b', fontSize: '0.58rem', textDecoration: 'underline' }}>Details anzeigen</span>
+                        <span className="weekly-summary-link">Details anzeigen</span>
                       </div>
                     )}
                   </div>
@@ -8251,9 +8236,9 @@ function PlanningTab({ mode = 'machining' }) {
                   return (
                     <div key={day} className="grid-cell cell-content" onClick={() => setSelectedMachine(mName)} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', justifyContent: 'flex-start', paddingTop: '0.65rem' }}>
                       {/* Cell Day Header */}
-                      <div style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 700, borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '0.2rem', marginBottom: '0.2rem', display: 'flex', justifyContent: 'space-between', width: '100%', textTransform: 'uppercase', letterSpacing: '0.02em', pointerEvents: 'none', userSelect: 'none' }}>
-                        <span style={{ color: '#38bdf8' }}>{getDayName(day)}</span>
-                        <span>{formatDate(day)}</span>
+                      <div className="swimlane-cell-header" style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 700, borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '0.2rem', marginBottom: '0.2rem', display: 'flex', justifyContent: 'space-between', width: '100%', textTransform: 'uppercase', letterSpacing: '0.02em', pointerEvents: 'none', userSelect: 'none' }}>
+                        <span className="swimlane-cell-day-name">{getDayName(day)}</span>
+                        <span className="swimlane-cell-day-date">{formatDate(day)}</span>
                       </div>
                       {daySteps.length === 0 ? (
                         <div className="grid-empty">Keine Belegung</div>
@@ -8447,7 +8432,7 @@ function PlanningTab({ mode = 'machining' }) {
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>P-Nummer (Projekt) / Position</div>
                   <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>
-                    {activeModalStep.contractNumber || 'Keine P-Nummer'} {activeModalStep.stepPos ? `/ Pos ${activeModalStep.stepPos}` : ''}
+                    {activeModalStep.contractNumber || 'Keine P-Nummer'} {activeModalStep.orderPos ? `/ Pos ${activeModalStep.orderPos}` : ''}
                   </div>
                 </div>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
@@ -8661,12 +8646,12 @@ function PlanningTab({ mode = 'machining' }) {
                   </span>
                 </div>
                 {loadingRouting ? (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                  <div className="modal-routing-loading" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px' }}>
                     <RefreshCw size={14} className="animate-spin" />
                     <span>Lade Arbeitsplan...</span>
                   </div>
                 ) : fullRoutingSteps.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem', border: '1px solid var(--border-dim)', padding: '0.75rem', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                  <div className="modal-routing-container" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem', border: '1px solid var(--border-dim)', padding: '0.75rem', borderRadius: '10px' }}>
                     {fullRoutingSteps.map((op, opIdx) => {
                       const isCurrent = op.stepId === activeModalStep.stepId;
                       const isCompleted = op.isCompleted;
@@ -8744,17 +8729,19 @@ function PlanningTab({ mode = 'machining' }) {
                       }
 
                       return (
-                        <div key={opIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: bgStyle, border: borderStyle, padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', transition: 'all 0.2s' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexGrow: 1, overflow: 'hidden' }}>
-                            <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px' }}>AS {op.stepPos}</span>
-                            <div style={{ display: 'flex', alignItems: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexGrow: 1 }}>
+                        <div key={opIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: bgStyle, border: borderStyle, padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', transition: 'all 0.2s', gap: '1rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexGrow: 1, overflow: 'hidden', minWidth: 0 }}>
+                            <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px', flexShrink: 0 }}>AS {op.stepPos}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', overflow: 'hidden', flexGrow: 1, minWidth: 0, gap: '0.35rem' }}>
                               {stepTypeBadge}
-                              <span style={{ color: isCompleted ? '#64748b' : '#fff', fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={op.stepDesc}>{op.stepDesc}</span>
+                              <span style={{ color: isCompleted ? '#64748b' : '#fff', fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', flexGrow: 1, minWidth: 0 }} title={op.stepDesc}>
+                                {op.stepDesc ? op.stepDesc.replace(/\r?\n/g, ' ') : ''}
+                              </span>
                             </div>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
-                            <span style={{ color: '#94a3b8', fontSize: '0.75rem' }} title="Zugeordnete Maschine/Pool">{op.machineName}</span>
-                            <span style={{ color: '#475569', fontSize: '0.75rem' }} title="Rüstzeit / Prodzeit">{op.setupTime}m / {op.prodTime}m</span>
+                            <span style={{ color: '#94a3b8', fontSize: '0.75rem', whiteSpace: 'nowrap' }} title="Zugeordnete Maschine/Pool">{op.machineName}</span>
+                            <span style={{ color: '#475569', fontSize: '0.75rem', whiteSpace: 'nowrap' }} title="Rüstzeit / Prodzeit">{op.setupTime}m / {op.prodTime}m</span>
                             {statusBadge}
                           </div>
                         </div>
@@ -8777,12 +8764,12 @@ function PlanningTab({ mode = 'machining' }) {
                   </span>
                 </div>
                 {loadingBookings ? (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px', background: 'rgba(0,0,0,0.15)' }}>
+                  <div className="modal-bookings-loading" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px' }}>
                     <RefreshCw size={14} className="animate-spin" />
                     <span>Lade Ist-Zeiten...</span>
                   </div>
                 ) : modalBookings.length > 0 ? (
-                  <div style={{ border: '1px solid var(--border-dim)', borderRadius: '10px', background: 'rgba(0,0,0,0.15)', overflow: 'hidden' }}>
+                  <div className="modal-bookings-container" style={{ border: '1px solid var(--border-dim)', borderRadius: '10px', overflow: 'hidden' }}>
                     <div style={{ maxHeight: '180px', overflowY: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem', color: '#cbd5e1', textAlign: 'left' }}>
                         <thead>

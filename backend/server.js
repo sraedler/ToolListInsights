@@ -1197,6 +1197,7 @@ app.get('/api/orders/:id/steps', async (req, res) => {
       SELECT
         p.ID as StepId,
         p.PSP_POSITION_NUMMER as StepPos,
+        b.BP_POSITION_NUMMER as OrderPos,
         p.PSP_TYP_POSITION as StepTyp,
         p.PSP_BEZEICHNUNG as StepDesc,
         p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
@@ -1217,7 +1218,7 @@ app.get('/api/orders/:id/steps', async (req, res) => {
               ) THEN 4
               ELSE 1
             END
-          ELSE p.PSP_PP_STATUS_PRODUKTION
+          ELSE 4
         END AS SPKO,
         CASE
           WHEN b.BP_PP_DATUM_TERMIN IS NOT NULL THEN b.BP_PP_DATUM_TERMIN
@@ -1369,6 +1370,7 @@ app.get('/api/orders/:id/steps', async (req, res) => {
 
       return {
         ...step,
+        orderPos: step.OrderPos || null,
         StepTypName: stepTypName,
         parsedPrograms,
         toolListMatches,
@@ -3467,6 +3469,7 @@ app.get('/api/planning', async (req, res) => {
             contractNumber: s.ContractNumber || null,
             deliveryDate: s.DeliveryDate || null,
             stepPos: s.StepPos || null,
+            orderPos: s.OrderPos || null,
             articleId: s.ArticleId,
             orderDesc: s.OrderDesc,
             stepDesc: s.StepDesc.trim(),

@@ -1124,6 +1124,21 @@ body {
   color: #475569 !important;
 }
 
+[data-theme='light'] *[style*="color: #38bdf8"],
+[data-theme='light'] *[style*="color:#38bdf8"] {
+  color: #0284c7 !important;
+}
+
+[data-theme='light'] *[style*="color: #34d399"],
+[data-theme='light'] *[style*="color:#34d399"] {
+  color: #059669 !important;
+}
+
+[data-theme='light'] *[style*="color: #f87171"],
+[data-theme='light'] *[style*="color:#f87171"] {
+  color: #dc2626 !important;
+}
+
 [data-theme='light'] *[style*="background: rgba(255, 255, 255, 0.01)"],
 [data-theme='light'] *[style*="background:rgba(255,255,255,0.01)"] {
   background: rgba(15, 23, 42, 0.01) !important;
@@ -1237,6 +1252,11 @@ body {
 
 [data-theme='light'] .machine-cell {
   background: rgba(15, 23, 42, 0.02) !important;
+  color: #0f172a !important;
+}
+
+[data-theme='light'] .machine-cell:hover {
+  background: rgba(59, 130, 246, 0.06) !important;
 }
 
 [data-theme='light'] .machine-title {
@@ -1547,4 +1567,97 @@ body {
 .kanban-card.dimmed-split {
   opacity: 1 !important;
   filter: none !important;
+}
+
+/* Weekly summary box and cell header styles */
+.weekly-summary-box {
+  margin-top: 0.4rem;
+  background: rgba(56, 189, 248, 0.05);
+  border: 1px dashed rgba(56, 189, 248, 0.25);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.65rem;
+  color: #38bdf8;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+.weekly-summary-box:hover {
+  background: rgba(56, 189, 248, 0.1);
+}
+.weekly-summary-title {
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  color: #38bdf8;
+}
+.weekly-summary-counts {
+  display: flex;
+  gap: 0.4rem;
+  color: #cbd5e1;
+}
+.weekly-summary-rein {
+  color: #34d399;
+  font-weight: 700;
+}
+.weekly-summary-raus {
+  color: #f87171;
+  font-weight: 700;
+}
+.weekly-summary-link {
+  color: #64748b;
+  font-size: 0.58rem;
+  text-decoration: underline;
+}
+
+/* Light Theme overrides for weekly summary */
+[data-theme='light'] .weekly-summary-box {
+  background: rgba(56, 189, 248, 0.03) !important;
+  border-color: rgba(2, 132, 199, 0.2) !important;
+  color: #0284c7 !important;
+}
+[data-theme='light'] .weekly-summary-title {
+  color: #0284c7 !important;
+}
+[data-theme='light'] .weekly-summary-counts {
+  color: #475569 !important;
+}
+[data-theme='light'] .weekly-summary-rein {
+  color: #059669 !important;
+}
+[data-theme='light'] .weekly-summary-raus {
+  color: #dc2626 !important;
+}
+[data-theme='light'] .weekly-summary-link {
+  color: #64748b !important;
+}
+
+/* Swimlane cell header theme styles */
+.swimlane-cell-day-name {
+  color: #38bdf8;
+}
+[data-theme='light'] .swimlane-cell-day-name {
+  color: #0284c7 !important;
+}
+[data-theme='light'] .swimlane-cell-header {
+  border-bottom-color: rgba(15, 23, 42, 0.06) !important;
+}
+
+/* Modal routing and bookings tables */
+.modal-routing-container,
+.modal-routing-loading,
+.modal-bookings-container,
+.modal-bookings-loading {
+  background: rgba(0, 0, 0, 0.15) !important;
+}
+
+[data-theme='light'] .modal-routing-container,
+[data-theme='light'] .modal-routing-loading,
+[data-theme='light'] .modal-bookings-container,
+[data-theme='light'] .modal-bookings-loading {
+  background: rgba(15, 23, 42, 0.02) !important;
+  border-color: rgba(15, 23, 42, 0.06) !important;
 }
