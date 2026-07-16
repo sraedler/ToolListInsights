@@ -377,10 +377,10 @@ async function cacheSetupData() {
     const poolTL = await getPoolTL();
 
     console.log('Caching steps, tools, and night-run bookings in parallel...');
-    const [rows, mappingResult, toolsDetailResult, nightBookingsResult, activeProgsResult] = await Promise.all([
+    const [rows, mappingResult, toolsDetailResult, nightBookingsResult, activeProgsResult, toolLocationsResult] = await Promise.all([
       fetchActiveStepsAndMaterials(poolD4),
       poolWT.request().query('SELECT ToolListNr, ToolNr FROM [WTDATA].[dbo].[ToolList] WHERE ToolNr IS NOT NULL'),
-      poolWT.request().query('SELECT Nr, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools]'),
+      poolWT.request().query('SELECT Nr, Design, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools]'),
       poolD4.request().query(`
         SELECT b.BP_IDAR as ArticleId, p.PSP_POSITION_NUMMER as StepPos, COUNT(*) as NightBookings
         FROM [D4].[dbo].[tZE_BUCH] zb
@@ -390,7 +390,8 @@ async function cacheSetupData() {
         WHERE DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) >= 21 OR DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6
         GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
       `),
-      poolTL.request().query('SELECT Machine, ProgramName FROM MachineToProgram WHERE ProgramName IS NOT NULL')
+      poolTL.request().query('SELECT Machine, ProgramName FROM MachineToProgram WHERE ProgramName IS NOT NULL'),
+      poolTL.request().query('SELECT mtp.Machine, ptt.ToolName FROM ProgramToTool ptt INNER JOIN MachineToProgram mtp ON ptt.MachineToProgramId = mtp.Id WHERE ptt.ToolName IS NOT NULL')
     ]);
 
     let fixtureLocationsResult = { recordset: [] };
@@ -436,9 +437,16 @@ async function cacheSetupData() {
     });
 
     const toolsDetails = {};
+    const identToNrMap = {};
     toolsDetailResult.recordset.forEach(t => {
+      const nr = t.Nr;
+      const ident = (t.Design || '').trim().toLowerCase();
+      if (ident) {
+        identToNrMap[ident] = nr;
+      }
       toolsDetails[t.Nr] = {
         nr: t.Nr,
+        ident: t.Design,
         desc: t.Descript,
         keyword: t.KeyWord,
         dia: t.Ds,
@@ -786,13 +794,40 @@ async function cacheSetupData() {
       listToMachineMap[row.Nr] = row.MachineNr;
     });
 
+    const toolMachineMap = {};
+    const tlMachineNames = {
+      1: 'C40',
+      2: 'C400',
+      3: 'RS2_1',
+      4: 'RS2_2',
+      5: 'Chiron',
+      6: 'C42'
+    };
+    if (toolLocationsResult && toolLocationsResult.recordset) {
+      toolLocationsResult.recordset.forEach(r => {
+        const toolIdent = (r.ToolName || '').trim().toLowerCase();
+        const toolNr = identToNrMap[toolIdent];
+        const machId = r.Machine;
+        const machName = tlMachineNames[machId];
+        if (machName && toolNr) {
+          if (!toolMachineMap[toolNr]) {
+            toolMachineMap[toolNr] = [];
+          }
+          if (!toolMachineMap[toolNr].includes(machName)) {
+            toolMachineMap[toolNr].push(machName);
+          }
+        }
+      });
+    }
+
     cachedSetupData = {
       steps,
       listToToolsMap,
       toolUsageCounts,
       toolsDetails,
       listToMachineMap,
-      fixtureLocationMap
+      fixtureLocationMap,
+      toolMachineMap
     };
     console.log('Setup reduction base data cached.');
   })();
@@ -2891,7 +2926,7 @@ app.get('/api/planning', async (req, res) => {
     const parsedDaysCount = daysCount !== undefined ? parseInt(daysCount, 10) : 5;
     const shouldOptimizeFixture = optimizeFixture === 'true';
     const parsedFixtureWeight = fixtureWeight !== undefined ? parseFloat(fixtureWeight) : 1.5;
-    let { steps, listToToolsMap, toolsDetails, listToMachineMap, fixtureLocationMap } = cachedSetupData;
+    let { steps, listToToolsMap, toolsDetails, listToMachineMap, fixtureLocationMap, toolMachineMap } = cachedSetupData;
 
     // Load manual overrides
     const fs = require('fs');
@@ -3479,7 +3514,8 @@ app.get('/api/planning', async (req, res) => {
                 nr: tNr,
                 desc: details ? details.desc : 'Unbekannt',
                 dia: details ? details.dia : null,
-                len: details ? details.len : null
+                len: details ? details.len : null,
+                currentMachines: (toolMachineMap || {})[tNr] || []
               };
             }),
             unloadTools: (s.unloadTools || []).map(tNr => {
@@ -3488,7 +3524,8 @@ app.get('/api/planning', async (req, res) => {
                 nr: tNr,
                 desc: details ? details.desc : 'Unbekannt',
                 dia: details ? details.dia : null,
-                len: details ? details.len : null
+                len: details ? details.len : null,
+                currentMachines: (toolMachineMap || {})[tNr] || []
               };
             }),
             directMisses: tools.filter(tNr => !((machineMagazines[mName] && machineMagazines[mName].magazine) || []).includes(tNr)).map(tNr => {
@@ -3497,7 +3534,8 @@ app.get('/api/planning', async (req, res) => {
                 nr: tNr,
                 desc: details ? details.desc : 'Unbekannt',
                 dia: details ? details.dia : null,
-                len: details ? details.len : null
+                len: details ? details.len : null,
+                currentMachines: (toolMachineMap || {})[tNr] || []
               };
             }),
             directHits: tools.filter(tNr => ((machineMagazines[mName] && machineMagazines[mName].magazine) || []).includes(tNr)).map(tNr => {
@@ -3506,7 +3544,8 @@ app.get('/api/planning', async (req, res) => {
                 nr: tNr,
                 desc: details ? details.desc : 'Unbekannt',
                 dia: details ? details.dia : null,
-                len: details ? details.len : null
+                len: details ? details.len : null,
+                currentMachines: (toolMachineMap || {})[tNr] || []
               };
             }),
             toolsCount: tools.length
@@ -3705,7 +3744,8 @@ app.get('/api/planning', async (req, res) => {
           originalSetupTime: totalOriginalSetupTime
         },
         machines: machineSavings
-      }
+      },
+      toolMachineMap: toolMachineMap || {}
     });
 
   } catch (err) {

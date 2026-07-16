@@ -5451,7 +5451,8 @@ function ToolsPlanningView({
   isFollowedByRobot,
   hideExecuting,
   formatMinutes,
-  capacities
+  capacities,
+  toolMachineMap = {}
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [viewType, setViewType] = useState('consolidated'); // 'consolidated' or 'grouped'
@@ -6017,6 +6018,7 @@ function ToolsPlanningView({
                     </th>
                     <th style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8', width: '130px' }}>Dimensionen</th>
                     <th style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8' }}>Einsatz-Maschinen</th>
+                    <th style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8' }}>Aktueller Ort</th>
                     <th 
                       onClick={() => handleSort('count')}
                       style={{ padding: '0.85rem 1.25rem', fontWeight: 700, color: '#94a3b8', width: '120px', textAlign: 'center', cursor: 'pointer', userSelect: 'none', transition: 'color 0.2s' }}
@@ -6084,6 +6086,19 @@ function ToolsPlanningView({
                                   </div>
                                 );
                               })}
+                            </div>
+                          </td>
+                          <td style={{ padding: '0.85rem 1.25rem' }}>
+                            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                              {toolMachineMap[t.nr] && toolMachineMap[t.nr].length > 0 ? (
+                                toolMachineMap[t.nr].map(m => (
+                                  <span key={m} style={{ fontSize: '0.68rem', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '0.15rem 0.35rem', borderRadius: '6px', fontWeight: 600 }}>
+                                    {m}
+                                  </span>
+                                ))
+                              ) : (
+                                <span style={{ color: '#475569', fontSize: '0.75rem' }}>-</span>
+                              )}
                             </div>
                           </td>
                           <td style={{ padding: '0.85rem 1.25rem', textAlign: 'center' }}>
@@ -6281,6 +6296,16 @@ function ToolsPlanningView({
                         <div style={{ color: '#fff', fontSize: '0.78rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tool.desc}>
                           {tool.desc || 'Keine Beschreibung'}
                         </div>
+                        {toolMachineMap && toolMachineMap[tool.nr] && toolMachineMap[tool.nr].length > 0 && (
+                          <div style={{ display: 'flex', gap: '0.2rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.05rem', marginBottom: '0.05rem' }}>
+                            <span style={{ fontSize: '0.62rem', color: '#94a3b8', fontWeight: 500 }}>Aktuell in:</span>
+                            {toolMachineMap[tool.nr].map(m => (
+                              <span key={m} style={{ fontSize: '0.6rem', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '0.02rem 0.2rem', borderRadius: '3px', fontWeight: 600 }}>
+                                {m}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                         <div style={{ borderTop: '1px dashed var(--border-dim)', paddingTop: '0.3rem', marginTop: '0.15rem' }}>
                           <div style={{ fontSize: '0.62rem', color: '#94a3b8', fontWeight: 600, marginBottom: '0.15rem' }}>Benötigt für:</div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginBottom: '0.35rem' }}>
@@ -6426,7 +6451,7 @@ function ToolsPlanningView({
                               {uniqueDayTools.map(t => (
                                 <span 
                                   key={t.nr} 
-                                  title={t.desc}
+                                  title={`${t.desc || 'Keine Beschreibung'}${toolMachineMap && toolMachineMap[t.nr] && toolMachineMap[t.nr].length > 0 ? `\n(Aktuell geladen in: ${toolMachineMap[t.nr].join(', ')})` : ''}`}
                                   style={{ 
                                     background: 'rgba(245, 158, 11, 0.15)', 
                                     color: '#fbbf24', 
@@ -7762,6 +7787,7 @@ function PlanningTab({ mode = 'machining' }) {
             hideExecuting={hideExecuting}
             formatMinutes={formatMinutes}
             capacities={capacities}
+            toolMachineMap={data?.toolMachineMap || {}}
           />
         ) : selectedMachine !== 'All' ? (
           // Detailed Single Machine Kanban Board (5 columns)
@@ -8419,8 +8445,10 @@ function PlanningTab({ mode = 'machining' }) {
               {/* Row 1: P-Nummer & Order ID */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>P-Nummer (Projekt)</div>
-                  <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>{activeModalStep.contractNumber || 'Keine P-Nummer'}</div>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>P-Nummer (Projekt) / Position</div>
+                  <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>
+                    {activeModalStep.contractNumber || 'Keine P-Nummer'} {activeModalStep.stepPos ? `/ Pos ${activeModalStep.stepPos}` : ''}
+                  </div>
                 </div>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Lieferdatum</div>
@@ -8889,6 +8917,16 @@ function PlanningTab({ mode = 'machining' }) {
                             <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
                               {t.desc}
                             </div>
+                            {t.currentMachines && t.currentMachines.length > 0 && (
+                              <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.15rem' }}>
+                                <span style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: 500 }}>Aktiv in:</span>
+                                {t.currentMachines.map(m => (
+                                  <span key={m} style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '0.05rem 0.25rem', borderRadius: '4px', fontWeight: 600 }}>
+                                    {m}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                             <div style={{ fontSize: '0.68rem', color: '#38bdf8', fontWeight: 600, marginTop: '0.25rem' }}>
                               ℹ {getToolLifetimeInfo(t, activeModalStep, 'rein')}
                             </div>
@@ -8930,6 +8968,16 @@ function PlanningTab({ mode = 'machining' }) {
                             <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
                               {t.desc}
                             </div>
+                            {t.currentMachines && t.currentMachines.length > 0 && (
+                              <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.15rem' }}>
+                                <span style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: 500 }}>Aktiv in:</span>
+                                {t.currentMachines.map(m => (
+                                  <span key={m} style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '0.05rem 0.25rem', borderRadius: '4px', fontWeight: 600 }}>
+                                    {m}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                             <div style={{ fontSize: '0.68rem', color: '#f87171', fontWeight: 600, marginTop: '0.25rem' }}>
                               ℹ {getToolLifetimeInfo(t, activeModalStep, 'raus')}
                             </div>
@@ -8977,6 +9025,16 @@ function PlanningTab({ mode = 'machining' }) {
                             <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
                               {t.desc}
                             </div>
+                            {t.currentMachines && t.currentMachines.length > 0 && (
+                              <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.15rem' }}>
+                                <span style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: 500 }}>Aktiv in:</span>
+                                {t.currentMachines.map(m => (
+                                  <span key={m} style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '0.05rem 0.25rem', borderRadius: '4px', fontWeight: 600 }}>
+                                    {m}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -9108,6 +9166,11 @@ function PlanningTab({ mode = 'machining' }) {
                           <span style={{ color: '#fff', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.desc}>
                             {t.desc}
                           </span>
+                          {t.currentMachines && t.currentMachines.length > 0 && (
+                            <span style={{ fontSize: '0.62rem', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '0.02rem 0.2rem', borderRadius: '3px', fontWeight: 600, marginLeft: '0.25rem', whiteSpace: 'nowrap' }} title={`Aktuell geladen in: ${t.currentMachines.join(', ')}`}>
+                              📍 {t.currentMachines.join(', ')}
+                            </span>
+                          )}
                         </div>
                         {t.dia && t.dia !== '0' && t.dia !== 0 ? (
                           <span style={{ color: '#38bdf8', fontSize: '0.7rem', fontWeight: 600, fontFamily: 'monospace' }}>
@@ -9163,6 +9226,11 @@ function PlanningTab({ mode = 'machining' }) {
                               <span style={{ color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.desc}>
                                 {t.desc}
                               </span>
+                              {t.currentMachines && t.currentMachines.length > 0 && (
+                                <span style={{ fontSize: '0.62rem', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '0.02rem 0.2rem', borderRadius: '3px', fontWeight: 600, marginLeft: '0.25rem', whiteSpace: 'nowrap' }} title={`Aktuell geladen in: ${t.currentMachines.join(', ')}`}>
+                                  📍 {t.currentMachines.join(', ')}
+                                </span>
+                              )}
                             </div>
                             <div style={{ fontSize: '0.62rem', color: '#64748b', fontWeight: 500 }}>
                               ℹ {getWeeklyToolLifetimeInfo(t.nr, weeklyToolsModal.machineName)}
