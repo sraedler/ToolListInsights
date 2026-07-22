@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 require('dotenv').config();
 const { getPoolD4, getPoolWT, getPoolTL, getDbMode, setDbMode, sql } = require('./db');
 const { extractNCPrograms, findMatches } = require('./matching');
@@ -5226,13 +5227,34 @@ app.get('/api/machine-time-evaluation', async (req, res) => {
 });
 
 // Initialize server and execute cache pre-warmup in background
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  warmupAllCaches();
-  
-  // Periodic background cache update every 5 minutes
-  setInterval(() => {
-    console.log('Running periodic background cache update...');
+const certPath = path.join(__dirname, 'certs');
+const sslKeyPath = path.join(certPath, 'server.key');
+const sslCertPath = path.join(certPath, 'server.crt');
+const rootCaPath = path.join(certPath, 'rootCA.crt');
+
+if (fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
+  const sslOptions = {
+    key: fs.readFileSync(sslKeyPath),
+    cert: fs.readFileSync(sslCertPath),
+    ca: fs.existsSync(rootCaPath) ? fs.readFileSync(rootCaPath) : undefined,
+    requestCert: false
+  };
+
+  https.createServer(sslOptions, app).listen(PORT, '0.0.0.0', () => {
+    console.log(`HTTPS Server running on https://0.0.0.0:${PORT}`);
     warmupAllCaches();
-  }, 5 * 60 * 1000);
-});
+    setInterval(() => {
+      console.log('Running periodic background cache update...');
+      warmupAllCaches();
+    }, 5 * 60 * 1000);
+  });
+} else {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+    warmupAllCaches();
+    setInterval(() => {
+      console.log('Running periodic background cache update...');
+      warmupAllCaches();
+    }, 5 * 60 * 1000);
+  });
+}

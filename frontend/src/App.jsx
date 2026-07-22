@@ -369,6 +369,15 @@ export default function App() {
             </div>
 
             <div 
+              className={`nav-item ${activeTab === 'planning_machine_list' ? 'active' : ''}`}
+              onClick={() => setActiveTab('planning_machine_list')}
+              title={sidebarCollapsed ? "Planung Maschinen Liste" : undefined}
+            >
+              <Layers size={18} style={{ flexShrink: 0 }} />
+              {!sidebarCollapsed && <span>Planung Maschinen Liste</span>}
+            </div>
+
+            <div 
               className={`nav-item ${activeTab === 'planning_tools' ? 'active' : ''}`}
               onClick={() => setActiveTab('planning_tools')}
               title={sidebarCollapsed ? "Planung Werkzeugrüsten" : undefined}
@@ -434,6 +443,7 @@ export default function App() {
               {activeTab === 'simulation' && 'Rüstzeit-Optimierungs-Simulator'}
               {activeTab === 'machines' && 'Maschinen-Werkzeugbedarf'}
               {activeTab === 'planning' && 'Kanban-Maschinenbelegungsplanung'}
+              {activeTab === 'planning_machine_list' && 'Sequentielle Maschinenplanung Liste'}
               {activeTab === 'planning_tools' && 'Werkzeugrüst-Planung'}
               {activeTab === 'planning_deburring' && 'Kanban-Belegungsplanung Entgraten/Montieren'}
               {activeTab === 'time_evaluation' && 'Zeitauswertung: Soll vs. Ist Maschinenzeiten'}
@@ -523,10 +533,12 @@ export default function App() {
           {activeTab === 'simulation' && <SimulationTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'machines' && <MachinesTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'planning' && <PlanningTab mode="machining" />}
+          {activeTab === 'planning_machine_list' && <PlanningTab mode="machining" isListMode={true} />}
           {activeTab === 'planning_tools' && <PlanningTab mode="tools" />}
           {activeTab === 'planning_deburring' && <PlanningTab mode="deburring" />}
           {activeTab === 'time_evaluation' && (
             <TimeEvaluationTab 
+              theme={theme}
               selectedMachine={selectedMachine} 
               setSelectedMachine={setSelectedMachine} 
             />
@@ -3707,7 +3719,7 @@ function MachinesTab({ startDate, endDate }) {
 
 
 // 7c. Time Evaluation Tab (Soll vs Ist)
-function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
+function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   const getPreviousWorkdayStr = (refDate = new Date()) => {
     const d = new Date(refDate);
     const day = d.getDay(); // 0: Sunday, 1: Monday, ..., 6: Saturday
@@ -4371,7 +4383,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1.5rem' }}>
             <div className="card" style={{ padding: '1.5rem', minHeight: '350px', display: 'flex', flexDirection: 'column' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', marginBottom: '1.25rem' }}>Auslastung nach Maschine (in Stunden)</h3>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1.25rem' }}>Auslastung nach Maschine (in Stunden)</h3>
               <div style={{ flex: 1, width: '100%', minHeight: '280px' }}>
                 <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                   <BarChart 
@@ -4385,7 +4397,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                       }
                     }}
                   >
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme === 'light' ? "rgba(15,23,42,0.06)" : "rgba(255,255,255,0.04)"} />
                     <XAxis dataKey="name" stroke="#64748b" style={{ fontSize: '0.75rem' }} />
                     <YAxis stroke="#64748b" style={{ fontSize: '0.75rem' }} />
                     <Tooltip 
@@ -4394,28 +4406,28 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                       itemStyle={{ color: '#cbd5e1' }}
                     />
                     <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.75rem' }} />
-                    <Bar dataKey="Kapazität" fill="rgba(255, 255, 255, 0.08)" radius={[4, 4, 0, 0]}>
+                    <Bar dataKey="Kapazität" fill={theme === 'light' ? "rgba(15, 23, 42, 0.08)" : "rgba(255, 255, 255, 0.08)"} radius={[4, 4, 0, 0]}>
                       {machineChartData.map((entry, idx) => {
                         const isSelected = entry.name === selectedMachine;
                         const hasSelection = selectedMachine !== 'All';
                         
-                        let fillVal = 'rgba(255, 255, 255, 0.03)';
-                        let strokeVal = 'rgba(255, 255, 255, 0.3)';
+                        let fillVal = theme === 'light' ? 'rgba(15, 23, 42, 0.03)' : 'rgba(255, 255, 255, 0.03)';
+                        let strokeVal = theme === 'light' ? 'rgba(15, 23, 42, 0.2)' : 'rgba(255, 255, 255, 0.3)';
                         let strokeDash = '3 3';
                         
                         if (hasSelection) {
                           if (isSelected) {
-                            fillVal = 'rgba(255, 255, 255, 0.25)';
+                            fillVal = theme === 'light' ? 'rgba(15, 23, 42, 0.15)' : 'rgba(255, 255, 255, 0.25)';
                             strokeVal = '#10b981';
                             strokeDash = 'none';
                           } else {
-                            fillVal = 'rgba(255, 255, 255, 0.03)';
-                            strokeVal = 'rgba(255, 255, 255, 0.08)';
+                            fillVal = theme === 'light' ? 'rgba(15, 23, 42, 0.02)' : 'rgba(255, 255, 255, 0.03)';
+                            strokeVal = theme === 'light' ? 'rgba(15, 23, 42, 0.1)' : 'rgba(255, 255, 255, 0.08)';
                             strokeDash = '3 3';
                           }
                         } else {
-                          fillVal = 'rgba(255, 255, 255, 0.12)';
-                          strokeVal = 'rgba(255, 255, 255, 0.3)';
+                          fillVal = theme === 'light' ? 'rgba(15, 23, 42, 0.08)' : 'rgba(255, 255, 255, 0.12)';
+                          strokeVal = theme === 'light' ? 'rgba(15, 23, 42, 0.2)' : 'rgba(255, 255, 255, 0.3)';
                           strokeDash = 'none';
                         }
                         
@@ -4436,7 +4448,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                         const hasSelection = selectedMachine !== 'All';
                         const fillVal = isSelected 
                           ? '#10b981' 
-                          : (hasSelection ? 'rgba(255, 255, 255, 0.1)' : '#38bdf8');
+                          : (hasSelection ? (theme === 'light' ? 'rgba(15, 23, 42, 0.08)' : 'rgba(255, 255, 255, 0.1)') : '#38bdf8');
                         return <Cell key={`ist-cell-${idx}`} fill={fillVal} />;
                       })}
                     </Bar>
@@ -4446,7 +4458,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
             </div>
 
             <div className="card" style={{ padding: '1.5rem', minHeight: '350px', display: 'flex', flexDirection: 'column' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', marginBottom: '1.25rem' }}>Täglicher Verlauf der Belegungszeiten (in Stunden)</h3>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1.25rem' }}>Täglicher Verlauf der Belegungszeiten (in Stunden)</h3>
               <div style={{ flex: 1, width: '100%', minHeight: '280px' }}>
                 <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                   <AreaChart 
@@ -4477,7 +4489,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                         <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme === 'light' ? "rgba(15,23,42,0.06)" : "rgba(255,255,255,0.04)"} />
                     {getWeekendReferenceAreas().map((area, idx) => (
                       <ReferenceArea 
                         key={`weekend-${idx}`}
@@ -4506,7 +4518,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                       labelFormatter={(label) => new Date(Number(label)).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                     />
                     <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.75rem' }} />
-                    <Area type="monotone" dataKey="Kapazität" stroke="rgba(255, 255, 255, 0.55)" strokeWidth={1.5} fill="transparent" strokeDasharray="4 4" />
+                    <Area type="monotone" dataKey="Kapazität" stroke={theme === 'light' ? "rgba(15, 23, 42, 0.4)" : "rgba(255, 255, 255, 0.55)"} strokeWidth={1.5} fill="transparent" strokeDasharray="4 4" />
                     <Area type="monotone" dataKey="Ist-Zeit" stroke="#10b981" fillOpacity={1} fill="url(#colorIst)" />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -4516,7 +4528,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
           <div id="drilldown-section" className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', borderLeft: '4px solid #10b981' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
               <div>
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff', margin: 0 }}>📊 Stündliche Detailanalyse (Drilldown)</h3>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>📊 Stündliche Detailanalyse (Drilldown)</h3>
                 <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.2rem 0 0 0' }}>Wählen Sie einen Tag und eine Maschine aus, um die Auslastung auf Stundenbasis zu sehen.</p>
               </div>
 
@@ -4567,7 +4579,7 @@ function TimeEvaluationTab({ selectedMachine, setSelectedMachine }) {
                 <div style={{ flex: 1, width: '100%', minHeight: 0 }}>
                   <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                     <BarChart data={drilldownChartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.02)" />
+                      <CartesianGrid strokeDasharray="3 3" stroke={theme === 'light' ? "rgba(15,23,42,0.04)" : "rgba(255,255,255,0.02)"} />
                       <XAxis dataKey="hour" stroke="#64748b" style={{ fontSize: '0.65rem' }} />
                       <YAxis stroke="#64748b" style={{ fontSize: '0.65rem' }} />
                       <Tooltip 
@@ -6484,7 +6496,7 @@ function ToolsPlanningView({
 }
 
 // 7. Planning Tab (Kanban Board for next 5 working days)
-function PlanningTab({ mode = 'machining' }) {
+function PlanningTab({ mode = 'machining', isListMode = false }) {
   const isDocker = import.meta.env.VITE_API_BASE === '/api' || window.location.port === '2005';
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -7790,41 +7802,77 @@ function PlanningTab({ mode = 'machining' }) {
             capacities={capacities}
             toolMachineMap={data?.toolMachineMap || {}}
           />
-        ) : selectedMachine !== 'All' ? (
-          // Detailed Single Machine Kanban Board (5 columns)
-          <div className="kanban-board">
-          {days.map(day => {
-            const partnerMap = { 'C40': 'C42', 'C42': 'C40', 'RS2_1': 'RS2_2', 'RS2_2': 'RS2_1' };
-            const partnerName = partnerMap[selectedMachine];
-            let daySteps = board[selectedMachine]?.[day] || [];
-            if (poolOptimization && partnerName) {
-              const recommendedFromPartner = (board[partnerName]?.[day] || [])
-                .filter(s => s.poolRecommendation && s.poolRecommendation.partnerMachine === selectedMachine)
-                .map(s => ({ ...s, isPoolRecommendationCopy: true }));
-              daySteps = [...daySteps, ...recommendedFromPartner];
-            }
+        ) : selectedMachine !== 'All' || isListMode ? (
+          // Detailed Single Machine Kanban Board (or List)
+          <div className={isListMode ? "sequential-list-view" : "kanban-board"} style={isListMode ? { display: 'flex', flexDirection: 'column', gap: '1.5rem', padding: '1.5rem', overflowY: 'auto', background: '#0f172a' } : {}}>
+          {(isListMode && selectedMachine === 'All' ? machines : [selectedMachine]).map(mName => {
+            return (isListMode ? ['List'] : days).map(day => {
+              const partnerMap = { 'C40': 'C42', 'C42': 'C40', 'RS2_1': 'RS2_2', 'RS2_2': 'RS2_1' };
+              const partnerName = partnerMap[mName];
+              
+              let daySteps = [];
+              if (isListMode) {
+                days.forEach(d => {
+                  if (board[mName]?.[d]) {
+                    daySteps = daySteps.concat(board[mName][d]);
+                  }
+                });
+                // Deduplicate and filter out split parts > 1
+                const seenListKeys = new Set();
+                daySteps = daySteps.filter(s => {
+                  if (s.isSplit && s.splitPart > 1) return false;
+                  if (seenListKeys.has(s.stepId)) return false;
+                  seenListKeys.add(s.stepId);
+                  return true;
+                });
+                // Restore original times
+                daySteps = daySteps.map(s => ({
+                  ...s,
+                  setupTime: s.originalSetupTime !== undefined ? s.originalSetupTime : s.setupTime,
+                  prodTime: s.originalProdTime !== undefined ? s.originalProdTime : s.prodTime
+                }));
+              } else {
+                daySteps = board[mName]?.[day] || [];
+                if (poolOptimization && partnerName) {
+                  const recommendedFromPartner = (board[partnerName]?.[day] || [])
+                    .filter(s => s.poolRecommendation && s.poolRecommendation.partnerMachine === mName)
+                    .map(s => ({ ...s, isPoolRecommendationCopy: true }));
+                  daySteps = [...daySteps, ...recommendedFromPartner];
+                }
 
-            // Deduplicate daySteps by stepId + splitPart + isPoolRecommendationCopy to prevent key conflicts and double rendering
-            const seenKeys = new Set();
-            daySteps = daySteps.filter(s => {
-              const key = `${s.stepId}-${s.splitPart || 0}-${!!s.isPoolRecommendationCopy}`;
-              if (seenKeys.has(key)) return false;
-              seenKeys.add(key);
-              return true;
-            });
-            const actualSteps = daySteps.filter(s => !s.isPoolRecommendationCopy);
-            const totalSetupTime = actualSteps.reduce((acc, s) => acc + s.setupTime, 0);
-            const totalProdTime = actualSteps.reduce((acc, s) => acc + s.prodTime, 0);
-            const totalWorkloadTime = totalSetupTime + totalProdTime;
-            const totalChanges = actualSteps.reduce((acc, s) => acc + s.missesCount, 0);
+                // Deduplicate daySteps by stepId + splitPart + isPoolRecommendationCopy
+                const seenKeys = new Set();
+                daySteps = daySteps.filter(s => {
+                  const key = `${s.stepId}-${s.splitPart || 0}-${!!s.isPoolRecommendationCopy}`;
+                  if (seenKeys.has(key)) return false;
+                  seenKeys.add(key);
+                  return true;
+                });
+              }
 
-            const dayCapacity = capacities[selectedMachine]?.[day];
-            const loadPercentage = dayCapacity ? Math.min(100, Math.round((totalWorkloadTime / dayCapacity) * 100)) : 0;
-            const barColor = loadPercentage > 100 ? '#ef4444' : loadPercentage > 85 ? '#f59e0b' : '#10b981';
+              const actualSteps = daySteps.filter(s => !s.isPoolRecommendationCopy);
+              const totalSetupTime = actualSteps.reduce((acc, s) => acc + (s.setupTime || 0), 0);
+              const totalProdTime = actualSteps.reduce((acc, s) => acc + (s.prodTime || 0), 0);
+              const totalWorkloadTime = totalSetupTime + totalProdTime;
+              const totalChanges = actualSteps.reduce((acc, s) => acc + (s.missesCount || 0), 0);
 
-            return (
-              <div key={day} className="kanban-column">
-                <div className="column-header">
+              const dayCapacity = capacities[mName]?.[day];
+              const loadPercentage = dayCapacity ? Math.min(100, Math.round((totalWorkloadTime / dayCapacity) * 100)) : 0;
+              const barColor = loadPercentage > 100 ? '#ef4444' : loadPercentage > 85 ? '#f59e0b' : '#10b981';
+
+              if (isListMode && daySteps.length === 0) return null;
+
+              return (
+                <div key={`${mName}-${day}`} className={isListMode ? "list-container" : "kanban-column"} style={isListMode ? { background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border-dim)' } : {}}>
+                  {isListMode ? (
+                    <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--border-dim)', background: 'rgba(128, 128, 128, 0.05)' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Wrench size={18} color="#38bdf8" />
+                        {mName} ({daySteps.length} Aufträge)
+                      </h3>
+                    </div>
+                  ) : (
+                    <div className="column-header">
                   <div className="day-name">{getDayName(day)}</div>
                   <div className="day-date">{formatDate(day)}</div>
                   <div className="column-summary" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
@@ -7860,16 +7908,25 @@ function PlanningTab({ mode = 'machining' }) {
                     </span>
                   )}
                 </div>
+              )}
 
-                <div className="column-content">
+              <div className={isListMode ? "list-content" : "column-content"} style={isListMode ? { padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' } : {}}>
                   {daySteps.length === 0 ? (
                     <div className="empty-column-state">Keine Aufträge geplant</div>
                   ) : (
                     daySteps.map((step, idx) => {
                       const isHoveredGroup = hoveredStepId !== null && step.stepId === hoveredStepId;
                       const isUnhoveredGroup = hoveredStepId !== null && step.stepId !== hoveredStepId;
-                      const isNonRobot = highlightRobotFlow && (selectedMachine === 'Chiron' || selectedMachine === 'Brother') && !isFollowedByRobot(step);
+                      const isNonRobot = highlightRobotFlow && (mName === 'Chiron' || mName === 'Brother') && !isFollowedByRobot(step);
                       const isBlurryExecuting = hideExecuting && step.isExecuting;
+                      
+                      const sollTime = Math.round((step.originalSetupTime ?? step.setupTime ?? 0) + (step.originalProdTime ?? step.prodTime ?? 0));
+                      const istTime = Math.round(step.bookedTime ?? 0);
+                      let restTime = Math.round((step.setupTime ?? 0) + (step.prodTime ?? 0));
+                      if (istTime > sollTime) {
+                        restTime = sollTime - istTime;
+                      }
+
                       return (
                         <div 
                           key={step.isPoolRecommendationCopy ? `recommendation-${step.stepId}-${step.splitPart || 0}` : `${step.stepId}-${step.splitPart || 0}`} 
@@ -7984,21 +8041,56 @@ function PlanningTab({ mode = 'machining' }) {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.4rem', fontSize: '0.68rem', color: '#64748b' }}>
                             {/* Row 1: Time / Execution Progress */}
                             <div>
-                              {step.isExecuting ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', width: '100%' }} title={`Ist: ${Math.round(step.bookedTime)}m / Soll: ${Math.round((step.originalSetupTime || 0) + (step.originalProdTime || 0))}m (Rest: ${Math.round(step.prodTime)}m)`}>
-                                  <span style={{ fontSize: '0.62rem', color: '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                                    {Math.round((step.bookedTime / Math.max(1, (step.originalSetupTime || 0) + (step.originalProdTime || 0))) * 100)}%
+                              {isListMode ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', width: '100%', background: 'var(--bg-main)', padding: '0.6rem', borderRadius: '8px', border: '1px solid var(--border-dim)' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', gap: '1.25rem' }}>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                        <span style={{ fontSize: '0.6rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Soll</span>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{sollTime}m</span>
+                                      </div>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                        <span style={{ fontSize: '0.6rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ist</span>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: step.isExecuting ? '#10b981' : 'inherit' }}>{istTime}m</span>
+                                      </div>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                        <span style={{ fontSize: '0.6rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rest</span>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#38bdf8' }}>{restTime}m</span>
+                                      </div>
+                                    </div>
+                                    {step.fixture && (
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', textAlign: 'right', borderLeft: '1px solid rgba(128,128,128,0.2)', paddingLeft: '1rem', marginLeft: '0.5rem' }}>
+                                        <span style={{ fontSize: '0.6rem', color: '#c084fc', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Spannmittel</span>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#e9d5ff', maxWidth: '140px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={step.fixture}>{step.fixture}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {step.isExecuting && (
+                                    <div style={{ height: '5px', background: 'rgba(128, 128, 128, 0.15)', borderRadius: '3px', width: '100%', overflow: 'hidden' }}>
+                                      <div style={{ 
+                                        width: `${Math.min(100, (istTime / Math.max(1, sollTime)) * 100)}%`, 
+                                        height: '100%', 
+                                        background: istTime > sollTime ? '#ef4444' : '#10b981', 
+                                        borderRadius: '3px' 
+                                      }} />
+                                    </div>
+                                  )}
+                                </div>
+                              ) : step.isExecuting ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', width: '100%' }} title={`Ist: ${istTime}m / Soll: ${sollTime}m (Rest: ${restTime}m)`}>
+                                  <span style={{ fontSize: '0.62rem', color: istTime > sollTime ? '#ef4444' : '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                    {Math.round((istTime / Math.max(1, sollTime)) * 100)}%
                                   </span>
                                   <div style={{ height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', flexGrow: 1, overflow: 'hidden' }}>
                                     <div style={{ 
-                                      width: `${Math.min(100, (step.bookedTime / Math.max(1, (step.originalSetupTime || 0) + (step.originalProdTime || 0))) * 100)}%`, 
+                                      width: `${Math.min(100, (istTime / Math.max(1, sollTime)) * 100)}%`, 
                                       height: '100%', 
-                                      background: '#10b981', 
+                                      background: istTime > sollTime ? '#ef4444' : '#10b981', 
                                       borderRadius: '2px' 
                                     }} />
                                   </div>
                                   <span style={{ fontSize: '0.62rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
-                                    Rest: {Math.round(step.prodTime)}m
+                                    Rest: {restTime}m
                                   </span>
                                 </div>
                               ) : (
@@ -8150,6 +8242,7 @@ function PlanningTab({ mode = 'machining' }) {
                 </div>
               </div>
             );
+          })
           })}
         </div>
       ) : (
@@ -8505,24 +8598,38 @@ function PlanningTab({ mode = 'machining' }) {
                 });
                 const totalBookedTotal = totalBookedSetup + totalBookedProd;
 
-                const remainingSetup = Math.round(activeModalStep.setupTime || 0);
-                const remainingProd = Math.round(activeModalStep.prodTime || 0);
-                const remainingTotal = remainingSetup + remainingProd;
+                let remainingSetup = Math.round(activeModalStep.setupTime || 0);
+                if (totalBookedSetup > originalSetup) {
+                  remainingSetup = originalSetup - totalBookedSetup;
+                }
+                
+                let remainingProd = Math.round(activeModalStep.prodTime || 0);
+                if (totalBookedProd > originalProd) {
+                  remainingProd = originalProd - totalBookedProd;
+                }
+
+                let remainingTotal = Math.round((activeModalStep.setupTime || 0) + (activeModalStep.prodTime || 0));
+                if (totalBookedTotal > originalTotal) {
+                  remainingTotal = originalTotal - totalBookedTotal;
+                }
 
                 const formatTime = (min) => {
                   const roundedMin = Math.round(min);
                   if (roundedMin === 0) return '0m';
-                  if (roundedMin >= 60) {
-                    const hours = Math.floor(roundedMin / 60);
-                    const mins = roundedMin % 60;
-                    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+                  const isNeg = roundedMin < 0;
+                  const absMin = Math.abs(roundedMin);
+                  if (absMin >= 60) {
+                    const hours = Math.floor(absMin / 60);
+                    const mins = absMin % 60;
+                    const formatted = mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+                    return isNeg ? `-${formatted}` : formatted;
                   }
                   return `${roundedMin}m`;
                 };
 
-                const setupPct = originalSetup > 0 ? Math.min(100, (totalBookedSetup / originalSetup) * 100) : 0;
-                const prodPct = originalProd > 0 ? Math.min(100, (totalBookedProd / originalProd) * 100) : 0;
-                const totalPct = originalTotal > 0 ? Math.min(100, (totalBookedTotal / originalTotal) * 100) : 0;
+                const setupPct = originalSetup > 0 ? (totalBookedSetup / originalSetup) * 100 : 0;
+                const prodPct = originalProd > 0 ? (totalBookedProd / originalProd) * 100 : 0;
+                const totalPct = originalTotal > 0 ? (totalBookedTotal / originalTotal) * 100 : 0;
 
                 return (
                   <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-dim)', padding: '1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -8536,15 +8643,15 @@ function PlanningTab({ mode = 'machining' }) {
                       <div style={{ background: 'rgba(249, 115, 22, 0.03)', border: '1px solid rgba(249, 115, 22, 0.15)', padding: '0.6rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.72rem', color: '#fdba74', fontWeight: 700 }}>🛠️ RÜSTEN</span>
-                          <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontFamily: 'monospace' }}>{Math.round(setupPct)}%</span>
+                          <span style={{ fontSize: '0.68rem', color: setupPct > 100 ? '#ef4444' : '#94a3b8', fontWeight: setupPct > 100 ? 700 : 400, fontFamily: 'monospace' }}>{Math.round(setupPct)}%</span>
                         </div>
                         <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Soll:</span><span style={{ fontWeight: 600 }}>{formatTime(originalSetup)}</span></div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: '#fdba74' }}>{formatTime(totalBookedSetup)}</span></div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(249, 115, 22, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingSetup > 0 ? '#38bdf8' : '#64748b' }}>{formatTime(remainingSetup)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: totalBookedSetup > originalSetup ? '#ef4444' : '#fdba74' }}>{formatTime(totalBookedSetup)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(249, 115, 22, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingSetup < 0 ? '#ef4444' : (remainingSetup > 0 ? '#38bdf8' : '#64748b') }}>{formatTime(remainingSetup)}</span></div>
                         </div>
                         <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
-                          <div style={{ width: `${setupPct}%`, height: '100%', background: '#f97316', borderRadius: '2px' }} />
+                          <div style={{ width: `${Math.min(100, setupPct)}%`, height: '100%', background: setupPct > 100 ? '#ef4444' : '#f97316', borderRadius: '2px' }} />
                         </div>
                       </div>
 
@@ -8552,15 +8659,15 @@ function PlanningTab({ mode = 'machining' }) {
                       <div style={{ background: 'rgba(59, 130, 246, 0.03)', border: '1px solid rgba(59, 130, 246, 0.15)', padding: '0.6rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.72rem', color: '#93c5fd', fontWeight: 700 }}>⚙️ PRODUKTION</span>
-                          <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontFamily: 'monospace' }}>{Math.round(prodPct)}%</span>
+                          <span style={{ fontSize: '0.68rem', color: prodPct > 100 ? '#ef4444' : '#94a3b8', fontWeight: prodPct > 100 ? 700 : 400, fontFamily: 'monospace' }}>{Math.round(prodPct)}%</span>
                         </div>
                         <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Soll:</span><span style={{ fontWeight: 600 }}>{formatTime(originalProd)}</span></div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: '#60a5fa' }}>{formatTime(totalBookedProd)}</span></div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(59, 130, 246, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingProd > 0 ? '#38bdf8' : '#64748b' }}>{formatTime(remainingProd)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: totalBookedProd > originalProd ? '#ef4444' : '#60a5fa' }}>{formatTime(totalBookedProd)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(59, 130, 246, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingProd < 0 ? '#ef4444' : (remainingProd > 0 ? '#38bdf8' : '#64748b') }}>{formatTime(remainingProd)}</span></div>
                         </div>
                         <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
-                          <div style={{ width: `${prodPct}%`, height: '100%', background: '#3b82f6', borderRadius: '2px' }} />
+                          <div style={{ width: `${Math.min(100, prodPct)}%`, height: '100%', background: prodPct > 100 ? '#ef4444' : '#3b82f6', borderRadius: '2px' }} />
                         </div>
                       </div>
 
@@ -8568,15 +8675,15 @@ function PlanningTab({ mode = 'machining' }) {
                       <div style={{ background: 'rgba(16, 185, 129, 0.03)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.72rem', color: '#6ee7b7', fontWeight: 700 }}>📊 GESAMT</span>
-                          <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontFamily: 'monospace' }}>{Math.round(totalPct)}%</span>
+                          <span style={{ fontSize: '0.68rem', color: totalPct > 100 ? '#ef4444' : '#94a3b8', fontWeight: totalPct > 100 ? 700 : 400, fontFamily: 'monospace' }}>{Math.round(totalPct)}%</span>
                         </div>
                         <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Soll:</span><span style={{ fontWeight: 600 }}>{formatTime(originalTotal)}</span></div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: '#10b981' }}>{formatTime(totalBookedTotal)}</span></div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(16, 185, 129, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingTotal > 0 ? '#38bdf8' : '#64748b' }}>{formatTime(remainingTotal)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: totalBookedTotal > originalTotal ? '#ef4444' : '#10b981' }}>{formatTime(totalBookedTotal)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(16, 185, 129, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingTotal < 0 ? '#ef4444' : (remainingTotal > 0 ? '#38bdf8' : '#64748b') }}>{formatTime(remainingTotal)}</span></div>
                         </div>
                         <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
-                          <div style={{ width: `${totalPct}%`, height: '100%', background: '#10b981', borderRadius: '2px' }} />
+                          <div style={{ width: `${Math.min(100, totalPct)}%`, height: '100%', background: totalPct > 100 ? '#ef4444' : '#10b981', borderRadius: '2px' }} />
                         </div>
                       </div>
                     </div>
@@ -8658,74 +8765,36 @@ function PlanningTab({ mode = 'machining' }) {
                       const isExecuting = op.isExecuting;
 
                       let statusBadge = null;
-                      let bgStyle = 'rgba(255, 255, 255, 0.01)';
-                      let borderStyle = '1px solid rgba(255, 255, 255, 0.03)';
+                      let bgStyle = 'var(--bg-card)';
+                      let borderStyle = '1px solid var(--border-dim)';
+                      let textColor = 'var(--text-main)';
 
                       if (isCurrent) {
-                        statusBadge = <span style={{ background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#38bdf8', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>Aktuell geplant</span>;
-                        bgStyle = 'rgba(59, 130, 246, 0.04)';
-                        borderStyle = '1px solid rgba(59, 130, 246, 0.25)';
+                        statusBadge = <span style={{ color: '#60a5fa', fontSize: '0.7rem', fontWeight: 700 }}>Aktuell</span>;
+                        bgStyle = 'rgba(59, 130, 246, 0.15)';
+                        borderStyle = '1px solid rgba(59, 130, 246, 0.4)';
                       } else if (isCompleted) {
-                        statusBadge = <span style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.15)', color: '#6b7280', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>✓ Erledigt</span>;
-                        bgStyle = 'rgba(255, 255, 255, 0.01)';
-                        borderStyle = '1px solid rgba(255, 255, 255, 0.02)';
+                        statusBadge = <span style={{ color: '#64748b', fontSize: '0.7rem', fontWeight: 600 }}>✓ Erledigt</span>;
+                        bgStyle = 'transparent';
+                        borderStyle = '1px dashed var(--border-dim)';
+                        textColor = '#64748b';
                       } else if (isExecuting) {
-                        statusBadge = <span style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 700 }}>⚡ In Arbeit</span>;
-                        bgStyle = 'rgba(16, 185, 129, 0.02)';
-                        borderStyle = '1px solid rgba(16, 185, 129, 0.15)';
+                        statusBadge = <span style={{ color: '#10b981', fontSize: '0.7rem', fontWeight: 700 }}>▶ In Arbeit</span>;
+                        bgStyle = 'rgba(16, 185, 129, 0.1)';
+                        borderStyle = '1px solid rgba(16, 185, 129, 0.3)';
                       } else {
-                        statusBadge = <span style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', color: '#94a3b8', padding: '0.1rem 0.35rem', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 600 }}>Offen</span>;
+                        statusBadge = <span style={{ color: '#94a3b8', fontSize: '0.7rem', fontWeight: 500 }}>Offen</span>;
+                        bgStyle = 'rgba(128,128,128,0.05)';
+                        borderStyle = '1px solid var(--border-dim)';
                       }
 
                       let stepTypeBadge = null;
                       if (op.stepTyp === 3) {
-                        stepTypeBadge = (
-                          <span style={{ 
-                            background: 'rgba(148, 163, 184, 0.12)', 
-                            border: '1px solid rgba(148, 163, 184, 0.25)', 
-                            color: '#94a3b8', 
-                            fontSize: '0.62rem', 
-                            padding: '0.05rem 0.25rem', 
-                            borderRadius: '3px',
-                            fontWeight: 600,
-                            marginRight: '0.35rem',
-                            flexShrink: 0
-                          }}>
-                            ℹ Info
-                          </span>
-                        );
+                        stepTypeBadge = <span style={{ color: '#94a3b8', fontSize: '0.65rem', fontWeight: 700, marginRight: '0.4rem', border: '1px solid rgba(148,163,184,0.3)', padding: '0 0.2rem', borderRadius: '3px' }}>INFO</span>;
                       } else if (op.stepTyp === 2) {
-                        stepTypeBadge = (
-                          <span style={{ 
-                            background: 'rgba(249, 115, 22, 0.12)', 
-                            border: '1px solid rgba(249, 115, 22, 0.25)', 
-                            color: '#fdba74', 
-                            fontSize: '0.62rem', 
-                            padding: '0.05rem 0.25rem', 
-                            borderRadius: '3px',
-                            fontWeight: 600,
-                            marginRight: '0.35rem',
-                            flexShrink: 0
-                          }}>
-                            📦 Material
-                          </span>
-                        );
+                        stepTypeBadge = <span style={{ color: '#fb923c', fontSize: '0.65rem', fontWeight: 700, marginRight: '0.4rem', border: '1px solid rgba(251,146,60,0.3)', padding: '0 0.2rem', borderRadius: '3px' }}>MAT</span>;
                       } else if (op.stepTyp === 1) {
-                        stepTypeBadge = (
-                          <span style={{ 
-                            background: 'rgba(168, 85, 247, 0.12)', 
-                            border: '1px solid rgba(168, 85, 247, 0.25)', 
-                            color: '#c084fc', 
-                            fontSize: '0.62rem', 
-                            padding: '0.05rem 0.25rem', 
-                            borderRadius: '3px',
-                            fontWeight: 600,
-                            marginRight: '0.35rem',
-                            flexShrink: 0
-                          }}>
-                            🤝 Ext. Dienstl.
-                          </span>
-                        );
+                        stepTypeBadge = <span style={{ color: '#c084fc', fontSize: '0.65rem', fontWeight: 700, marginRight: '0.4rem', border: '1px solid rgba(192,132,252,0.3)', padding: '0 0.2rem', borderRadius: '3px' }}>EXT</span>;
                       }
 
                       return (
@@ -8734,7 +8803,7 @@ function PlanningTab({ mode = 'machining' }) {
                             <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px', flexShrink: 0 }}>AS {op.stepPos}</span>
                             <div style={{ display: 'flex', alignItems: 'center', overflow: 'hidden', flexGrow: 1, minWidth: 0, gap: '0.35rem' }}>
                               {stepTypeBadge}
-                              <span style={{ color: isCompleted ? '#64748b' : '#fff', fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', flexGrow: 1, minWidth: 0 }} title={op.stepDesc}>
+                              <span style={{ color: textColor, fontWeight: 600, textDecoration: isCompleted ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', flexGrow: 1, minWidth: 0 }} title={op.stepDesc}>
                                 {op.stepDesc ? op.stepDesc.replace(/\r?\n/g, ' ') : ''}
                               </span>
                             </div>
