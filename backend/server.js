@@ -4,6 +4,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const http = require('http');
 require('dotenv').config();
 const { getPoolD4, getPoolWT, getPoolTL, getDbMode, setDbMode, sql } = require('./db');
 const { extractNCPrograms, findMatches } = require('./matching');
@@ -5339,17 +5340,6 @@ const sslKeyPath = path.join(certPath, 'server.key');
 const sslCertPath = path.join(certPath, 'server.crt');
 const rootCaPath = path.join(certPath, 'rootCA.crt');
 
-// Start HTTP Server on main PORT (5000)
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`HTTP Server running on http://0.0.0.0:${PORT}`);
-  warmupAllCaches();
-  setInterval(() => {
-    console.log('Running periodic background cache update...');
-    warmupAllCaches();
-  }, 5 * 60 * 1000);
-});
-
-// Also start HTTPS Server on port 5001 if SSL certificates are present
 if (fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
   const sslOptions = {
     key: fs.readFileSync(sslKeyPath),
@@ -5358,8 +5348,26 @@ if (fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
     requestCert: false
   };
 
-  const httpsPort = process.env.HTTPS_PORT || 5001;
-  https.createServer(sslOptions, app).listen(httpsPort, '0.0.0.0', () => {
-    console.log(`HTTPS Server running on https://0.0.0.0:${httpsPort}`);
+  https.createServer(sslOptions, app).listen(PORT, '0.0.0.0', () => {
+    console.log(`HTTPS Server running on https://0.0.0.0:${PORT}`);
+    warmupAllCaches();
+    setInterval(() => {
+      console.log('Running periodic background cache update...');
+      warmupAllCaches();
+    }, 5 * 60 * 1000);
+  });
+
+  const httpPort = process.env.HTTP_PORT || 5001;
+  http.createServer(app).listen(httpPort, '0.0.0.0', () => {
+    console.log(`HTTP Server running on http://0.0.0.0:${httpPort}`);
+  });
+} else {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+    warmupAllCaches();
+    setInterval(() => {
+      console.log('Running periodic background cache update...');
+      warmupAllCaches();
+    }, 5 * 60 * 1000);
   });
 }
