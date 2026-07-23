@@ -39,6 +39,7 @@ let cachedDemandSteps = null;
 let cachedToolDetails = {};
 let cachedSetupData = null;
 let machineTimeEvaluationCache = {};
+let activeEvaluationDateRanges = new Set();
 let cacheWarmingPromise = null;
 let cachedMachines = [];
 const activeScenarios = {}; // machineName -> { unloadPrograms, loadPrograms }
@@ -916,6 +917,10 @@ async function warmupAllCaches() {
     await cacheSetupData();
     systemState.cachedItems.setup = true;
 
+    systemState.progress = '6. Berechne Zeitauswertung-Cache (Maschinenzeiten)...';
+    await refreshMachineTimeEvaluationCache();
+    systemState.cachedItems.timeEvaluation = true;
+
     systemState.status = 'ready';
     systemState.progress = 'System bereit!';
     console.log('--- ALL BACKEND DATABASES SUCCESSFULY INDEXED & CACHED ---');
@@ -936,11 +941,11 @@ app.get('/api/status', (req, res) => {
 });
 
 // Clear Cache Endpoint
-app.post('/api/clear-cache', (req, res) => {
+app.post('/api/clear-cache', async (req, res) => {
   try {
     cachedSetupData = null;
-    machineTimeEvaluationCache = {};
-    res.json({ success: true, message: 'Cache wurde erfolgreich gelöscht.' });
+    await refreshMachineTimeEvaluationCache();
+    res.json({ success: true, message: 'Cache wurde erfolgreich gelöscht und neu berechnet.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5148,6 +5153,100 @@ app.get('/api/dms/drawing/:articleId', async (req, res) => {
   }
 });
 
+async function fetchAndCacheMachineTimeEvaluation(startDate, endDate) {
+  const poolD4 = await getPoolD4();
+  
+  // Read the query directly from Maschinenzeiten.sql on disk
+  const sqlPath = path.join(__dirname, '..', 'Maschinenzeiten.sql');
+  let sqlContent = fs.readFileSync(sqlPath, 'utf8');
+  
+  // strip the 'go' at the end
+  sqlContent = sqlContent.replace(/\bgo\b/gi, '');
+  
+  const whereIndex = sqlContent.toLowerCase().lastIndexOf('where');
+  if (whereIndex === -1) {
+    throw new Error('Could not find WHERE clause in Maschinenzeiten.sql');
+  }
+  
+  const orderByIndex = sqlContent.toLowerCase().lastIndexOf('order by');
+  let selectAndFrom = sqlContent.substring(0, whereIndex);
+  let orderByPart = orderByIndex !== -1 ? sqlContent.substring(orderByIndex) : '';
+  
+  // Inject capacities right before the FIRST FROM of the main query
+  const fromMatch = selectAndFrom.match(/\bfrom\b/i);
+  if (fromMatch) {
+    const fromIndex = fromMatch.index;
+    let selectPart = selectAndFrom.substring(0, fromIndex);
+    let fromPart = selectAndFrom.substring(fromIndex);
+    
+    selectAndFrom = `
+      ${selectPart}
+      , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_MO, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_MO
+      , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_DI, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_DI
+      , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_MI, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_MI
+      , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_DO, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_DO
+      , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_FR, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_FR
+      , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_SA, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_SA
+      , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_SO, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_SO
+      ${fromPart}
+    `;
+  }
+  
+  const query = `
+    ${selectAndFrom}
+    WHERE tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_START >= @start
+      AND tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_STOP <= @end
+    ${orderByPart}
+  `;
+
+  const nextDay = new Date(endDate);
+  nextDay.setDate(nextDay.getDate() + 1);
+  const nextDayStr = nextDay.toISOString().substring(0, 10);
+
+  const startVal = new Date(`${startDate}T06:00:00`);
+  const endVal = new Date(`${nextDayStr}T05:59:59`);
+
+  const result = await poolD4.request()
+    .input('start', sql.DateTime, startVal)
+    .input('end', sql.DateTime, endVal)
+    .query(query);
+
+  const cacheKey = `${startDate}_${endDate}`;
+  machineTimeEvaluationCache[cacheKey] = result.recordset;
+  return result.recordset;
+}
+
+async function refreshMachineTimeEvaluationCache() {
+  console.log('[Zeitauswertung Cache] Clearing and recalculating background cache (5 min cycle)...');
+  
+  const rangesToRefresh = new Set(activeEvaluationDateRanges);
+
+  // Clear existing cache
+  machineTimeEvaluationCache = {};
+
+  // If no date ranges were requested yet, default to last 7 days up to today
+  if (rangesToRefresh.size === 0) {
+    const today = new Date();
+    const endDate = today.toISOString().substring(0, 10);
+    const startObj = new Date(today);
+    startObj.setDate(startObj.getDate() - 7);
+    const startDate = startObj.toISOString().substring(0, 10);
+    rangesToRefresh.add(`${startDate}_${endDate}`);
+  }
+
+  for (const rangeKey of rangesToRefresh) {
+    const parts = rangeKey.split('_');
+    if (parts.length === 2) {
+      try {
+        await fetchAndCacheMachineTimeEvaluation(parts[0], parts[1]);
+        console.log(`[Zeitauswertung Cache] Successfully recalculated cache for range: ${parts[0]} to ${parts[1]}`);
+      } catch (err) {
+        console.error(`[Zeitauswertung Cache] Error recalculating range ${rangeKey}:`, err.message);
+      }
+    }
+  }
+}
+
 app.get('/api/machine-time-evaluation', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -5156,70 +5255,15 @@ app.get('/api/machine-time-evaluation', async (req, res) => {
     }
 
     const cacheKey = `${startDate}_${endDate}`;
+    activeEvaluationDateRanges.add(cacheKey);
+
     if (machineTimeEvaluationCache[cacheKey]) {
       console.log(`[Cache Hit] Serving machine time evaluation from memory for range: ${startDate} to ${endDate}`);
       return res.json(machineTimeEvaluationCache[cacheKey]);
     }
 
-    const poolD4 = await getPoolD4();
-    
-    // Read the query directly from Maschinenzeiten.sql on disk
-    const sqlPath = path.join(__dirname, '..', 'Maschinenzeiten.sql');
-    let sqlContent = fs.readFileSync(sqlPath, 'utf8');
-    
-    // strip the 'go' at the end
-    sqlContent = sqlContent.replace(/\bgo\b/gi, '');
-    
-    const whereIndex = sqlContent.toLowerCase().lastIndexOf('where');
-    if (whereIndex === -1) {
-      throw new Error('Could not find WHERE clause in Maschinenzeiten.sql');
-    }
-    
-    const orderByIndex = sqlContent.toLowerCase().lastIndexOf('order by');
-    let selectAndFrom = sqlContent.substring(0, whereIndex);
-    let orderByPart = orderByIndex !== -1 ? sqlContent.substring(orderByIndex) : '';
-    
-    // Inject capacities right before the FIRST FROM of the main query
-    const fromMatch = selectAndFrom.match(/\bfrom\b/i);
-    if (fromMatch) {
-      const fromIndex = fromMatch.index;
-      let selectPart = selectAndFrom.substring(0, fromIndex);
-      let fromPart = selectAndFrom.substring(fromIndex);
-      
-      selectAndFrom = `
-        ${selectPart}
-        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_MO, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_MO
-        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_DI, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_DI
-        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_MI, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_MI
-        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_DO, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_DO
-        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_FR, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_FR
-        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_SA, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_SA
-        , ISNULL(tPPS_MASTA.MS_KAPAZITAET_ZEIT_MINUTEN_SO, 0) AS MS_KAPAZITAET_ZEIT_MINUTEN_SO
-        ${fromPart}
-      `;
-    }
-    
-    const query = `
-      ${selectAndFrom}
-      WHERE tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_START >= @start
-        AND tZE_BUCH_BEWE.ZBUBW_DATUM_ZEIT_STOP <= @end
-      ${orderByPart}
-    `;
-
-    const nextDay = new Date(endDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const nextDayStr = nextDay.toISOString().substring(0, 10);
-
-    const startVal = new Date(`${startDate}T06:00:00`);
-    const endVal = new Date(`${nextDayStr}T05:59:59`);
-
-    const result = await poolD4.request()
-      .input('start', sql.DateTime, startVal)
-      .input('end', sql.DateTime, endVal)
-      .query(query);
-
-    machineTimeEvaluationCache[cacheKey] = result.recordset;
-    res.json(result.recordset);
+    const data = await fetchAndCacheMachineTimeEvaluation(startDate, endDate);
+    res.json(data);
   } catch (err) {
     console.error('Error fetching machine time evaluation:', err);
     res.status(500).json({ error: err.message });

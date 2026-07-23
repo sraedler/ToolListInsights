@@ -3812,6 +3812,12 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
   useEffect(() => {
     fetchEvaluation();
+    const intervalId = setInterval(() => {
+      console.log('[Zeitauswertung Auto-Refresh] Synchronizing 5-minute background cache update...');
+      fetchEvaluation();
+    }, 5 * 60 * 1000);
+
+    return () => clearInterval(intervalId);
   }, [startDate, endDate]);
 
   const getDatesInRange = (startStr, endStr) => {
@@ -4314,7 +4320,10 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.5rem', alignSelf: 'flex-end' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', alignSelf: 'flex-end' }}>
+          <span style={{ fontSize: '0.7rem', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(16, 185, 129, 0.08)', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid rgba(16, 185, 129, 0.2)', fontWeight: 600 }}>
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} /> Auto-Cache Update alle 5 Min.
+          </span>
           <button onClick={() => handleSetQuickRange('yesterday')} className="btn btn-secondary btn-sm" style={{ background: 'rgba(255,255,255,0.02)' }}>Vortag (Gestern)</button>
           <button onClick={() => handleSetQuickRange('week')} className="btn btn-secondary btn-sm" style={{ background: 'rgba(255,255,255,0.02)' }}>Letzte Woche</button>
           <button onClick={() => handleSetQuickRange('month')} className="btn btn-secondary btn-sm" style={{ background: 'rgba(255,255,255,0.02)' }}>Letzter Monat</button>
