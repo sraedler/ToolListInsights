@@ -7936,6 +7936,10 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                         restTime = sollTime - istTime;
                       }
 
+                      const plannedDays = (step.PlannedDays && step.PlannedDays > 0) ? step.PlannedDays : ((step.ThroughputDays && step.ThroughputDays > 0) ? step.ThroughputDays : 1);
+                      const usedDays = step.UsedDays ?? 0;
+                      const daysPct = Math.round((usedDays / Math.max(1, plannedDays)) * 100);
+
                       return (
                         <div 
                           key={step.isPoolRecommendationCopy ? `recommendation-${step.stepId}-${step.splitPart || 0}` : `${step.stepId}-${step.splitPart || 0}`} 
@@ -8086,7 +8090,10 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                                   )}
                                 </div>
                               ) : step.isExecuting ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', width: '100%' }} title={`Ist: ${istTime}m / Soll: ${sollTime}m (Rest: ${restTime}m)`}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', width: '100%' }} title={`Ist: ${istTime}m / Soll: ${sollTime}m (Rest: ${restTime}m)`}>
+                                  <span style={{ fontSize: '0.7rem', color: '#94a3b8', display: 'inline-flex', alignItems: 'center' }}>
+                                    ⏱
+                                  </span>
                                   <span style={{ fontSize: '0.62rem', color: istTime > sollTime ? '#ef4444' : '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                                     {Math.round((istTime / Math.max(1, sollTime)) * 100)}%
                                   </span>
@@ -8107,6 +8114,27 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.15rem' }}>⏱ {Math.round(step.setupTime)}m / {Math.round(step.prodTime)}m</span>
                                 </div>
                               )}
+                            </div>
+
+                            {/* Row 1b: Durchlaufzeit Progress Bar */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', width: '100%', marginTop: '0.2rem' }} title={`Durchlaufzeit: ${usedDays} von ${plannedDays} Tage (X = ${usedDays} Arbeitstage im Auftrag, Y = ${plannedDays} Tage hist. Ø für diesen Artikel & Arbeitsschritt)`}>
+                              <span style={{ fontSize: '0.7rem', color: '#94a3b8', display: 'inline-flex', alignItems: 'center' }}>
+                                📅
+                              </span>
+                              <span style={{ fontSize: '0.62rem', color: usedDays > plannedDays ? '#ef4444' : '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                {daysPct}%
+                              </span>
+                              <div style={{ height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', flexGrow: 1, overflow: 'hidden' }}>
+                                <div style={{ 
+                                  width: `${Math.min(100, daysPct)}%`, 
+                                  height: '100%', 
+                                  background: usedDays > plannedDays ? '#ef4444' : '#10b981', 
+                                  borderRadius: '2px' 
+                                }} />
+                              </div>
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                                {usedDays}/{plannedDays}d
+                              </span>
                             </div>
 
                             {/* Row 2: Status Indicators & Details button */}
@@ -8643,13 +8671,14 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                 return (
                   <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-dim)', padding: '1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
                     <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span>Soll / Ist / Rest Zeitvergleich</span>
-                      <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Werte gerundet in Minuten & Stunden</span>
+                      <span>Soll / Ist / Rest Zeitvergleich & Durchlaufzeit</span>
+                      <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Werte gerundet in Minuten, Stunden & Tagen</span>
                     </div>
 
+                    {/* Row 1: Zeitvergleich (Rüsten, Produktion, Gesamtzeit in einer Reihe) */}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
                       {/* Rüsten */}
-                      <div style={{ background: 'rgba(249, 115, 22, 0.03)', border: '1px solid rgba(249, 115, 22, 0.15)', padding: '0.6rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      <div style={{ background: 'rgba(249, 115, 22, 0.03)', border: '1px solid rgba(249, 115, 22, 0.15)', padding: '0.65rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.72rem', color: '#fdba74', fontWeight: 700 }}>🛠️ RÜSTEN</span>
                           <span style={{ fontSize: '0.68rem', color: setupPct > 100 ? '#ef4444' : '#94a3b8', fontWeight: setupPct > 100 ? 700 : 400, fontFamily: 'monospace' }}>{Math.round(setupPct)}%</span>
@@ -8665,7 +8694,7 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                       </div>
 
                       {/* Produktion */}
-                      <div style={{ background: 'rgba(59, 130, 246, 0.03)', border: '1px solid rgba(59, 130, 246, 0.15)', padding: '0.6rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      <div style={{ background: 'rgba(59, 130, 246, 0.03)', border: '1px solid rgba(59, 130, 246, 0.15)', padding: '0.65rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.72rem', color: '#93c5fd', fontWeight: 700 }}>⚙️ PRODUKTION</span>
                           <span style={{ fontSize: '0.68rem', color: prodPct > 100 ? '#ef4444' : '#94a3b8', fontWeight: prodPct > 100 ? 700 : 400, fontFamily: 'monospace' }}>{Math.round(prodPct)}%</span>
@@ -8680,10 +8709,10 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                         </div>
                       </div>
 
-                      {/* Gesamt */}
-                      <div style={{ background: 'rgba(16, 185, 129, 0.03)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {/* Gesamtzeit */}
+                      <div style={{ background: 'rgba(16, 185, 129, 0.03)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.65rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: '0.72rem', color: '#6ee7b7', fontWeight: 700 }}>📊 GESAMT</span>
+                          <span style={{ fontSize: '0.72rem', color: '#6ee7b7', fontWeight: 700 }}>📊 GESAMTZEIT</span>
                           <span style={{ fontSize: '0.68rem', color: totalPct > 100 ? '#ef4444' : '#94a3b8', fontWeight: totalPct > 100 ? 700 : 400, fontFamily: 'monospace' }}>{Math.round(totalPct)}%</span>
                         </div>
                         <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
@@ -8696,6 +8725,49 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                         </div>
                       </div>
                     </div>
+
+                    {/* Row 2: Durchlaufzeit (Volle Breite darunter) */}
+                    {(() => {
+                      const mPlannedDays = (activeModalStep.PlannedDays && activeModalStep.PlannedDays > 0) ? activeModalStep.PlannedDays : ((activeModalStep.ThroughputDays && activeModalStep.ThroughputDays > 0) ? activeModalStep.ThroughputDays : 1);
+                      const mOrderPlanDays = activeModalStep.OrderPlanDays ?? mPlannedDays;
+                      const mUsedDays = activeModalStep.UsedDays ?? 0;
+                      const mDaysPct = Math.round((mUsedDays / Math.max(1, mPlannedDays)) * 100);
+                      const mRemainingDays = mPlannedDays - mUsedDays;
+
+                      return (
+                        <div style={{ background: 'rgba(56, 189, 248, 0.03)', border: '1px solid rgba(56, 189, 248, 0.18)', padding: '0.65rem 0.85rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                              📅 DURCHLAUFZEIT
+                            </span>
+                            <span style={{ fontSize: '0.7rem', color: mUsedDays > mPlannedDays ? '#ef4444' : '#38bdf8', fontWeight: 700, fontFamily: 'monospace' }}>
+                              {mDaysPct}%
+                            </span>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '0.5rem', fontSize: '0.75rem', color: '#cbd5e1' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>Auftragsplan:</span>
+                              <span style={{ fontWeight: 600 }}>{mOrderPlanDays} {mOrderPlanDays === 1 ? 'Tag' : 'Tage'}</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>Historischer Ø:</span>
+                              <span style={{ fontWeight: 600 }}>{mPlannedDays} {mPlannedDays === 1 ? 'Tag' : 'Tage'}</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>Ist (Gebraucht):</span>
+                              <span style={{ fontWeight: 600, color: mUsedDays > mPlannedDays ? '#ef4444' : '#38bdf8' }}>{mUsedDays} {mUsedDays === 1 ? 'Tag' : 'Tage'}</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>Geplanter Restbedarf:</span>
+                              <span style={{ fontWeight: 700, color: mRemainingDays < 0 ? '#ef4444' : '#38bdf8' }}>{mRemainingDays} {Math.abs(mRemainingDays) === 1 ? 'Tag' : 'Tage'}</span>
+                            </div>
+                          </div>
+                          <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden', marginTop: '0.2rem' }}>
+                            <div style={{ width: `${Math.min(100, mDaysPct)}%`, height: '100%', background: mUsedDays > mPlannedDays ? '#ef4444' : '#38bdf8', borderRadius: '2px' }} />
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}

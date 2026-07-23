@@ -148,6 +148,30 @@ async function fetchActiveStepsAndMaterials(poolD4) {
               AND tPPS_SKKALP_PLAN.PSPP_STATUS_PLANUNG <> 1
           )
       END as StartDate,
+      CASE
+        WHEN OuterTemp.PSP_TYP_HERKUNFT = 0 THEN
+          (
+            SELECT COUNT(DISTINCT CAST(PSPP_DATUM_START AS DATE))
+            FROM tPPS_SKKALP_PLAN
+            WHERE tPPS_SKKALP_PLAN.PSPP_IDPSKP = OuterTemp.ID
+              AND tPPS_SKKALP_PLAN.PSPP_STATUS_PLANUNG <> 1
+          )
+        ELSE
+          (
+            SELECT COUNT(DISTINCT CAST(PSPP_DATUM_START AS DATE))
+            FROM tPPS_SKKALP_PLAN
+            WHERE tPPS_SKKALP_PLAN.PSPP_IDSKKP = OuterTemp.ID
+              AND tPPS_SKKALP_PLAN.PSPP_STATUS_PLANUNG <> 1
+          )
+      END as PlannedDays,
+      (
+        SELECT COUNT(DISTINCT CAST(zbw.ZBUBW_DATUM_ZEIT_START AS DATE))
+        FROM [D4].[dbo].[tZE_BUCH] zb
+        LEFT JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbw ON zbw.ZBUBW_IDZBU = zb.ID
+        WHERE zb.ZBU_IDPSKP = OuterTemp.ID
+          AND zbw.ZBUBW_DATUM_ZEIT_START IS NOT NULL
+          AND zbw.ZBUBW_DATUM_ZEIT_START <> '1900-01-01'
+      ) as UsedDays,
       bk.BK_BKBE_NUMMER as ContractNumber
     FROM (
       ${selectPart}
@@ -379,7 +403,7 @@ async function cacheSetupData() {
     const poolTL = await getPoolTL();
 
     console.log('Caching steps, tools, and night-run bookings in parallel...');
-    const [rows, mappingResult, toolsDetailResult, nightBookingsResult, activeProgsResult, toolLocationsResult] = await Promise.all([
+    const [rows, mappingResult, toolsDetailResult, nightBookingsResult, activeProgsResult, toolLocationsResult, histAvgDaysResult] = await Promise.all([
       fetchActiveStepsAndMaterials(poolD4),
       poolWT.request().query('SELECT ToolListNr, ToolNr FROM [WTDATA].[dbo].[ToolList] WHERE ToolNr IS NOT NULL'),
       poolWT.request().query('SELECT Nr, Design, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools]'),
@@ -393,7 +417,24 @@ async function cacheSetupData() {
         GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
       `),
       poolTL.request().query('SELECT Machine, ProgramName FROM MachineToProgram WHERE ProgramName IS NOT NULL'),
-      poolTL.request().query('SELECT mtp.Machine, ptt.ToolName FROM ProgramToTool ptt INNER JOIN MachineToProgram mtp ON ptt.MachineToProgramId = mtp.Id WHERE ptt.ToolName IS NOT NULL')
+      poolTL.request().query('SELECT mtp.Machine, ptt.ToolName FROM ProgramToTool ptt INNER JOIN MachineToProgram mtp ON ptt.MachineToProgramId = mtp.Id WHERE ptt.ToolName IS NOT NULL'),
+      poolD4.request().query(`
+        SELECT 
+          b.BP_IDAR as ArticleId,
+          p.PSP_POSITION_NUMMER as StepPos,
+          AVG(CAST(StepDays.UsedDays AS FLOAT)) as AvgHistoricalDays
+        FROM [D4].[dbo].[tPPS_SKKALP] p
+        JOIN [D4].[dbo].[tPPS_SKKALK] k ON p.PSP_IDPSKKK = k.ID
+        JOIN [D4].[dbo].[tbe_Belp] b ON k.PSK_IDBEBP = b.ID
+        CROSS APPLY (
+          SELECT COUNT(DISTINCT CAST(zbw.ZBUBW_DATUM_ZEIT_START AS DATE)) as UsedDays
+          FROM [D4].[dbo].[tZE_BUCH] zb
+          JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbw ON zbw.ZBUBW_IDZBU = zb.ID
+          WHERE zb.ZBU_IDPSKP = p.ID AND zbw.ZBUBW_DATUM_ZEIT_START > '1900-01-01'
+        ) StepDays
+        WHERE StepDays.UsedDays > 0
+        GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
+      `)
     ]);
 
     let fixtureLocationsResult = { recordset: [] };
@@ -463,6 +504,15 @@ async function cacheSetupData() {
       }
     });
 
+    const histAvgDaysMap = {};
+    if (histAvgDaysResult && histAvgDaysResult.recordset) {
+      histAvgDaysResult.recordset.forEach(row => {
+        if (row.ArticleId && row.StepPos && row.AvgHistoricalDays > 0) {
+          histAvgDaysMap[row.ArticleId + '_' + row.StepPos] = Math.round(row.AvgHistoricalDays);
+        }
+      });
+    }
+
     // Group steps by OrderId to resolve predecessors correctly within each order
     const ordersMap = {};
     rows.forEach(row => {
@@ -471,6 +521,15 @@ async function cacheSetupData() {
       }
       row.isNightRunCapable = nightSteps.has(row.ArticleId + '-' + row.StepPos);
       
+      row.OrderPlanDays = row.PlannedDays || 1;
+      const histAvgDays = histAvgDaysMap[row.ArticleId + '_' + row.StepPos];
+      if (histAvgDays && histAvgDays > 0) {
+        row.PlannedDays = histAvgDays;
+        row.HistAvgDays = histAvgDays;
+      } else {
+        row.HistAvgDays = row.OrderPlanDays;
+      }
+
       row.originalSetupTime = row.SetupTime || 0;
       row.originalProdTime = row.ProdTime || 0;
       
@@ -3509,6 +3568,10 @@ app.get('/api/planning', async (req, res) => {
             masterMatchedType: s.masterMatchedType || null,
             masterMatchedScore: s.masterMatchedScore || null,
             color: s.color,
+            PlannedDays: s.PlannedDays || 1,
+            HistAvgDays: s.HistAvgDays || s.PlannedDays || 1,
+            OrderPlanDays: s.OrderPlanDays || 1,
+            UsedDays: s.UsedDays || 0,
             fixture: s.fixture || extractFixture(s.StepDesc),
             fixtureLocation: s.fixtureLocation || (s.fixture ? (fixtureLocationMap[s.fixture.trim().toLowerCase()] || extractLagerortFromDesc(s.StepDesc)) : null),
             fixtureLocationFromDb: s.fixtureLocationFromDb !== undefined ? s.fixtureLocationFromDb : (s.fixture ? !!fixtureLocationMap[s.fixture.trim().toLowerCase()] : false),
@@ -5276,6 +5339,17 @@ const sslKeyPath = path.join(certPath, 'server.key');
 const sslCertPath = path.join(certPath, 'server.crt');
 const rootCaPath = path.join(certPath, 'rootCA.crt');
 
+// Start HTTP Server on main PORT (5000)
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`HTTP Server running on http://0.0.0.0:${PORT}`);
+  warmupAllCaches();
+  setInterval(() => {
+    console.log('Running periodic background cache update...');
+    warmupAllCaches();
+  }, 5 * 60 * 1000);
+});
+
+// Also start HTTPS Server on port 5001 if SSL certificates are present
 if (fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
   const sslOptions = {
     key: fs.readFileSync(sslKeyPath),
@@ -5284,21 +5358,8 @@ if (fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
     requestCert: false
   };
 
-  https.createServer(sslOptions, app).listen(PORT, '0.0.0.0', () => {
-    console.log(`HTTPS Server running on https://0.0.0.0:${PORT}`);
-    warmupAllCaches();
-    setInterval(() => {
-      console.log('Running periodic background cache update...');
-      warmupAllCaches();
-    }, 5 * 60 * 1000);
-  });
-} else {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-    warmupAllCaches();
-    setInterval(() => {
-      console.log('Running periodic background cache update...');
-      warmupAllCaches();
-    }, 5 * 60 * 1000);
+  const httpsPort = process.env.HTTPS_PORT || 5001;
+  https.createServer(sslOptions, app).listen(httpsPort, '0.0.0.0', () => {
+    console.log(`HTTPS Server running on https://0.0.0.0:${httpsPort}`);
   });
 }
