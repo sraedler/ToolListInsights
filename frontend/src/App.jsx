@@ -48,7 +48,7 @@ import {
   ResponsiveContainer 
 } from 'recharts';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
+const API_BASE = import.meta.env.VITE_API_BASE || (window.location.protocol === 'https:' ? 'https://localhost:5000/api' : 'http://localhost:5001/api');
 
 function formatMinutes(mins) {
   if (mins < 0 || mins === undefined || mins === null) return '0m';
@@ -88,7 +88,7 @@ export default function App() {
     progress: 'Verbindung zum Analyse-Server wird hergestellt...',
     cachedItems: { toolLists: false, dashboard: false, standardization: false, demand: false, setup: false }
   });
-  const [activeTab, setActiveTab] = useState(isDocker ? 'planning' : 'overview');
+  const [activeTab, setActiveTab] = useState('planning');
   const [summary, setSummary] = useState(null);
 
   // Helper to format date as YYYY-MM-DD with offset in days from today
@@ -301,64 +301,6 @@ export default function App() {
           </div>
           
           <nav className="nav-links">
-            {!isDocker && (
-              <>
-                <div 
-                  className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('overview')}
-                  title={sidebarCollapsed ? "Übersicht" : undefined}
-                >
-                  <LayoutDashboard size={18} style={{ flexShrink: 0 }} />
-                  {!sidebarCollapsed && <span>Übersicht</span>}
-                </div>
-                
-                <div 
-                  className={`nav-item ${activeTab === 'explorer' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('explorer')}
-                  title={sidebarCollapsed ? "ERP Explorer" : undefined}
-                >
-                  <Database size={18} style={{ flexShrink: 0 }} />
-                  {!sidebarCollapsed && <span>ERP Explorer</span>}
-                </div>
-                
-                <div 
-                  className={`nav-item ${activeTab === 'standardization' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('standardization')}
-                  title={sidebarCollapsed ? "Standardisierung" : undefined}
-                >
-                  <Wrench size={18} style={{ flexShrink: 0 }} />
-                  {!sidebarCollapsed && <span>Standardisierung</span>}
-                </div>
-                
-                <div 
-                  className={`nav-item ${activeTab === 'demand' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('demand')}
-                  title={sidebarCollapsed ? "Bedarfsanalyse" : undefined}
-                >
-                  <CalendarRange size={18} style={{ flexShrink: 0 }} />
-                  {!sidebarCollapsed && <span>Bedarfsanalyse</span>}
-                </div>
-                
-                <div 
-                  className={`nav-item ${activeTab === 'simulation' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('simulation')}
-                  title={sidebarCollapsed ? "Rüstoptimierung" : undefined}
-                >
-                  <Sliders size={18} style={{ flexShrink: 0 }} />
-                  {!sidebarCollapsed && <span>Rüstoptimierung</span>}
-                </div>
-                
-                <div 
-                  className={`nav-item ${activeTab === 'machines' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('machines')}
-                  title={sidebarCollapsed ? "Maschinenanalyse" : undefined}
-                >
-                  <Server size={18} style={{ flexShrink: 0 }} />
-                  {!sidebarCollapsed && <span>Maschinenanalyse</span>}
-                </div>
-              </>
-            )}
-
             <div 
               className={`nav-item ${activeTab === 'planning' ? 'active' : ''}`}
               onClick={() => setActiveTab('planning')}
@@ -369,12 +311,12 @@ export default function App() {
             </div>
 
             <div 
-              className={`nav-item ${activeTab === 'planning_machine_list' ? 'active' : ''}`}
-              onClick={() => setActiveTab('planning_machine_list')}
-              title={sidebarCollapsed ? "Planung Maschinen Liste" : undefined}
+              className={`nav-item ${activeTab === 'planning_conflict' ? 'active' : ''}`}
+              onClick={() => setActiveTab('planning_conflict')}
+              title={sidebarCollapsed ? "Planung Maschinen Konflikt" : undefined}
             >
-              <Layers size={18} style={{ flexShrink: 0 }} />
-              {!sidebarCollapsed && <span>Planung Maschinen Liste</span>}
+              <AlertTriangle size={18} style={{ flexShrink: 0, color: activeTab === 'planning_conflict' ? '#f59e0b' : undefined }} />
+              {!sidebarCollapsed && <span>Planung Maschinen Konflikt</span>}
             </div>
 
             <div 
@@ -436,14 +378,8 @@ export default function App() {
         <header className="top-bar">
           <div className="top-bar-title">
             <h2>
-              {activeTab === 'overview' && 'Dashboard-Übersicht'}
-              {activeTab === 'explorer' && 'ERP & WinTool Daten-Drilldown'}
-              {activeTab === 'standardization' && 'Werkzeug-Standardisierungs-Analyse'}
-              {activeTab === 'demand' && 'Phasenbezogener Werkzeugbedarf'}
-              {activeTab === 'simulation' && 'Rüstzeit-Optimierungs-Simulator'}
-              {activeTab === 'machines' && 'Maschinen-Werkzeugbedarf'}
               {activeTab === 'planning' && 'Kanban-Maschinenbelegungsplanung'}
-              {activeTab === 'planning_machine_list' && 'Sequentielle Maschinenplanung Liste'}
+              {activeTab === 'planning_conflict' && 'Engpass- & Konfliktplanung (KV-Status Gelb & Rot)'}
               {activeTab === 'planning_tools' && 'Werkzeugrüst-Planung'}
               {activeTab === 'planning_deburring' && 'Kanban-Belegungsplanung Entgraten/Montieren'}
               {activeTab === 'time_evaluation' && 'Zeitauswertung: Soll vs. Ist Maschinenzeiten'}
@@ -526,14 +462,8 @@ export default function App() {
         </header>
 
         <div className="content-body">
-          {activeTab === 'overview' && <OverviewTab summary={summary} loading={!summary} onRefresh={() => fetchSummary(globalStartDate, globalEndDate)} />}
-          {activeTab === 'explorer' && <ExplorerTab startDate={globalStartDate} endDate={globalEndDate} />}
-          {activeTab === 'standardization' && <StandardizationTab />}
-          {activeTab === 'demand' && <DemandTab startDate={globalStartDate} endDate={globalEndDate} />}
-          {activeTab === 'simulation' && <SimulationTab startDate={globalStartDate} endDate={globalEndDate} />}
-          {activeTab === 'machines' && <MachinesTab startDate={globalStartDate} endDate={globalEndDate} />}
           {activeTab === 'planning' && <PlanningTab mode="machining" />}
-          {activeTab === 'planning_machine_list' && <PlanningTab mode="machining" isListMode={true} />}
+          {activeTab === 'planning_conflict' && <PlanningTab mode="machining" isConflictMode={true} />}
           {activeTab === 'planning_tools' && <PlanningTab mode="tools" />}
           {activeTab === 'planning_deburring' && <PlanningTab mode="deburring" />}
           {activeTab === 'time_evaluation' && (
@@ -6505,7 +6435,7 @@ function ToolsPlanningView({
 }
 
 // 7. Planning Tab (Kanban Board for next 5 working days)
-function PlanningTab({ mode = 'machining', isListMode = false }) {
+function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = false }) {
   const isDocker = import.meta.env.VITE_API_BASE === '/api' || window.location.port === '2005';
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -6840,6 +6770,9 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
         : 1.5 + ((fixtureWeight - 50) / 50) * 8.5
       ).toFixed(2);
       let url = `${API_BASE}/planning?optimize=${optimize}&optimizeNightRun=${optimizeNightRun}&algo=${algo}&optimizeFixture=${optimizeFixture}&fixtureWeight=${calculatedWeight}&allowLookahead=${allowLookahead}&daysCount=${daysCount}`;
+      if (isConflictMode) {
+        url += `&isConflictMode=true`;
+      }
       if (startDate) {
         url += `&startDate=${startDate}`;
       }
@@ -7443,48 +7376,33 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                   Sortiert nach Werkzeugüberschneidung. Die Nachtlauf-Optimierung erkennt historische Nachtlauf-Kompatibilität und priorisiert diese entsprechend.
                 </span>
 
-                {optimize && !isDocker && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.35rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.75rem', borderRadius: '10px', width: 'fit-content', border: '1px solid rgba(255,255,255,0.05)' }}>
-                    <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Algorithmus:</span>
-                    <div style={{ display: 'flex', gap: '0.35rem' }}>
-                      <button
-                        onClick={() => setAlgo('greedy')}
-                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'greedy' ? '#3b82f6' : 'rgba(255,255,255,0.03)', border: algo === 'greedy' ? '1px solid #3b82f6' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                      >
-                        Greedy (NN)
-                      </button>
-                      <button
-                        onClick={() => setAlgo('hybrid')}
-                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'hybrid' ? '#ec4899' : 'rgba(255,255,255,0.03)', border: algo === 'hybrid' ? '1px solid #ec4899' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                      >
-                        Hybrid (Greedy+GA+RL)
-                      </button>
-                      <button
-                        onClick={() => setAlgo('ga')}
-                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'ga' ? '#10b981' : 'rgba(255,255,255,0.03)', border: algo === 'ga' ? '1px solid #10b981' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                      >
-                        Genetisch (GA)
-                      </button>
-                      <button
-                        onClick={() => setAlgo('rl')}
-                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'rl' ? '#06b6d4' : 'rgba(255,255,255,0.03)', border: algo === 'rl' ? '1px solid #06b6d4' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                      >
-                        Lernen (RL)
-                      </button>
-                      <button
-                        onClick={() => setAlgo('mip')}
-                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: algo === 'mip' ? '#a855f7' : 'rgba(255,255,255,0.03)', border: algo === 'mip' ? '1px solid #a855f7' : '1px solid var(--border-dim)', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
-                      >
-                        Exakt (MIP)
-                      </button>
-                    </div>
-                  </div>
-                )}
+
               </div>
             )}
           </div>
         )}
       </div>
+
+      {/* Conflict Mode Info Banner */}
+      {isConflictMode && (
+        <div style={{
+          background: 'rgba(245, 158, 11, 0.1)',
+          border: '1px solid rgba(245, 158, 11, 0.3)',
+          borderRadius: '10px',
+          padding: '0.65rem 1rem',
+          marginBottom: '1rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          color: '#fbbf24',
+          fontSize: '0.8rem'
+        }}>
+          <AlertTriangle size={20} style={{ flexShrink: 0 }} />
+          <div>
+            <strong>Konfliktansicht aktiv (KV-Status Filter):</strong> Ausgeblendet sind alle direkt abarbeitbaren (grünen) Aufträge. Dargestellt werden ausschließlich Aufträge mit 🟡 <strong>GELB</strong> (wartet auf Vorgänger) und 🔴 <strong>ROT</strong> (Vorgänger ungeplant / noch nicht gestartet).
+          </div>
+        </div>
+      )}
 
         {/* Machine Tabs */}
         <div className="machine-pills">
@@ -7506,93 +7424,7 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
         </div>
       
 
-      {/* Optimization Savings Banner */}
-      {(() => {
-        const activeSavings = (() => {
-          if (!data || !data.savings) return null;
-          if (selectedMachine === 'All') {
-            return data.savings.total;
-          } else {
-            return (data.savings.machines && data.savings.machines[selectedMachine]) || null;
-          }
-        })();
 
-        if (!activeSavings) return null;
-
-        const algoLabel = algo === 'ga' ? 'Genetischer Algorithmus (GA)' : algo === 'rl' ? 'Reinforcement Learning (RL)' : algo === 'hybrid' ? 'Hybrid (Greedy + GA + RL)' : algo === 'mip' ? 'Exakter Solver (MIP)' : 'Greedy Nearest Neighbor';
-        const scopeLabel = selectedMachine === 'All' ? 'alle Maschinen' : `Maschine ${selectedMachine}`;
-
-        return (
-          <div className="savings-card" style={{
-            background: 'radial-gradient(100% 100% at 0% 0%, rgba(16, 185, 129, 0.06) 0%, rgba(8, 12, 20, 0.4) 100%)',
-            border: '1px solid rgba(16, 185, 129, 0.2)',
-            borderRadius: '10px',
-            padding: '0.45rem 1rem',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            boxShadow: '0 4px 20px 0 rgba(0, 0, 0, 0.1)',
-            marginBottom: '0.2rem',
-            animation: 'slide-in 0.3s ease-out'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <div style={{
-                background: 'rgba(16, 185, 129, 0.15)',
-                border: '1px solid rgba(16, 185, 129, 0.3)',
-                color: '#34d399',
-                width: '32px',
-                height: '32px',
-                borderRadius: '8px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}>
-                <TrendingDown size={18} />
-              </div>
-              <div>
-                <h4 style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 700, margin: 0 }}>
-                  Effizienzgewinn durch Rüstoptimierung ({algoLabel})
-                </h4>
-                <p style={{ color: '#64748b', fontSize: '0.72rem', margin: 0 }}>
-                  Gerechneter Optimierungs-Erfolg für <strong>{scopeLabel}</strong> über den gesamten Planungszeitraum.
-                </p>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '1.25rem' }}>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Eingesparte Rüstzeit</div>
-                <div style={{ fontSize: '1.15rem', color: '#10b981', fontWeight: 800 }}>
-                  {formatMinutes(activeSavings.savedMinutes)}
-                </div>
-              </div>
-              {activeSavings.originalSetupTime > 0 && (
-                <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '1.25rem' }}>
-                  <div style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstzeit-Ersparnis</div>
-                  <div style={{ fontSize: '1.15rem', color: '#10b981', fontWeight: 800 }}>
-                    -{activeSavings.originalSetupTime ? Math.round((activeSavings.savedMinutes / activeSavings.originalSetupTime) * 100) : 0}%
-                  </div>
-                  <div style={{ fontSize: '0.65rem', color: '#64748b' }}>von {formatMinutes(activeSavings.originalSetupTime)} gepl.</div>
-                </div>
-              )}
-              <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '1.25rem' }}>
-                <div style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstwechsel vermieden</div>
-                <div style={{ fontSize: '1.15rem', color: '#38bdf8', fontWeight: 800 }}>
-                  -{activeSavings.savedChanges} <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Tools</span>
-                </div>
-              </div>
-              <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-dim)', paddingLeft: '1.25rem' }}>
-                <div style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Rüstwechsel (Vorher / Nachher)</div>
-                <div style={{ fontSize: '0.95rem', color: '#fff', fontWeight: 700 }}>
-                  <span style={{ textDecoration: 'line-through', color: '#ef4444' }}>{activeSavings.originalChanges}</span>
-                  <span style={{ color: '#64748b', margin: '0 0.2rem' }}>→</span>
-                  <span style={{ color: '#10b981', fontWeight: 800 }}>{activeSavings.optimizedChanges}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Fullscreen Button Block (unconditionally rendered under the banner area) */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '-0.15rem', marginBottom: '0.15rem', flexShrink: 0 }}>
@@ -7859,6 +7691,16 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                 });
               }
 
+              daySteps = daySteps.filter(s => {
+                const cNr = String(s.contractNumber || '').trim();
+                const oId = String(s.orderId || '').trim();
+                return cNr !== '990001' && oId !== '990001' && !cNr.includes('990001');
+              });
+
+              if (isConflictMode) {
+                daySteps = daySteps.filter(s => s.color && s.color.toLowerCase() !== 'green');
+              }
+
               const actualSteps = daySteps.filter(s => !s.isPoolRecommendationCopy);
               const totalSetupTime = actualSteps.reduce((acc, s) => acc + (s.setupTime || 0), 0);
               const totalProdTime = actualSteps.reduce((acc, s) => acc + (s.prodTime || 0), 0);
@@ -8009,8 +7851,21 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                           </div>
 
                           {/* Secondary Badges Row */}
-                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || step.manualMachineOverride || (highlightRobotFlow && !isNonRobot)) && (
+                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || step.manualMachineOverride || isConflictMode || (highlightRobotFlow && !isNonRobot)) && (
                             <div style={{ display: 'flex', gap: '0.2rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.1rem', marginBottom: '0.15rem' }}>
+                              {isConflictMode && (
+                                <span className="badge" style={{
+                                  background: step.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.25)' : 'rgba(245, 158, 11, 0.25)',
+                                  border: `1px solid ${step.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.5)' : 'rgba(245, 158, 11, 0.5)'}`,
+                                  color: step.color?.toLowerCase() === 'red' ? '#f87171' : '#fbbf24',
+                                  fontSize: '0.58rem',
+                                  padding: '0.05rem 0.3rem',
+                                  borderRadius: '3px',
+                                  fontWeight: 700
+                                }}>
+                                  KV: {step.color?.toUpperCase() || 'KONFLIKT'}
+                                </span>
+                              )}
                               {highlightRobotFlow && !isNonRobot && (
                                 <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700 }}>
                                   🤖 FLOW
@@ -8044,98 +7899,149 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                             </div>
                           )}
 
-                        {/* Order Description */}
-                        <div className="card-desc" title={step.orderDesc} style={{ fontSize: '0.75rem', fontWeight: 500, color: '#e2e8f0', margin: '0.25rem 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {step.orderDesc}
-                        </div>
+                          {/* Order Description */}
+                          <div className="card-desc" title={step.orderDesc} style={{ fontSize: '0.75rem', fontWeight: 500, color: '#e2e8f0', margin: '0.25rem 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {step.orderDesc}
+                          </div>
 
-                        {/* Collapsed Compact Summary Row */}
-                        {!expandedCards[step.stepId] ? (
+                          {/* Collapsed Compact Summary Row */}
+                          {!expandedCards[step.stepId] ? (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.4rem', fontSize: '0.68rem', color: '#64748b' }}>
-                            {/* Row 1: Time / Execution Progress */}
-                            <div>
-                              {isListMode ? (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', width: '100%', background: 'var(--bg-main)', padding: '0.6rem', borderRadius: '8px', border: '1px solid var(--border-dim)' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div style={{ display: 'flex', gap: '1.25rem' }}>
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
-                                        <span style={{ fontSize: '0.6rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Soll</span>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{sollTime}m</span>
+                            {isConflictMode ? (
+                              <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.4rem',
+                                width: '100%',
+                                background: 'rgba(15, 23, 42, 0.75)',
+                                padding: '0.55rem',
+                                borderRadius: '8px',
+                                border: `1px solid ${step.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.4)' : 'rgba(245, 158, 11, 0.4)'}`
+                              }}>
+                                {/* Prominent display of WHERE the order is stuck */}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                  <span style={{ fontSize: '0.6rem', color: step.color?.toLowerCase() === 'red' ? '#f87171' : '#fbbf24', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em' }}>
+                                    🛑 Auftrag stockt bei Vorgänger-Schritt:
+                                  </span>
+                                  <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#ffffff', background: 'rgba(255,255,255,0.06)', padding: '0.25rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                                    {(() => {
+                                      let desc = (step.predStepDesc || 'Vorgänger-Arbeitsschritt').replace(/\r/g, '').split('\n')[0].trim();
+                                      if (/fräsen|fräs/i.test(desc)) {
+                                        const m = desc.match(/fräsen\s+([A-Za-z0-9_\-\/]+)/i);
+                                        if (m && m[1] && m[1].trim()) return m[1].trim();
+                                      }
+                                      return desc;
+                                    })()}
+                                  </span>
+                                </div>
+
+                                {/* Status Badge */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.1rem' }}>
+                                  {step.color?.toLowerCase() === 'red' ? (
+                                    <span style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.45)', color: '#f87171', padding: '0.18rem 0.45rem', borderRadius: '4px', fontSize: '0.64rem', fontWeight: 700 }}>
+                                      🔴 ROT: Vorgänger noch ungeplant / nicht gestartet
+                                    </span>
+                                  ) : (
+                                    <span style={{ background: 'rgba(245, 158, 11, 0.2)', border: '1px solid rgba(245, 158, 11, 0.45)', color: '#fbbf24', padding: '0.18rem 0.45rem', borderRadius: '4px', fontSize: '0.64rem', fontWeight: 700 }}>
+                                      🟡 GELB: Vorgänger läuft aktuell (noch nicht beendet)
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Blocked Step Info */}
+                                <div style={{ fontSize: '0.64rem', color: '#94a3b8', marginTop: '0.15rem', display: 'flex', alignItems: 'center', gap: '0.3rem', borderTop: '1px dotted rgba(255,255,255,0.1)', paddingTop: '0.25rem' }}>
+                                  <span>⏳ Blockierter Folgeschritt (diese Spalte):</span>
+                                  <strong style={{ color: '#cbd5e1' }}>{step.stepPos ? `Pos ${step.stepPos}: ` : ''}{step.stepDesc || 'Geplanter Schritt'}</strong>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                {/* Row 1: Time / Execution Progress */}
+                                <div>
+                                  {isListMode ? (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', width: '100%', background: 'var(--bg-main)', padding: '0.6rem', borderRadius: '8px', border: '1px solid var(--border-dim)' }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div style={{ display: 'flex', gap: '1.25rem' }}>
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                            <span style={{ fontSize: '0.6rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Soll</span>
+                                            <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{sollTime}m</span>
+                                          </div>
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                            <span style={{ fontSize: '0.6rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ist</span>
+                                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: step.isExecuting ? '#10b981' : 'inherit' }}>{istTime}m</span>
+                                          </div>
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                            <span style={{ fontSize: '0.6rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rest</span>
+                                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#38bdf8' }}>{restTime}m</span>
+                                          </div>
+                                        </div>
+                                        {step.fixture && (
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', textAlign: 'right', borderLeft: '1px solid rgba(128,128,128,0.2)', paddingLeft: '1rem', marginLeft: '0.5rem' }}>
+                                            <span style={{ fontSize: '0.6rem', color: '#c084fc', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Spannmittel</span>
+                                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#e9d5ff', maxWidth: '140px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={step.fixture}>{step.fixture}</span>
+                                          </div>
+                                        )}
                                       </div>
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
-                                        <span style={{ fontSize: '0.6rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ist</span>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: step.isExecuting ? '#10b981' : 'inherit' }}>{istTime}m</span>
-                                      </div>
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
-                                        <span style={{ fontSize: '0.6rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rest</span>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#38bdf8' }}>{restTime}m</span>
-                                      </div>
+                                      {step.isExecuting && (
+                                        <div style={{ height: '5px', background: 'rgba(128, 128, 128, 0.15)', borderRadius: '3px', width: '100%', overflow: 'hidden' }}>
+                                          <div style={{ 
+                                            width: `${Math.min(100, (istTime / Math.max(1, sollTime)) * 100)}%`, 
+                                            height: '100%', 
+                                            background: istTime > sollTime ? '#ef4444' : '#10b981', 
+                                            borderRadius: '3px' 
+                                          }} />
+                                        </div>
+                                      )}
                                     </div>
-                                    {step.fixture && (
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', textAlign: 'right', borderLeft: '1px solid rgba(128,128,128,0.2)', paddingLeft: '1rem', marginLeft: '0.5rem' }}>
-                                        <span style={{ fontSize: '0.6rem', color: '#c084fc', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Spannmittel</span>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#e9d5ff', maxWidth: '140px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={step.fixture}>{step.fixture}</span>
+                                  ) : step.isExecuting ? (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', width: '100%' }} title={`Ist: ${istTime}m / Soll: ${sollTime}m (Rest: ${restTime}m)`}>
+                                      <span style={{ fontSize: '0.7rem', color: '#94a3b8', display: 'inline-flex', alignItems: 'center' }}>
+                                        ⏱
+                                      </span>
+                                      <span style={{ fontSize: '0.62rem', color: istTime > sollTime ? '#ef4444' : '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                        {Math.round((istTime / Math.max(1, sollTime)) * 100)}%
+                                      </span>
+                                      <div style={{ height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', flexGrow: 1, overflow: 'hidden' }}>
+                                        <div style={{ 
+                                          width: `${Math.min(100, (istTime / Math.max(1, sollTime)) * 100)}%`, 
+                                          height: '100%', 
+                                          background: istTime > sollTime ? '#ef4444' : '#10b981', 
+                                          borderRadius: '2px' 
+                                        }} />
                                       </div>
-                                    )}
-                                  </div>
-                                  {step.isExecuting && (
-                                    <div style={{ height: '5px', background: 'rgba(128, 128, 128, 0.15)', borderRadius: '3px', width: '100%', overflow: 'hidden' }}>
-                                      <div style={{ 
-                                        width: `${Math.min(100, (istTime / Math.max(1, sollTime)) * 100)}%`, 
-                                        height: '100%', 
-                                        background: istTime > sollTime ? '#ef4444' : '#10b981', 
-                                        borderRadius: '3px' 
-                                      }} />
+                                      <span style={{ fontSize: '0.62rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                                        Rest: {restTime}m
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.15rem' }}>⏱ {Math.round(step.setupTime)}m / {Math.round(step.prodTime)}m</span>
                                     </div>
                                   )}
                                 </div>
-                              ) : step.isExecuting ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', width: '100%' }} title={`Ist: ${istTime}m / Soll: ${sollTime}m (Rest: ${restTime}m)`}>
+
+                                {/* Row 1b: Durchlaufzeit Progress Bar */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', width: '100%', marginTop: '0.2rem' }} title={`Durchlaufzeit: ${usedDays} von ${plannedDays} Tage (X = ${usedDays} Arbeitstage im Auftrag, Y = ${plannedDays} Tage hist. Ø für diesen Artikel & Arbeitsschritt)`}>
                                   <span style={{ fontSize: '0.7rem', color: '#94a3b8', display: 'inline-flex', alignItems: 'center' }}>
-                                    ⏱
+                                    📅
                                   </span>
-                                  <span style={{ fontSize: '0.62rem', color: istTime > sollTime ? '#ef4444' : '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                                    {Math.round((istTime / Math.max(1, sollTime)) * 100)}%
+                                  <span style={{ fontSize: '0.62rem', color: usedDays > plannedDays ? '#ef4444' : '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                    {daysPct}%
                                   </span>
                                   <div style={{ height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', flexGrow: 1, overflow: 'hidden' }}>
                                     <div style={{ 
-                                      width: `${Math.min(100, (istTime / Math.max(1, sollTime)) * 100)}%`, 
+                                      width: `${Math.min(100, daysPct)}%`, 
                                       height: '100%', 
-                                      background: istTime > sollTime ? '#ef4444' : '#10b981', 
+                                      background: usedDays > plannedDays ? '#ef4444' : '#10b981', 
                                       borderRadius: '2px' 
                                     }} />
                                   </div>
                                   <span style={{ fontSize: '0.62rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
-                                    Rest: {restTime}m
+                                    {usedDays}/{plannedDays}d
                                   </span>
                                 </div>
-                              ) : (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.15rem' }}>⏱ {Math.round(step.setupTime)}m / {Math.round(step.prodTime)}m</span>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Row 1b: Durchlaufzeit Progress Bar */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', width: '100%', marginTop: '0.2rem' }} title={`Durchlaufzeit: ${usedDays} von ${plannedDays} Tage (X = ${usedDays} Arbeitstage im Auftrag, Y = ${plannedDays} Tage hist. Ø für diesen Artikel & Arbeitsschritt)`}>
-                              <span style={{ fontSize: '0.7rem', color: '#94a3b8', display: 'inline-flex', alignItems: 'center' }}>
-                                📅
-                              </span>
-                              <span style={{ fontSize: '0.62rem', color: usedDays > plannedDays ? '#ef4444' : '#10b981', fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                                {daysPct}%
-                              </span>
-                              <div style={{ height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', flexGrow: 1, overflow: 'hidden' }}>
-                                <div style={{ 
-                                  width: `${Math.min(100, daysPct)}%`, 
-                                  height: '100%', 
-                                  background: usedDays > plannedDays ? '#ef4444' : '#10b981', 
-                                  borderRadius: '2px' 
-                                }} />
-                              </div>
-                              <span style={{ fontSize: '0.62rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
-                                {usedDays}/{plannedDays}d
-                              </span>
-                            </div>
+                              </>
+                            )}
 
                             {/* Row 2: Status Indicators & Details button */}
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingTop: '0.2rem', borderTop: '1px solid rgba(255,255,255,0.02)' }}>
@@ -8301,25 +8207,35 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
             {machines.map(mName => {
               const weeklyLoadTools = [];
               const weeklyUnloadTools = [];
+              const machineConflictSteps = [];
+
               days.forEach(day => {
-                const daySteps = board[mName]?.[day] || [];
-                daySteps.forEach(s => {
-                  if (s.loadTools) {
-                    s.loadTools.forEach(t => {
-                      if (!weeklyLoadTools.some(x => x.nr === t.nr)) {
-                        weeklyLoadTools.push(t);
-                      }
-                    });
-                  }
-                  if (s.unloadTools) {
-                    s.unloadTools.forEach(t => {
-                      if (!weeklyUnloadTools.some(x => x.nr === t.nr)) {
-                        weeklyUnloadTools.push(t);
-                      }
-                    });
-                  }
-                });
+                let daySteps = board[mName]?.[day] || [];
+                if (isConflictMode) {
+                  daySteps = daySteps.filter(s => s.color && s.color.toLowerCase() !== 'green');
+                  machineConflictSteps.push(...daySteps);
+                } else {
+                  daySteps.forEach(s => {
+                    if (s.loadTools) {
+                      s.loadTools.forEach(t => {
+                        if (!weeklyLoadTools.some(x => x.nr === t.nr)) {
+                          weeklyLoadTools.push(t);
+                        }
+                      });
+                    }
+                    if (s.unloadTools) {
+                      s.unloadTools.forEach(t => {
+                        if (!weeklyUnloadTools.some(x => x.nr === t.nr)) {
+                          weeklyUnloadTools.push(t);
+                        }
+                      });
+                    }
+                  });
+                }
               });
+
+              const machineRedCount = machineConflictSteps.filter(s => s.color?.toLowerCase() === 'red').length;
+              const machineYellowCount = machineConflictSteps.filter(s => s.color?.toLowerCase() === 'yellow').length;
 
               return (
                 <div key={mName} className="grid-row content-row" style={{ gridTemplateColumns: `180px repeat(${days.length}, 1fr)` }}>
@@ -8327,37 +8243,55 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                     <div className="machine-title">{mName}</div>
                     <div className="machine-click-hint">Kanban-Ansicht</div>
 
-                    {(weeklyLoadTools.length > 0 || weeklyUnloadTools.length > 0) && (
-                      <div 
-                        className="weekly-summary-box"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setWeeklyToolsModal({
-                            machineName: mName,
-                            loadTools: weeklyLoadTools,
-                            unloadTools: weeklyUnloadTools
-                          });
-                        }}
-                      >
-                        <div className="weekly-summary-title">
-                          <span>Wochen-Rüsten:</span>
+                    {isConflictMode ? (
+                      <div style={{ marginTop: '0.35rem', background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(245,158,11,0.25)', padding: '0.3rem 0.5rem', borderRadius: '6px' }}>
+                        <div style={{ fontSize: '0.62rem', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.15rem' }}>
+                          Konflikte ({machineConflictSteps.length}):
                         </div>
-                        <div className="weekly-summary-counts">
-                          <span className="weekly-summary-rein">+{weeklyLoadTools.length} rein</span>
-                          <span className="weekly-summary-raus">-{weeklyUnloadTools.length} raus</span>
+                        <div style={{ display: 'flex', gap: '0.4rem', fontSize: '0.68rem', fontWeight: 700 }}>
+                          <span style={{ color: '#f87171' }}>🔴 {machineRedCount} Rot</span>
+                          <span style={{ color: '#fbbf24' }}>🟡 {machineYellowCount} Gelb</span>
                         </div>
-                        <span className="weekly-summary-link">Details anzeigen</span>
                       </div>
+                    ) : (
+                      (weeklyLoadTools.length > 0 || weeklyUnloadTools.length > 0) && (
+                        <div 
+                          className="weekly-summary-box"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setWeeklyToolsModal({
+                              machineName: mName,
+                              loadTools: weeklyLoadTools,
+                              unloadTools: weeklyUnloadTools
+                            });
+                          }}
+                        >
+                          <div className="weekly-summary-title">
+                            <span>Wochen-Rüsten:</span>
+                          </div>
+                          <div className="weekly-summary-counts">
+                            <span className="weekly-summary-rein">+{weeklyLoadTools.length} rein</span>
+                            <span className="weekly-summary-raus">-{weeklyUnloadTools.length} raus</span>
+                          </div>
+                          <span className="weekly-summary-link">Details anzeigen</span>
+                        </div>
+                      )
                     )}
                   </div>
                 
                 {days.map(day => {
-                  const daySteps = board[mName]?.[day] || [];
-                  const totalSetupTime = daySteps.reduce((acc, s) => acc + s.setupTime, 0);
-                  const totalProdTime = daySteps.reduce((acc, s) => acc + s.prodTime, 0);
+                  let daySteps = board[mName]?.[day] || [];
+                  if (isConflictMode) {
+                    daySteps = daySteps.filter(s => s.color && s.color.toLowerCase() !== 'green');
+                  }
+                  const totalSetupTime = daySteps.reduce((acc, s) => acc + (s.setupTime || 0), 0);
+                  const totalProdTime = daySteps.reduce((acc, s) => acc + (s.prodTime || 0), 0);
                   const totalWorkloadTime = totalSetupTime + totalProdTime;
-                  const totalChanges = daySteps.reduce((acc, s) => acc + s.missesCount, 0);
+                  const totalChanges = daySteps.reduce((acc, s) => acc + (s.missesCount || 0), 0);
                   const nightRunsCount = daySteps.filter(s => s.isNightRunCapable).length;
+
+                  const redStepsCount = daySteps.filter(s => s.color?.toLowerCase() === 'red').length;
+                  const yellowStepsCount = daySteps.filter(s => s.color?.toLowerCase() === 'yellow').length;
 
                   const dayCapacity = capacities[mName]?.[day];
                   const loadPercentage = dayCapacity ? Math.min(100, Math.round((totalWorkloadTime / dayCapacity) * 100)) : 0;
@@ -8371,7 +8305,87 @@ function PlanningTab({ mode = 'machining', isListMode = false }) {
                         <span className="swimlane-cell-day-date">{formatDate(day)}</span>
                       </div>
                       {daySteps.length === 0 ? (
-                        <div className="grid-empty">Keine Belegung</div>
+                        <div className="grid-empty">
+                          {isConflictMode ? '✓ Keine Konflikte' : 'Keine Belegung'}
+                        </div>
+                      ) : isConflictMode ? (
+                        <div className="grid-summary-card" style={{ border: '1px solid rgba(245, 158, 11, 0.3)', background: 'rgba(15, 23, 42, 0.7)', padding: '0.45rem' }}>
+                          <div className="summary-qty" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                            <span style={{ color: '#fbbf24', fontWeight: 700, fontSize: '0.72rem' }}>{daySteps.length} Konflikte</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.35rem', fontSize: '0.62rem', fontWeight: 700 }}>
+                            <span style={{ color: '#f87171', background: 'rgba(239, 68, 68, 0.15)', padding: '0.08rem 0.3rem', borderRadius: '3px', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                              🔴 {redStepsCount} Rot
+                            </span>
+                            <span style={{ color: '#fbbf24', background: 'rgba(245, 158, 11, 0.15)', padding: '0.08rem 0.3rem', borderRadius: '3px', border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+                              🟡 {yellowStepsCount} Gelb
+                            </span>
+                          </div>
+                          <div className="grid-steps-preview" style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                            {daySteps.slice(0, 4).map((s, idx) => {
+                              const orderNr = s.contractNumber || (s.orderId ? `Auftrag ${s.orderId}` : '');
+                              const partName = (s.orderDesc || s.articleId || 'Bauteil').split('\n')[0].trim();
+                              let pDesc = (s.predStepDesc || 'Vorgänger-Schritt').replace(/\r/g, '').split('\n')[0].trim();
+                              if (/fräsen|fräs/i.test(pDesc)) {
+                                const m = pDesc.match(/fräsen\s+([A-Za-z0-9_\-\/]+)/i);
+                                if (m && m[1] && m[1].trim()) pDesc = m[1].trim();
+                              }
+                              const blockingStep = pDesc;
+
+                              return (
+                                <div 
+                                  key={`${s.stepId}-${idx}`} 
+                                  className="preview-item" 
+                                  style={{
+                                    fontSize: '0.62rem',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.15rem',
+                                    padding: '0.35rem 0.45rem',
+                                    borderRadius: '6px',
+                                    background: s.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                                    border: `1px solid ${s.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+                                  }}
+                                  title={`Auftrag: ${orderNr}\nBauteil: ${partName}\nStockt bei: ${blockingStep}\nFolgeschritt: Pos ${s.stepPos} ${s.stepDesc}`}
+                                >
+                                  {/* Row 1: Order Nr + KV Badge */}
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 700 }}>
+                                    <span style={{ color: '#38bdf8', fontSize: '0.65rem' }}>
+                                      📋 {orderNr}
+                                    </span>
+                                    <span style={{
+                                      fontSize: '0.58rem',
+                                      padding: '0.05rem 0.25rem',
+                                      borderRadius: '3px',
+                                      background: s.color?.toLowerCase() === 'red' ? 'rgba(239,68,68,0.25)' : 'rgba(245,158,11,0.25)',
+                                      color: s.color?.toLowerCase() === 'red' ? '#f87171' : '#fbbf24'
+                                    }}>
+                                      {s.color?.toLowerCase() === 'red' ? '🔴 ROT' : '🟡 GELB'}
+                                    </span>
+                                  </div>
+
+                                  {/* Row 2: Bauteilname / Artikel */}
+                                  <div style={{ color: '#e2e8f0', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.64rem' }}>
+                                    {partName}
+                                  </div>
+
+                                  {/* Row 3: Stockender Vorgänger-Schritt (welcher Arbeitsschritt blockiert) */}
+                                  <div style={{ color: s.color?.toLowerCase() === 'red' ? '#fca5a5' : '#fcd34d', fontSize: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.05rem' }}>
+                                    <span>🛑 Stockt bei:</span>
+                                    <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                                      {blockingStep}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            {daySteps.length > 4 && (
+                              <div className="preview-more" style={{ color: '#94a3b8', fontSize: '0.6rem', fontWeight: 600, marginTop: '0.1rem', textAlign: 'center' }}>
+                                +{daySteps.length - 4} weitere Konflikte
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       ) : (
                         <div className="grid-summary-card">
                           <div className="summary-qty" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

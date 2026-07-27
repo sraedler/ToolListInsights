@@ -183,6 +183,8 @@ async function fetchActiveStepsAndMaterials(poolD4) {
     LEFT JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = OuterTemp.ID AND OuterTemp.PSP_TYP_HERKUNFT = 0
     WHERE bk.BK_BKBE_STATUS_BEARBEITUNG = 0 
       AND bk.BK_BKBE_TYP_BELEG = 2
+      AND LTRIM(RTRIM(ISNULL(bk.BK_BKBE_NUMMER, ''))) <> '990001'
+      AND ISNULL(OuterTemp.IDBEBP, 0) <> 990001
   `;
 
   console.log('Executing database query for active steps/materials...');
@@ -431,7 +433,7 @@ async function cacheSetupData() {
           SELECT COUNT(DISTINCT CAST(zbw.ZBUBW_DATUM_ZEIT_START AS DATE)) as UsedDays
           FROM [D4].[dbo].[tZE_BUCH] zb
           JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbw ON zbw.ZBUBW_IDZBU = zb.ID
-          WHERE zb.ZBU_IDPSKP = p.ID AND zbw.ZBUBW_DATUM_ZEIT_START > '1900-01-01'
+          WHERE zb.ZBU_IDPSKP = p.ID AND zbw.ZBUBW_DATUM_ZEIT_START >= DATEADD(year, -2, GETDATE())
         ) StepDays
         WHERE StepDays.UsedDays > 0
         GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
@@ -509,7 +511,8 @@ async function cacheSetupData() {
     if (histAvgDaysResult && histAvgDaysResult.recordset) {
       histAvgDaysResult.recordset.forEach(row => {
         if (row.ArticleId && row.StepPos && row.AvgHistoricalDays > 0) {
-          histAvgDaysMap[row.ArticleId + '_' + row.StepPos] = Math.round(row.AvgHistoricalDays);
+          const cleanPos = String(row.StepPos).trim();
+          histAvgDaysMap[row.ArticleId + '_' + cleanPos] = Math.round(row.AvgHistoricalDays);
         }
       });
     }
@@ -517,13 +520,17 @@ async function cacheSetupData() {
     // Group steps by OrderId to resolve predecessors correctly within each order
     const ordersMap = {};
     rows.forEach(row => {
+      const cNrStr = String(row.ContractNumber || '').trim();
+      const oIdStr = String(row.OrderId || '').trim();
+      if (cNrStr === '990001' || oIdStr === '990001' || cNrStr.includes('990001')) return;
       if (row.BookedMachineId) {
         row.MachineId = row.BookedMachineId;
       }
-      row.isNightRunCapable = nightSteps.has(row.ArticleId + '-' + row.StepPos);
+      const cleanStepPos = String(row.StepPos || '').trim();
+      row.isNightRunCapable = nightSteps.has(row.ArticleId + '-' + cleanStepPos);
       
       row.OrderPlanDays = row.PlannedDays || 1;
-      const histAvgDays = histAvgDaysMap[row.ArticleId + '_' + row.StepPos];
+      const histAvgDays = histAvgDaysMap[row.ArticleId + '_' + cleanStepPos];
       if (histAvgDays && histAvgDays > 0) {
         row.PlannedDays = histAvgDays;
         row.HistAvgDays = histAvgDays;
@@ -559,50 +566,52 @@ async function cacheSetupData() {
         return posA - posB;
       });
 
-      // Find the highest step position that is completed (SPKO === 4) or in progress (SPKO === 2)
-      let maxCompletedPos = -1;
+      // Determine real status SPKO for each step in order
       stepsGroup.forEach(s => {
-        if (s.SPKO === 4 || s.SPKO === 2) {
-          const posVal = parseInt(s.StepPos || 0, 10);
-          if (posVal > maxCompletedPos) {
-            maxCompletedPos = posVal;
-          }
+        if (s.StatusProduction === 4 || s.SPKO === 4) {
+          s.realSPKO = 4; // Completed
+        } else if (s.BookedTime && s.BookedTime > 0) {
+          s.realSPKO = 2; // In Progress
+        } else {
+          s.realSPKO = 1; // Open / Planned
         }
       });
 
-      // Auto-complete preceding steps if they are Fracht (shipping) or Fremdleistung (external processing)
-      if (maxCompletedPos !== -1) {
-        stepsGroup.forEach(s => {
-          const posVal = parseInt(s.StepPos || 0, 10);
-          if (posVal < maxCompletedPos) {
-            const isFremd = s.StepTyp === 1;
-            const desc = (s.StepDesc || '').toLowerCase();
-            const isFracht = desc.includes('fracht') || 
-                             desc.includes('versand') || 
-                             desc.includes('transport') ||
-                             desc.includes('spedition') ||
-                             desc.includes('extern') ||
-                             desc.includes('fremdleistung');
-            if ((isFremd || isFracht) && s.SPKO !== 4) {
-              s.SPKO = 4;
+      stepsGroup.forEach((step, idx) => {
+        // If self is in progress (2), status is Green (can continue running)
+        if (step.realSPKO === 2) {
+          step.color = 'Green';
+          return;
+        }
+
+        const normPos = (p) => {
+          if (p === null || p === undefined) return null;
+          const cleaned = String(p).replace(/[^0-9]/g, '');
+          return cleaned ? parseInt(cleaned, 10) : null;
+        };
+
+        const formatShortDesc = (desc) => {
+          if (!desc) return '';
+          let rawDesc = desc.replace(/\r/g, '').split('\n')[0].trim();
+          if (/fräsen|fräs/i.test(rawDesc)) {
+            const mMatch = rawDesc.match(/fräsen\s+([A-Za-z0-9_\-\/]+)/i);
+            if (mMatch && mMatch[1] && mMatch[1].trim()) {
+              return mMatch[1].trim();
             }
           }
-        });
-      }
+          if (rawDesc.toLowerCase().includes('material')) return 'Material';
+          if (rawDesc.toLowerCase().includes('fremdleistung')) return 'Fremdleistung';
+          return rawDesc;
+        };
 
-      stepsGroup.forEach((step, idx) => {
-        // Rule: If self is 2, status is Green (In-Progress can always be run/continued)
-        if (step.SPKO === 2) {
-          step.color = 'Green';
-          return;
-        }
-        // If completed, keep it Green (already run)
-        if (step.SPKO === 4) {
-          step.color = 'Green';
-          return;
-        }
+        const isInspectionStep = (s) => {
+          if (!s) return false;
+          if (s.StepTyp === 3) return true;
+          const d = (s.StepDesc || '').toLowerCase();
+          return d.includes('eingangsprüfung') || d.includes('prüf') || d.includes('abnahme') || d.includes('kontrolle');
+        };
 
-        // Predecessor check
+        // Direct predecessor check (strict status evaluation against direct predecessor step)
         let predPos = null;
         let vgRaw = (step.VORGAENGER || '').trim();
         if (vgRaw.startsWith('|')) {
@@ -610,32 +619,80 @@ async function cacheSetupData() {
         }
 
         if (vgRaw === '') {
-          // "Wenn Vorgänger ist leer, dann nehme nächst kleinere PSP_Position_Nummer als eigene PSP_Position_Nummer als Vorgänger."
           if (idx > 0) {
             predPos = stepsGroup[idx - 1].StepPos;
           }
         } else {
-          // "Ist Vorgänger eine Zahl, nehme diese Zahl als PSP_Position_nummer Vorgänger."
           predPos = vgRaw;
         }
 
         let predStep = null;
         if (predPos !== null) {
-          predStep = stepsGroup.find(s => s.StepPos === predPos);
+          const targetNorm = normPos(predPos);
+          predStep = stepsGroup.find(s => normPos(s.StepPos) === targetNorm && s.StepId !== step.StepId);
+        }
+
+        if (predStep) {
+          step.predStepPos = predStep.StepPos;
+          step.predSPKO = predStep.realSPKO;
+
+          // If direct predecessor is an Eingangsprüfung or inspection step, check what comes before it (Material, Fremdleistung, etc.)
+          if (isInspectionStep(predStep)) {
+            let prevStep = null;
+            let pVgRaw = (predStep.VORGAENGER || '').trim();
+            if (pVgRaw.startsWith('|')) pVgRaw = pVgRaw.replace('|', '').trim();
+            
+            let pNormPos = null;
+            if (pVgRaw === '') {
+              const pIdx = stepsGroup.findIndex(s => s.StepId === predStep.StepId);
+              if (pIdx > 0) pNormPos = normPos(stepsGroup[pIdx - 1].StepPos);
+            } else {
+              pNormPos = normPos(pVgRaw);
+            }
+
+            if (pNormPos !== null) {
+              prevStep = stepsGroup.find(s => normPos(s.StepPos) === pNormPos && s.StepId !== predStep.StepId);
+            }
+
+            if (prevStep) {
+              const pDesc = (prevStep.StepDesc || '').toLowerCase();
+              if (prevStep.StepTyp === 2 || prevStep.TypHerkunft === 2 || pDesc.includes('material') || parseInt(prevStep.StepPos, 10) <= 20) {
+                step.predStepDesc = 'Material';
+                step.predStepPos = prevStep.StepPos;
+              } else if (prevStep.StepTyp === 1 || prevStep.TypHerkunft === 1 || pDesc.includes('fremdleistung') || pDesc.includes('härten') || pDesc.includes('anodisier') || pDesc.includes('galvanik')) {
+                step.predStepDesc = 'Fremdleistung';
+                step.predStepPos = prevStep.StepPos;
+              } else {
+                step.predStepDesc = formatShortDesc(prevStep.StepDesc);
+                step.predStepPos = prevStep.StepPos;
+              }
+            } else {
+              // Direct predecessor is Eingangsprüfung at start of order (e.g. Pos 020) -> Material arrival
+              step.predStepDesc = 'Material';
+            }
+          } else {
+            // Direct predecessor is not an inspection step (e.g. Sägen, Brother, Material, Fremdleistung)
+            const dDesc = (predStep.StepDesc || '').toLowerCase();
+            if (predStep.StepTyp === 2 || predStep.TypHerkunft === 2 || dDesc.includes('material')) {
+              step.predStepDesc = 'Material';
+            } else if (predStep.StepTyp === 1 || predStep.TypHerkunft === 1 || dDesc.includes('fremdleistung') || dDesc.includes('härten') || dDesc.includes('anodisier')) {
+              step.predStepDesc = formatShortDesc(predStep.StepDesc) || 'Fremdleistung';
+            } else {
+              step.predStepDesc = formatShortDesc(predStep.StepDesc);
+            }
+          }
         }
 
         if (!predStep) {
-          // No predecessor -> Can start, so Green
+          // First step or no predecessor -> Can start, so Green
           step.color = 'Green';
         } else {
-          // "Ist der Vorgäner = 2, dann hast du selbst den Status Gelb."
-          // "Ist der Vorgänger = 1, dann bist du Rot."
-          if (predStep.SPKO === 2) {
-            step.color = 'Yellow';
-          } else if (predStep.SPKO === 1) {
-            step.color = 'Red';
-          } else if (predStep.SPKO === 4) {
-            step.color = 'Green';
+          if (predStep.realSPKO === 2) {
+            step.color = 'Yellow'; // Predecessor is running
+          } else if (predStep.realSPKO === 1 || predStep.realSPKO === 0) {
+            step.color = 'Red'; // Predecessor is open / not started
+          } else if (predStep.realSPKO === 4) {
+            step.color = 'Green'; // Predecessor is completed
           } else {
             step.color = 'Green';
           }
@@ -646,6 +703,9 @@ async function cacheSetupData() {
     // Keep only normal work steps (StepTyp = 0) with valid setup time (> 0) and assigned to a machine or pool
     // Also filter out completed steps (SPKO === 4)
     const steps = rows.filter(step => {
+      const cNrStr = String(step.ContractNumber || '').trim();
+      const oIdStr = String(step.OrderId || '').trim();
+      if (cNrStr === '990001' || oIdStr === '990001' || cNrStr.includes('990001')) return false;
       if (step.SPKO === 4) return false;
       if (step.TypHerkunft !== 0 || step.StepTyp !== 0) return false;
 
@@ -1014,6 +1074,32 @@ app.post('/api/clear-cache', async (req, res) => {
 // Get DB Mode Endpoint
 app.get('/api/db-mode', (req, res) => {
   res.json({ mode: getDbMode() });
+});
+
+app.get('/api/debug-kv-steps', (req, res) => {
+  if (!cachedSetupData || !cachedSetupData.steps) {
+    return res.json({ error: 'Cache not ready' });
+  }
+  const steps = cachedSetupData.steps;
+  const colorCounts = {};
+  const sampleSteps = steps.slice(0, 30).map(s => ({
+    stepId: s.StepId,
+    orderId: s.OrderId,
+    stepPos: s.StepPos,
+    stepDesc: s.StepDesc,
+    spko: s.SPKO,
+    bookedTime: s.BookedTime,
+    realSPKO: s.realSPKO,
+    vorgaenger: s.VORGAENGER,
+    predStepPos: s.predStepPos,
+    predSPKO: s.predSPKO,
+    color: s.color
+  }));
+  steps.forEach(s => {
+    const c = s.color || 'undefined';
+    colorCounts[c] = (colorCounts[c] || 0) + 1;
+  });
+  res.json({ totalSteps: steps.length, colorCounts, sampleSteps });
 });
 
 // Switch DB Mode Endpoint
@@ -2990,7 +3076,7 @@ app.get('/api/planning', async (req, res) => {
       await cacheSetupData();
     }
 
-    const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount } = req.query;
+    const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount, includeNonGreen, isConflictMode } = req.query;
     const parsedDaysCount = daysCount !== undefined ? parseInt(daysCount, 10) : 5;
     const shouldOptimizeFixture = optimizeFixture === 'true';
     const parsedFixtureWeight = fixtureWeight !== undefined ? parseFloat(fixtureWeight) : 1.5;
@@ -3067,8 +3153,9 @@ app.get('/api/planning', async (req, res) => {
       });
     });
 
-    // Filter to green steps only
-    const greenSteps = steps.filter(step => step.color === 'Green');
+    // Filter steps to schedule (include non-green steps if requested via includeNonGreen / isConflictMode)
+    const shouldIncludeNonGreen = includeNonGreen === 'true' || isConflictMode === 'true';
+    const greenSteps = shouldIncludeNonGreen ? steps : steps.filter(step => step.color === 'Green');
 
     // Find default start date (always today to avoid planning in the past by default!)
     const defaultStartStr = new Date().toISOString().substring(0, 10);
@@ -3178,8 +3265,7 @@ app.get('/api/planning', async (req, res) => {
 
     // Populate steps
     greenSteps.forEach(step => {
-      const stepDate = step.StartDate || step.DeliveryDate;
-      if (!stepDate) return;
+      const stepDate = step.StartDate || step.DeliveryDate || planningDays[0];
       let stepDateStr = new Date(stepDate).toISOString().substring(0, 10);
 
       // Backlog catch-up: if step is in the past, reschedule to the first day of planning!
@@ -3195,8 +3281,9 @@ app.get('/api/planning', async (req, res) => {
       // Check if it belongs to a deburring/assembly/laser virtual column
       const virtualM = getVirtualMachineForStep(step);
       if (virtualM) {
-        if (planningDays.includes(stepDateStr)) {
-          board[virtualM][stepDateStr].push(step);
+        const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : (shouldIncludeNonGreen ? planningDays[0] : null);
+        if (targetDay) {
+          board[virtualM][targetDay].push(step);
         } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
           if (!lookaheadCandidates[virtualM].some(x => x.StepId === step.StepId)) {
             lookaheadCandidates[virtualM].push(step);
@@ -3239,8 +3326,9 @@ app.get('/api/planning', async (req, res) => {
       }
 
       if (targetM) {
-        if (planningDays.includes(stepDateStr)) {
-          board[targetM][stepDateStr].push(step);
+        const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : (shouldIncludeNonGreen ? planningDays[0] : null);
+        if (targetDay) {
+          board[targetM][targetDay].push(step);
         } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
           if (!lookaheadCandidates[targetM].some(x => x.StepId === step.StepId)) {
             lookaheadCandidates[targetM].push(step);
@@ -3249,8 +3337,9 @@ app.get('/api/planning', async (req, res) => {
       } else {
         // Pool assignment step - save to list to distribute dynamically after baseline load
         if (step.MachinePoolId === 13 || step.MachinePoolId === 9 || step.MachinePoolId === 12) {
-          if (planningDays.includes(stepDateStr)) {
-            poolSteps.push({ step, dateStr: stepDateStr });
+          const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : (shouldIncludeNonGreen ? planningDays[0] : null);
+          if (targetDay) {
+            poolSteps.push({ step, dateStr: targetDay });
           } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
             if (step.MachinePoolId === 13) {
               if (!lookaheadCandidates['C40'].some(x => x.StepId === step.StepId)) lookaheadCandidates['C40'].push(step);
@@ -3569,6 +3658,9 @@ app.get('/api/planning', async (req, res) => {
             masterMatchedType: s.masterMatchedType || null,
             masterMatchedScore: s.masterMatchedScore || null,
             color: s.color,
+            predStepPos: s.predStepPos || null,
+            predStepDesc: s.predStepDesc || null,
+            predSPKO: s.predSPKO !== undefined ? s.predSPKO : null,
             PlannedDays: s.PlannedDays || 1,
             HistAvgDays: s.HistAvgDays || s.PlannedDays || 1,
             OrderPlanDays: s.OrderPlanDays || 1,
