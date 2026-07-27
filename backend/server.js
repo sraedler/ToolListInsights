@@ -133,6 +133,23 @@ async function fetchActiveStepsAndMaterials(poolD4) {
             ELSE au.BK_BKBE_AU_LI_DATUM
           END
       END as DeliveryDate,
+      (
+        SELECT TOP 1 
+          CASE 
+            WHEN ekp.BP_LI_DATUM IS NOT NULL THEN ekp.BP_LI_DATUM 
+            ELSE ekb.BK_BKBE_BE_LI_DATUM 
+          END
+        FROM [D4].[dbo].[tSK_KALP_BEST] kb
+        INNER JOIN [D4].[dbo].[tEK_BELP] ekp ON ekp.ID = kb.KP_BEST_IDEKBP_BEST
+        INNER JOIN [D4].[dbo].[tEK_BELK] ek ON ek.ID = ekp.BP_IDEKBK AND ek.BK_TYP_BELEG = 2
+        INNER JOIN [D4].[dbo].[tEK_BELK_BKBE] ekbk ON ekbk.BK_BKBE_IDEKBK = ekp.BP_IDEKBK
+        INNER JOIN [D4].[dbo].[tEK_BELK_BKBE_BE] ekb ON ekb.BK_BKBE_BE_IDBKEK = ekbk.ID
+        WHERE kb.KP_BEST_IDSKKP = OuterTemp.ID
+          AND kb.KP_BEST_TYP <> 2
+          AND ekp.BP_POSITION_TYP = 0
+          AND (ekp.BP_LI_DATUM IS NOT NULL OR ekb.BK_BKBE_BE_LI_DATUM IS NOT NULL)
+        ORDER BY kb.ID DESC
+      ) as PoDeliveryDate,
       CASE
         WHEN OuterTemp.PSP_TYP_HERKUNFT = 0 THEN
           (
@@ -654,13 +671,28 @@ async function cacheSetupData() {
               prevStep = stepsGroup.find(s => normPos(s.StepPos) === pNormPos && s.StepId !== predStep.StepId);
             }
 
+            const formatDeDate = (dVal) => {
+              if (!dVal) return '';
+              const d = new Date(dVal);
+              if (isNaN(d.getTime())) return '';
+              const day = String(d.getDate()).padStart(2, '0');
+              const month = String(d.getMonth() + 1).padStart(2, '0');
+              const year = d.getFullYear();
+              return `${day}.${month}.${year}`;
+            };
+
+            let poDate = (prevStep && prevStep.PoDeliveryDate) || (predStep && predStep.PoDeliveryDate) || step.PoDeliveryDate;
+            let dateVal = poDate || (prevStep && prevStep.StartDate) || (predStep && predStep.StartDate) || (prevStep && prevStep.DeliveryDate) || (predStep && predStep.DeliveryDate) || step.StartDate || step.DeliveryDate;
+            let dateStr = formatDeDate(dateVal);
+            let dateSuffix = dateStr ? ` (${dateStr})` : '';
+
             if (prevStep) {
               const pDesc = (prevStep.StepDesc || '').toLowerCase();
               if (prevStep.StepTyp === 2 || prevStep.TypHerkunft === 2 || pDesc.includes('material') || parseInt(prevStep.StepPos, 10) <= 20) {
-                step.predStepDesc = 'Material';
+                step.predStepDesc = 'Material' + dateSuffix;
                 step.predStepPos = prevStep.StepPos;
               } else if (prevStep.StepTyp === 1 || prevStep.TypHerkunft === 1 || pDesc.includes('fremdleistung') || pDesc.includes('härten') || pDesc.includes('anodisier') || pDesc.includes('galvanik')) {
-                step.predStepDesc = 'Fremdleistung';
+                step.predStepDesc = 'Fremdleistung' + dateSuffix;
                 step.predStepPos = prevStep.StepPos;
               } else {
                 step.predStepDesc = formatShortDesc(prevStep.StepDesc);
@@ -668,15 +700,30 @@ async function cacheSetupData() {
               }
             } else {
               // Direct predecessor is Eingangsprüfung at start of order (e.g. Pos 020) -> Material arrival
-              step.predStepDesc = 'Material';
+              step.predStepDesc = 'Material' + dateSuffix;
             }
           } else {
+            const formatDeDate = (dVal) => {
+              if (!dVal) return '';
+              const d = new Date(dVal);
+              if (isNaN(d.getTime())) return '';
+              const day = String(d.getDate()).padStart(2, '0');
+              const month = String(d.getMonth() + 1).padStart(2, '0');
+              const year = d.getFullYear();
+              return `${day}.${month}.${year}`;
+            };
+            let poDate = predStep ? predStep.PoDeliveryDate : step.PoDeliveryDate;
+            let dateVal = poDate || (predStep ? (predStep.StartDate || predStep.DeliveryDate) : (step.StartDate || step.DeliveryDate));
+            let dateStr = formatDeDate(dateVal);
+            let dateSuffix = dateStr ? ` (${dateStr})` : '';
+
             // Direct predecessor is not an inspection step (e.g. Sägen, Brother, Material, Fremdleistung)
             const dDesc = (predStep.StepDesc || '').toLowerCase();
             if (predStep.StepTyp === 2 || predStep.TypHerkunft === 2 || dDesc.includes('material')) {
-              step.predStepDesc = 'Material';
+              step.predStepDesc = 'Material' + dateSuffix;
             } else if (predStep.StepTyp === 1 || predStep.TypHerkunft === 1 || dDesc.includes('fremdleistung') || dDesc.includes('härten') || dDesc.includes('anodisier')) {
-              step.predStepDesc = formatShortDesc(predStep.StepDesc) || 'Fremdleistung';
+              const shortDesc = formatShortDesc(predStep.StepDesc) || 'Fremdleistung';
+              step.predStepDesc = shortDesc + dateSuffix;
             } else {
               step.predStepDesc = formatShortDesc(predStep.StepDesc);
             }
