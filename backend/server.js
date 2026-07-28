@@ -3124,7 +3124,8 @@ app.get('/api/planning', async (req, res) => {
     }
 
     const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount, includeNonGreen, isConflictMode } = req.query;
-    const parsedDaysCount = daysCount !== undefined ? parseInt(daysCount, 10) : 5;
+    const isConflict = isConflictMode === 'true';
+    const parsedDaysCount = daysCount !== undefined ? parseInt(daysCount, 10) : (isConflict ? 4 : 5);
     const shouldOptimizeFixture = optimizeFixture === 'true';
     const parsedFixtureWeight = fixtureWeight !== undefined ? parseFloat(fixtureWeight) : 1.5;
     let { steps, listToToolsMap, toolsDetails, listToMachineMap, fixtureLocationMap, toolMachineMap } = cachedSetupData;
@@ -3423,8 +3424,8 @@ app.get('/api/planning', async (req, res) => {
       }
     });
 
-    const shouldOptimize = optimize !== 'false';
-    const optimizeNightRun = req.query.optimizeNightRun !== 'false';
+    const shouldOptimize = isConflict ? false : (optimize !== 'false');
+    const optimizeNightRun = isConflict ? false : (req.query.optimizeNightRun !== 'false');
     const activeAlgo = shouldOptimize ? (algo || 'greedy') : 'none';
 
     const finalBoard = {};
@@ -3550,7 +3551,14 @@ app.get('/api/planning', async (req, res) => {
             const dayRemaining = currentLimit - totalLoad;
             const stepLimit = (s.MaxProdTag && s.MaxProdTag > 0) ? s.MaxProdTag : currentLimit;
 
-            if (stepDuration <= stepLimit && stepDuration <= dayRemaining) {
+            if (isConflict) {
+              if (totalLoad + stepDuration <= currentLimit || dayScheduled.length === 0) {
+                dayScheduled.push(s);
+                totalLoad += stepDuration;
+              } else {
+                nextDayOverflow.push(s);
+              }
+            } else if (stepDuration <= stepLimit && stepDuration <= dayRemaining) {
               dayScheduled.push(s);
               totalLoad += stepDuration;
             } else {
@@ -3681,10 +3689,11 @@ app.get('/api/planning', async (req, res) => {
             originalProdTime: s.originalProdTime !== undefined ? s.originalProdTime : (s.ProdTime || 0),
             isNightRunCapable: s.isNightRunCapable || false,
             isConflict: isConflict || false,
+            targetDayTag: 'T' + Math.min(4, Math.max(1, planningDays.indexOf(day) + 1)),
             originalStartDate: originalDateStr || null,
-             isSplit: s.isSplit || false,
-             isLookahead: originalDateStr ? (originalDateStr > planningDays[planningDays.length - 1]) : false,
-             isWrongMachine: (
+            isSplit: s.isSplit || false,
+            isLookahead: originalDateStr ? (originalDateStr > planningDays[planningDays.length - 1]) : false,
+            isWrongMachine: (
                (s.StepDesc && s.StepDesc.toLowerCase().includes('c40') && s.MachineId === 4) ||
                (s.StepDesc && s.StepDesc.toLowerCase().includes('c42') && s.MachineId === 25) ||
                (s.StepDesc && s.StepDesc.toLowerCase().includes('rs2') && (s.MachineId === 5 || s.MachineId === 6))

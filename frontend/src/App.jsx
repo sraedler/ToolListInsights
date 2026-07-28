@@ -313,10 +313,10 @@ export default function App() {
             <div 
               className={`nav-item ${activeTab === 'planning_conflict' ? 'active' : ''}`}
               onClick={() => setActiveTab('planning_conflict')}
-              title={sidebarCollapsed ? "Planung Maschinen Konflikt" : undefined}
+              title={sidebarCollapsed ? "Planung Maschinen blockiert" : undefined}
             >
               <AlertTriangle size={18} style={{ flexShrink: 0, color: activeTab === 'planning_conflict' ? '#f59e0b' : undefined }} />
-              {!sidebarCollapsed && <span>Planung Maschinen Konflikt</span>}
+              {!sidebarCollapsed && <span>Planung Maschinen blockiert</span>}
             </div>
 
             <div 
@@ -379,7 +379,7 @@ export default function App() {
           <div className="top-bar-title">
             <h2>
               {activeTab === 'planning' && 'Kanban-Maschinenbelegungsplanung'}
-              {activeTab === 'planning_conflict' && 'Engpass- & Konfliktplanung (KV-Status Gelb & Rot)'}
+              {activeTab === 'planning_conflict' && 'Planung Maschinen blockiert (KV-Status Gelb & Rot)'}
               {activeTab === 'planning_tools' && 'Werkzeugrüst-Planung'}
               {activeTab === 'planning_deburring' && 'Kanban-Belegungsplanung Entgraten/Montieren'}
               {activeTab === 'time_evaluation' && 'Zeitauswertung: Soll vs. Ist Maschinenzeiten'}
@@ -6550,6 +6550,10 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
   }, [dmsSliderOpen, dmsSliderList, dmsSliderIndex, dmsSliderFixture]);
 
   const [highlightRobotFlow, setHighlightRobotFlow] = useState(false);
+  const [conflictNightRunOnly, setConflictNightRunOnly] = useState(false);
+  const [conflictSortByNightRun, setConflictSortByNightRun] = useState(false);
+  const [conflictRobotFlowOnly, setConflictRobotFlowOnly] = useState(false);
+  const [conflictSortByRobotFlow, setConflictSortByRobotFlow] = useState(false);
   const abortControllerRef = useRef(null);
 
   const cancelPlanningCalculation = () => {
@@ -6569,19 +6573,24 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
   }, []);
 
   const isFollowedByRobot = (step) => {
-    if (!step || !step.entireArbeitsplan) return false;
+    if (!step || !step.entireArbeitsplan || !Array.isArray(step.entireArbeitsplan)) return false;
     const plan = step.entireArbeitsplan;
-    const currIdx = plan.findIndex(p => p.stepPos === step.stepPos);
+    const currIdx = plan.findIndex(p => p.stepId === step.stepId || String(p.stepPos).trim() === String(step.stepPos).trim());
     if (currIdx !== -1) {
       for (let i = currIdx + 1; i < plan.length; i++) {
         const nextStep = plan[i];
-        const isMachineStep = nextStep.machineName && 
-                              !nextStep.machineName.includes('Sonstige') && 
-                              !nextStep.machineName.includes('Extern') && 
-                              !nextStep.machineName.includes('Unbekannt') &&
-                              nextStep.machineName.trim() !== '';
+        if (!nextStep) continue;
+        const mName = (nextStep.machineName || '').trim();
+        const isMachineStep = mName !== '' && 
+                              !mName.includes('Sonstige') && 
+                              !mName.includes('Extern') && 
+                              !mName.includes('Unbekannt') &&
+                              !mName.includes('Handarbeit') &&
+                              !mName.includes('Entgraten') &&
+                              !mName.includes('Montage') &&
+                              !mName.includes('Versand');
         if (isMachineStep) {
-          const nameUpper = nextStep.machineName.toUpperCase();
+          const nameUpper = mName.toUpperCase();
           return nameUpper.includes('RS2') || 
                  nameUpper.includes('ROBO') || 
                  (nameUpper.includes('C40') && !nameUpper.includes('C400')) || 
@@ -7257,76 +7266,128 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
             {mode !== 'deburring' && mode !== 'tools' && (
               <div className="control-group" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                 <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                    <input
-                      type="checkbox"
-                      checked={optimize}
-                      onChange={(e) => setOptimize(e.target.checked)}
-                      style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
-                    />
-                    <span>Rüstoptimierung aktiv</span>
-                  </label>
+                  {isConflictMode ? (
+                    <>
+                      {['Chiron', 'C400', 'Brother'].includes(selectedMachine) ? (
+                        <>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', userSelect: 'none', color: '#c084fc', fontWeight: 600, fontSize: '0.85rem' }}>
+                            <input
+                              type="checkbox"
+                              checked={conflictRobotFlowOnly}
+                              onChange={(e) => setConflictRobotFlowOnly(e.target.checked)}
+                              style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                            />
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🤖 Nur Roboter-Folgeschritt</span>
+                          </label>
 
-                  {selectedMachine !== 'Chiron' && selectedMachine !== 'C400' && selectedMachine !== 'Brother' && (
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                      <input
-                        type="checkbox"
-                        checked={optimizeNightRun}
-                        onChange={(e) => setOptimizeNightRun(e.target.checked)}
-                        style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
-                      />
-                      <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Moon size={14} /> Nachtlauf-Optimierung</span>
-                    </label>
-                  )}
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', userSelect: 'none', color: '#d8b4fe', fontWeight: 600, fontSize: '0.85rem' }}>
+                            <input
+                              type="checkbox"
+                              checked={conflictSortByRobotFlow}
+                              onChange={(e) => setConflictSortByRobotFlow(e.target.checked)}
+                              style={{ width: '16px', height: '16px', accentColor: '#c084fc' }}
+                            />
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🤖 Roboter-Folgeschritt nach oben</span>
+                          </label>
+                        </>
+                      ) : (
+                        <>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', userSelect: 'none', color: '#c084fc', fontWeight: 600, fontSize: '0.85rem' }}>
+                            <input
+                              type="checkbox"
+                              checked={conflictNightRunOnly}
+                              onChange={(e) => setConflictNightRunOnly(e.target.checked)}
+                              style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                            />
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🌙 Nur Nachtlauf anzeigen</span>
+                          </label>
 
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }} title="Erlaubt es dem Algorithmus, Aufträge der Folgewochen (bis zu 14 Tage) vorzuziehen, falls dadurch Werkzeugwechsel eingespart werden können und freie Kapazitäten vorhanden sind.">
-                    <input
-                      type="checkbox"
-                      checked={allowLookahead}
-                      onChange={(e) => setAllowLookahead(e.target.checked)}
-                      style={{ width: '16px', height: '16px', accentColor: '#f43f5e' }}
-                    />
-                    <span style={{ color: '#fda4af', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🔮 Zukünftige Aufträge vorziehen</span>
-                  </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', userSelect: 'none', color: '#d8b4fe', fontWeight: 600, fontSize: '0.85rem' }}>
+                            <input
+                              type="checkbox"
+                              checked={conflictSortByNightRun}
+                              onChange={(e) => setConflictSortByNightRun(e.target.checked)}
+                              style={{ width: '16px', height: '16px', accentColor: '#c084fc' }}
+                            />
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>⬆️ Nachtlauf nach oben sortieren</span>
+                          </label>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                        <input
+                          type="checkbox"
+                          checked={optimize}
+                          onChange={(e) => setOptimize(e.target.checked)}
+                          style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
+                        />
+                        <span>Rüstoptimierung aktiv</span>
+                      </label>
 
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                    <input
-                      type="checkbox"
-                      checked={hideExecuting}
-                      onChange={(e) => setHideExecuting(e.target.checked)}
-                      style={{ width: '16px', height: '16px', accentColor: '#10b981' }}
-                    />
-                    <span style={{ color: '#a7f3d0' }}>⚡ Laufende verblassen</span>
-                  </label>
+                      {selectedMachine !== 'Chiron' && selectedMachine !== 'C400' && selectedMachine !== 'Brother' && (
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                          <input
+                            type="checkbox"
+                            checked={optimizeNightRun}
+                            onChange={(e) => setOptimizeNightRun(e.target.checked)}
+                            style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                          />
+                          <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Moon size={14} /> Nachtlauf-Optimierung</span>
+                        </label>
+                      )}
 
-                  {['RS2_1', 'RS2_2', 'C40', 'C42'].includes(selectedMachine) && (
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                      <input
-                        type="checkbox"
-                        checked={poolOptimization}
-                        onChange={(e) => setPoolOptimization(e.target.checked)}
-                        style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
-                      />
-                      <span style={{ color: '#93c5fd' }}>🔄 Pool Optimierung</span>
-                    </label>
-                  )}
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }} title="Erlaubt es dem Algorithmus, Aufträge der Folgewochen (bis zu 14 Tage) vorzuziehen, falls dadurch Werkzeugwechsel eingespart werden können und freie Kapazitäten vorhanden sind.">
+                        <input
+                          type="checkbox"
+                          checked={allowLookahead}
+                          onChange={(e) => setAllowLookahead(e.target.checked)}
+                          style={{ width: '16px', height: '16px', accentColor: '#f43f5e' }}
+                        />
+                        <span style={{ color: '#fda4af', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>🔮 Zukünftige Aufträge vorziehen</span>
+                      </label>
 
-                  {(selectedMachine === 'Chiron' || selectedMachine === 'Brother') && (
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
-                      <input
-                        type="checkbox"
-                        checked={highlightRobotFlow}
-                        onChange={(e) => setHighlightRobotFlow(e.target.checked)}
-                        style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
-                      />
-                      <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                        🤖 Roboter-Folgeschritte
-                      </span>
-                    </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                        <input
+                          type="checkbox"
+                          checked={hideExecuting}
+                          onChange={(e) => setHideExecuting(e.target.checked)}
+                          style={{ width: '16px', height: '16px', accentColor: '#10b981' }}
+                        />
+                        <span style={{ color: '#a7f3d0' }}>⚡ Laufende verblassen</span>
+                      </label>
+
+                      {['RS2_1', 'RS2_2', 'C40', 'C42'].includes(selectedMachine) && (
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                          <input
+                            type="checkbox"
+                            checked={poolOptimization}
+                            onChange={(e) => setPoolOptimization(e.target.checked)}
+                            style={{ width: '16px', height: '16px', accentColor: '#3b82f6' }}
+                          />
+                          <span style={{ color: '#93c5fd' }}>🔄 Pool Optimierung</span>
+                        </label>
+                      )}
+
+                      {(selectedMachine === 'Chiron' || selectedMachine === 'Brother' || selectedMachine === 'C400' || selectedMachine === 'All') && (
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', color: '#fff', fontWeight: 600 }}>
+                          <input
+                            type="checkbox"
+                            checked={highlightRobotFlow}
+                            onChange={(e) => setHighlightRobotFlow(e.target.checked)}
+                            style={{ width: '16px', height: '16px', accentColor: '#a855f7' }}
+                          />
+                          <span style={{ color: '#d8b4fe', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            🤖 Roboter-Folgeschritte
+                          </span>
+                        </label>
+                      )}
+                    </>
                   )}
                 </div>
 
-                {optimize && optimizeFixture && (
+                {!isConflictMode && optimize && optimizeFixture && (
                   <div style={{
                     margin: '0.25rem 0',
                     background: 'rgba(255, 255, 255, 0.02)',
@@ -7699,6 +7760,29 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
 
               if (isConflictMode) {
                 daySteps = daySteps.filter(s => s.color && s.color.toLowerCase() !== 'green');
+                if (['Chiron', 'C400', 'Brother'].includes(selectedMachine)) {
+                  if (conflictRobotFlowOnly) {
+                    daySteps = daySteps.filter(s => isFollowedByRobot(s));
+                  }
+                  if (conflictSortByRobotFlow) {
+                    daySteps = [...daySteps].sort((a, b) => {
+                      const aRobot = isFollowedByRobot(a);
+                      const bRobot = isFollowedByRobot(b);
+                      if (aRobot === bRobot) return 0;
+                      return aRobot ? -1 : 1;
+                    });
+                  }
+                } else {
+                  if (conflictNightRunOnly) {
+                    daySteps = daySteps.filter(s => s.isNightRunCapable);
+                  }
+                  if (conflictSortByNightRun) {
+                    daySteps = [...daySteps].sort((a, b) => {
+                      if (a.isNightRunCapable === b.isNightRunCapable) return 0;
+                      return a.isNightRunCapable ? -1 : 1;
+                    });
+                  }
+                }
               }
 
               const actualSteps = daySteps.filter(s => !s.isPoolRecommendationCopy);
@@ -7768,7 +7852,9 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                     daySteps.map((step, idx) => {
                       const isHoveredGroup = hoveredStepId !== null && step.stepId === hoveredStepId;
                       const isUnhoveredGroup = hoveredStepId !== null && step.stepId !== hoveredStepId;
-                      const isNonRobot = highlightRobotFlow && (mName === 'Chiron' || mName === 'Brother') && !isFollowedByRobot(step);
+                      const isFeederMachine = mName === 'Chiron' || mName === 'Brother' || mName === 'C400';
+                      const isRobotFlowStep = highlightRobotFlow && isFeederMachine && isFollowedByRobot(step);
+                      const isNonRobot = highlightRobotFlow && isFeederMachine && !isFollowedByRobot(step);
                       const isBlurryExecuting = hideExecuting && step.isExecuting;
                       
                       const sollTime = Math.round((step.originalSetupTime ?? step.setupTime ?? 0) + (step.originalProdTime ?? step.prodTime ?? 0));
@@ -7797,10 +7883,10 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                             filter: isBlurryExecuting ? 'blur(1px) grayscale(20%)' : (isNonRobot ? 'blur(0.8px) grayscale(15%)' : 'none'),
                             border: step.isPoolRecommendationCopy 
                               ? '1.5px dashed rgba(59, 130, 246, 0.5)' 
-                              : (highlightRobotFlow && !isNonRobot ? '1.5px solid #a855f7' : undefined),
+                              : (isRobotFlowStep ? '1.5px solid #a855f7' : undefined),
                             boxShadow: step.isPoolRecommendationCopy
                               ? '0 0 12px rgba(59, 130, 246, 0.2)'
-                              : (highlightRobotFlow && !isNonRobot ? '0 0 12px rgba(168, 85, 247, 0.2)' : undefined),
+                              : (isRobotFlowStep ? '0 0 12px rgba(168, 85, 247, 0.2)' : undefined),
                             background: step.isPoolRecommendationCopy ? 'rgba(59, 130, 246, 0.03)' : undefined,
                             pointerEvents: isBlurryExecuting ? 'none' : undefined
                           }}
@@ -7836,10 +7922,15 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                 <Info size={11} style={{ color: '#64748b' }} />
                               </span>
                             </span>
-                            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexShrink: 0 }}>
+                            <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexShrink: 0 }}>
                               {step.isExecuting && (
                                 <span className="badge badge-aktiv" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.58rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700, whiteSpace: 'nowrap' }}>
                                   ⚡ AKTIV
+                                </span>
+                              )}
+                              {step.originalStartDate && (
+                                <span style={{ fontSize: '0.66rem', color: '#38bdf8', fontWeight: 600, whiteSpace: 'nowrap' }} title="Geplantes Bearbeitungsdatum nach D4 (AS)">
+                                  📅 D4: {formatDate(step.originalStartDate)}
                                 </span>
                               )}
                               {step.deliveryDate && (
@@ -7851,22 +7942,9 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                           </div>
 
                           {/* Secondary Badges Row */}
-                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || step.manualMachineOverride || isConflictMode || (highlightRobotFlow && !isNonRobot)) && (
+                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || step.manualMachineOverride || (isConflictMode && false) || isRobotFlowStep) && (
                             <div style={{ display: 'flex', gap: '0.2rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.1rem', marginBottom: '0.15rem' }}>
-                              {isConflictMode && (
-                                <span className="badge" style={{
-                                  background: step.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.25)' : 'rgba(245, 158, 11, 0.25)',
-                                  border: `1px solid ${step.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.5)' : 'rgba(245, 158, 11, 0.5)'}`,
-                                  color: step.color?.toLowerCase() === 'red' ? '#f87171' : '#fbbf24',
-                                  fontSize: '0.58rem',
-                                  padding: '0.05rem 0.3rem',
-                                  borderRadius: '3px',
-                                  fontWeight: 700
-                                }}>
-                                  KV: {step.color?.toUpperCase() || 'KONFLIKT'}
-                                </span>
-                              )}
-                              {highlightRobotFlow && !isNonRobot && (
+                              {isRobotFlowStep && (
                                 <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700 }}>
                                   🤖 FLOW
                                 </span>
@@ -7876,7 +7954,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                   🔧 {step.manualMachineOverride}
                                 </span>
                               )}
-                              {step.isSplit && (
+                              {!isConflictMode && step.isSplit && (
                                 <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px' }}>
                                   ✂ T{step.splitPart}
                                 </span>
@@ -7905,23 +7983,23 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                           </div>
 
                           {/* Collapsed Compact Summary Row */}
-                          {!expandedCards[step.stepId] ? (
+                  {!expandedCards[step.stepId] ? (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.4rem', fontSize: '0.68rem', color: '#64748b' }}>
                             {isConflictMode ? (
                               <div style={{
+                                background: step.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+                                border: `1px solid ${step.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.25)' : 'rgba(245, 158, 11, 0.25)'}`,
+                                borderRadius: '6px',
+                                padding: '0.45rem 0.55rem',
+                                marginTop: '0.2rem',
                                 display: 'flex',
                                 flexDirection: 'column',
-                                gap: '0.4rem',
-                                width: '100%',
-                                background: 'rgba(15, 23, 42, 0.75)',
-                                padding: '0.55rem',
-                                borderRadius: '8px',
-                                border: `1px solid ${step.color?.toLowerCase() === 'red' ? 'rgba(239, 68, 68, 0.4)' : 'rgba(245, 158, 11, 0.4)'}`
+                                gap: '0.35rem'
                               }}>
                                 {/* Prominent display of WHERE the order is stuck */}
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                                   <span style={{ fontSize: '0.6rem', color: step.color?.toLowerCase() === 'red' ? '#f87171' : '#fbbf24', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em' }}>
-                                    🛑 Auftrag stockt bei Vorgänger-Schritt:
+                                    🛑 Stockt in Arbeitsschritt:
                                   </span>
                                   <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#ffffff', background: 'rgba(255,255,255,0.06)', padding: '0.25rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>
                                     {(() => {
@@ -7935,23 +8013,13 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                   </span>
                                 </div>
 
-                                {/* Status Badge */}
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.1rem' }}>
-                                  {step.color?.toLowerCase() === 'red' ? (
-                                    <span style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.45)', color: '#f87171', padding: '0.18rem 0.45rem', borderRadius: '4px', fontSize: '0.64rem', fontWeight: 700 }}>
-                                      🔴 ROT: Vorgänger noch ungeplant / nicht gestartet
-                                    </span>
-                                  ) : (
-                                    <span style={{ background: 'rgba(245, 158, 11, 0.2)', border: '1px solid rgba(245, 158, 11, 0.45)', color: '#fbbf24', padding: '0.18rem 0.45rem', borderRadius: '4px', fontSize: '0.64rem', fontWeight: 700 }}>
-                                      🟡 GELB: Vorgänger läuft aktuell (noch nicht beendet)
-                                    </span>
-                                  )}
-                                </div>
-
                                 {/* Blocked Step Info */}
                                 <div style={{ fontSize: '0.64rem', color: '#94a3b8', marginTop: '0.15rem', display: 'flex', alignItems: 'center', gap: '0.3rem', borderTop: '1px dotted rgba(255,255,255,0.1)', paddingTop: '0.25rem' }}>
-                                  <span>⏳ Blockierter Folgeschritt (diese Spalte):</span>
-                                  <strong style={{ color: '#cbd5e1' }}>{step.stepPos ? `Pos ${step.stepPos}: ` : ''}{step.stepDesc || 'Geplanter Schritt'}</strong>
+                                  <span>⏳ Blockierter Folgeschritt:</span>
+                                  <strong style={{ color: '#cbd5e1' }}>
+                                    {step.stepPos ? `Pos ${step.stepPos}: ` : ''}
+                                    {typeof formatShortDesc === 'function' ? formatShortDesc(step.stepDesc) : (step.stepDesc ? step.stepDesc.split(/\r?\n/)[0].trim() : 'Geplanter Schritt')}
+                                  </strong>
                                 </div>
                               </div>
                             ) : (
@@ -8052,7 +8120,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                   <span style={{ color: '#f87171', fontWeight: 600 }} title="Keine WinTool-Liste gefunden">
                                     💀 WT fehlt
                                   </span>
-                                ) : (
+                                ) : !isConflictMode ? (
                                   <span style={{ color: '#38bdf8', fontWeight: 600 }}>
                                     🔧 Rüsten: 
                                     <span style={{ color: '#f59e0b', marginLeft: '0.2rem' }}>
@@ -8064,7 +8132,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                       </span>
                                     )}
                                   </span>
-                                )}
+                                ) : null}
                               </div>
 
                               <button
