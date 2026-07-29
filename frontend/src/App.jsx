@@ -5331,7 +5331,7 @@ function MissingDataTab() {
                                           <code style={{ color: '#a7f3d0' }}>{s.ncProgram}</code>
                                         )
                                       ) : (
-                                        <span style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600 }}>NC fehlt</span>
+                                        <span style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600 }}>NC not found</span>
                                       )}
                                     </td>
                                     <td style={{ padding: '0.5rem' }}>
@@ -8114,12 +8114,8 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                             {/* Row 2: Status Indicators & Details button */}
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingTop: '0.2rem', borderTop: '1px solid rgba(255,255,255,0.02)' }}>
                               <div>
-                                {!step.ncProgram ? (
-                                  <span style={{ color: '#ef4444', fontWeight: 600 }}>NC fehlt</span>
-                                ) : !step.matchedListNr ? (
-                                  <span style={{ color: '#f87171', fontWeight: 600 }} title="Keine WinTool-Liste gefunden">
-                                    💀 WT fehlt
-                                  </span>
+                                {!step.ncProgram || !step.matchedListNr ? (
+                                  <span style={{ color: '#ef4444', fontWeight: 600 }}>NC not found</span>
                                 ) : !isConflictMode ? (
                                   <span style={{ color: '#38bdf8', fontWeight: 600 }}>
                                     🔧 Rüsten: 
@@ -8197,13 +8193,9 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                               <div style={{ fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.25rem' }}>
                                 Rüstbedarf ({step.toolsCount} Wz. gesamt)
                               </div>
-                              {!step.ncProgram ? (
+                              {!step.ncProgram || !step.matchedListNr ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: '#ef4444', fontWeight: 600 }}>
-                                  <span>NC fehlt</span>
-                                </div>
-                              ) : !step.matchedListNr ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: '#f87171', fontWeight: 600 }}>
-                                  <span>💀 Keine WinTool-Liste gefunden</span>
+                                  <span>NC not found</span>
                                 </div>
                               ) : (
                                 <>
@@ -8859,8 +8851,8 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                   <div>
                     <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.1rem' }}>NC-Programm (Auftrag)</div>
-                    <div style={{ fontSize: '0.88rem', color: activeModalStep.ncProgram ? '#fff' : '#ef4444', fontFamily: 'monospace', fontWeight: 600 }}>
-                      {activeModalStep.ncProgram || 'NC fehlt'}
+                    <div style={{ fontSize: '0.88rem', color: (activeModalStep.ncProgram && activeModalStep.matchedListNr) ? '#fff' : '#ef4444', fontFamily: 'monospace', fontWeight: 600 }}>
+                      {(activeModalStep.ncProgram && activeModalStep.matchedListNr) ? activeModalStep.ncProgram : 'NC not found'}
                     </div>
                   </div>
                 </div>
@@ -8879,7 +8871,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                         )}
                       </div>
                     ) : (
-                      <span style={{ fontSize: '0.85rem', color: '#ef4444', fontWeight: 600 }}>💀 Keine Liste</span>
+                      <span style={{ fontSize: '0.85rem', color: '#ef4444', fontWeight: 600 }}>NC not found</span>
                     )}
                   </div>
                 </div>

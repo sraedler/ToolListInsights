@@ -802,7 +802,7 @@ async function cacheSetupData() {
         step.NCProgram = prog;
         const cacheKey = prog + '_' + (step.MachineId || 'null') + '_' + (step.MachinePoolId || 'null');
         if (matchCache[cacheKey] === undefined) {
-          const matches = findMatches(prog, cachedToolLists, 0.6);
+          const matches = findMatches(prog, cachedToolLists, 0.70);
           if (matches.length > 0) {
             const tlMachineIds = getToollistMachineId(step.MachineId, step.MachinePoolId);
             if (tlMachineIds && matches.length > 1) {

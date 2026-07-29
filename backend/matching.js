@@ -136,7 +136,7 @@ function levenshteinSimilarity(s1, s2) {
  * Finds the top matching tool lists for a given program name.
  * Looks for exact match first, then falls back to similarity.
  */
-function findMatches(progName, cachedToolLists, threshold = 0.6) {
+function findMatches(progName, cachedToolLists, threshold = 0.70) {
   if (!progName) return [];
   
   const searchName = progName.trim().toLowerCase();
@@ -169,7 +169,7 @@ function findMatches(progName, cachedToolLists, threshold = 0.6) {
                         
     const finalScore = isSubstring ? Math.max(maxScore, 0.75) : (isPurelyNumeric || isVeryShort ? 0.0 : maxScore);
     
-    if (finalScore >= threshold) {
+    if (finalScore >= (threshold || 0.70)) {
       matches.push({
         ...list,
         matchType: 'fuzzy',
