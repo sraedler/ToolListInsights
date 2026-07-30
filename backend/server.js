@@ -1111,6 +1111,8 @@ app.get('/api/status', (req, res) => {
 app.post('/api/clear-cache', async (req, res) => {
   try {
     cachedSetupData = null;
+    cacheWarmingPromise = null;
+    await cacheSetupData();
     await refreshMachineTimeEvaluationCache();
     res.json({ success: true, message: 'Cache wurde erfolgreich gelöscht und neu berechnet.' });
   } catch (err) {
@@ -1121,6 +1123,12 @@ app.post('/api/clear-cache', async (req, res) => {
 // Get DB Mode Endpoint
 app.get('/api/db-mode', (req, res) => {
   res.json({ mode: getDbMode() });
+});
+
+app.get('/api/debug-p202675788', (req, res) => {
+  if (!cachedSetupData) return res.json({ error: 'no cached setup data' });
+  const steps = cachedSetupData.steps.filter(s => String(s.ContractNumber).includes('P202675788'));
+  res.json({ count: steps.length, steps });
 });
 
 app.get('/api/debug-kv-steps', (req, res) => {
@@ -3300,13 +3308,17 @@ app.get('/api/planning', async (req, res) => {
     const poolSteps = [];
 
     const getVirtualMachineForStep = (step) => {
+      // If the step has an explicit D4 machine or machine pool assignment, it is a machining step
+      if ((step.MachineId && step.MachineId > 0) || (step.MachinePoolId && step.MachinePoolId > 0)) {
+        return null;
+      }
       const desc = (step.StepDesc || '').toLowerCase();
       if (step.MachineId === 15 || desc.includes('ur5')) return 'Montage UR5';
       if (step.MachineId === 16 || desc.includes('laser')) return 'Laser';
       if (step.MachineId === 17 || desc.includes('messmaschine') || desc.includes('zeiss') || desc.includes('kmg')) return 'Messmaschine';
       if (desc.includes('versand') || desc.includes('verpacken') || desc.includes('etikett')) return 'Versand';
       if (desc.includes('montage') || desc.includes('gewindeeinsatz') || desc.includes('zapfen brechen')) return 'Montage';
-      if (desc.includes('prüf') || desc.includes('abnahme') || desc.includes('serienprüfung') || desc.includes('stempeln')) return 'Prüfplanung';
+      if (desc.includes('eingangsprüfung') || desc.includes('ersteilabnahme') || desc.includes('serienprüfung') || desc.includes('stempeln')) return 'Prüfplanung';
       if (desc.includes('entgrat')) return 'Entgraten';
       return null;
     };
