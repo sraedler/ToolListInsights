@@ -133,18 +133,45 @@ function levenshteinSimilarity(s1, s2) {
 }
 
 /**
+ * Extracts SP (Spannlage) number from a program name string (e.g. "M2012118-02-SP2" -> 2, "SP1" -> 1).
+ */
+function extractSPNumber(str) {
+  if (!str) return null;
+  const match = String(str).match(/(?:^|[^a-z0-9])sp[-_\s]*(\d+)/i);
+  return match && match[1] ? parseInt(match[1], 10) : null;
+}
+
+/**
  * Finds the top matching tool lists for a given program name.
  * Looks for exact match first, then falls back to similarity.
+ * Enforces strict SP number matching (e.g. SP2 must never match SP1, SP3, SP4).
  */
 function findMatches(progName, cachedToolLists, threshold = 0.70) {
   if (!progName) return [];
   
   const searchName = progName.trim().toLowerCase();
+  const spProg = extractSPNumber(progName);
+
+  // Strict SP number compatibility check
+  const isSPCompatible = (list) => {
+    if (spProg === null) return true;
+    const spIdent = extractSPNumber(list.Ident);
+    const spNcp = extractSPNumber(list.NCP);
+    const spList = spIdent !== null ? spIdent : spNcp;
+    
+    // If the candidate list specifies an SP number, it MUST equal spProg
+    if (spList !== null && spList !== spProg) {
+      return false; // E.g., SP2 program cannot match SP3, SP1, SP4 list
+    }
+    return true;
+  };
   
   // 1. Check exact matches on Ident or NCP
   const exactMatches = cachedToolLists.filter(
-    list => (list.Ident || '').trim().toLowerCase() === searchName || 
-            (list.NCP || '').trim().toLowerCase() === searchName
+    list => isSPCompatible(list) && (
+      (list.Ident || '').trim().toLowerCase() === searchName || 
+      (list.NCP || '').trim().toLowerCase() === searchName
+    )
   );
   
   if (exactMatches.length > 0) {
@@ -157,6 +184,10 @@ function findMatches(progName, cachedToolLists, threshold = 0.70) {
   const isVeryShort = searchName.length <= 5;
 
   for (let list of cachedToolLists) {
+    if (!isSPCompatible(list)) {
+      continue; // Strictly reject mismatched SP numbers (e.g. SP2 vs SP3)
+    }
+
     const identScore = jaroWinklerSimilarity(progName, list.Ident || '');
     const ncpScore = jaroWinklerSimilarity(progName, list.NCP || '');
     const maxScore = Math.max(identScore, ncpScore);
@@ -184,6 +215,7 @@ function findMatches(progName, cachedToolLists, threshold = 0.70) {
 
 module.exports = {
   extractNCPrograms,
+  extractSPNumber,
   jaroWinklerSimilarity,
   levenshteinSimilarity,
   findMatches
