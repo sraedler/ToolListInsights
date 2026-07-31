@@ -358,6 +358,15 @@ export default function App() {
               <AlertTriangle size={18} style={{ color: activeTab === 'missing_data' ? '#ef4444' : '#94a3b8', flexShrink: 0 }} />
               {!sidebarCollapsed && <span style={{ color: activeTab === 'missing_data' ? '#ef4444' : '#cbd5e1' }}>Datenvollständigkeit</span>}
             </div>
+
+            <div 
+              className={`nav-item ${activeTab === 'most_used_tools' ? 'active' : ''}`}
+              onClick={() => setActiveTab('most_used_tools')}
+              title={sidebarCollapsed ? "Meistgenutzte Werkzeuge" : undefined}
+            >
+              <Wrench size={18} style={{ flexShrink: 0, color: activeTab === 'most_used_tools' ? '#38bdf8' : undefined }} />
+              {!sidebarCollapsed && <span>Meistgenutzte Werkzeuge</span>}
+            </div>
           </nav>
         </div>
 
@@ -384,6 +393,7 @@ export default function App() {
               {activeTab === 'planning_deburring' && 'Kanban-Belegungsplanung Entgraten/Montieren'}
               {activeTab === 'time_evaluation' && 'Zeitauswertung: Soll vs. Ist Maschinenzeiten'}
               {activeTab === 'missing_data' && 'Datenvollständigkeit: Fehlende NC / Vorrichtungen'}
+              {activeTab === 'most_used_tools' && 'Werkzeuganalyse: Meistgenutzte Werkzeuge (Vergangenheit & Zukunft)'}
             </h2>
           </div>
 
@@ -474,6 +484,7 @@ export default function App() {
             />
           )}
           {activeTab === 'missing_data' && <MissingDataTab />}
+          {activeTab === 'most_used_tools' && <MostUsedToolsView />}
         </div>
       </main>
     </div>
@@ -5390,6 +5401,516 @@ function MissingDataTab() {
   );
 }
 
+// 9. Most Used Tools View (Meistgenutzte Werkzeuge)
+function MostUsedToolsView() {
+  const [selectedMachine, setSelectedMachine] = useState('Brother');
+  const [pastDays, setPastDays] = useState(30);
+  const [futureDays, setFutureDays] = useState(30);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [resultData, setResultData] = useState(null);
+  const [searchFilter, setSearchFilter] = useState('');
+  const [expandedTools, setExpandedTools] = useState({});
+
+  const fetchMostUsedTools = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const url = `${API_BASE}/most-used-tools?machine=${encodeURIComponent(selectedMachine)}&pastDays=${pastDays}&futureDays=${futureDays}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`Fehler beim Laden: ${res.statusText}`);
+      }
+      const json = await res.json();
+      setResultData(json);
+    } catch (err) {
+      console.error('Error fetching most used tools:', err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMostUsedTools();
+  }, []);
+
+  const handleToggleExpand = (toolNr) => {
+    setExpandedTools(prev => ({
+      ...prev,
+      [toolNr]: !prev[toolNr]
+    }));
+  };
+
+  const machines = [
+    { label: 'Brother', value: 'Brother' },
+    { label: 'Chiron', value: 'Chiron' },
+    { label: 'C400', value: 'C400' },
+    { label: 'C40', value: 'C40' },
+    { label: 'C42', value: 'C42' },
+    { label: 'RS2-1', value: 'RS2_1' },
+    { label: 'RS2-2', value: 'RS2_2' },
+    { label: 'Alle Maschinen', value: 'All' }
+  ];
+
+  const filteredTools = (resultData?.tools || []).filter(tool => {
+    if (!searchFilter) return true;
+    const q = searchFilter.toLowerCase();
+    return (
+      String(tool.nr).toLowerCase().includes(q) ||
+      (tool.ident && tool.ident.toLowerCase().includes(q)) ||
+      (tool.desc && tool.desc.toLowerCase().includes(q)) ||
+      (tool.keyword && tool.keyword.toLowerCase().includes(q))
+    );
+  });
+
+  const maxCount = resultData?.tools?.[0]?.count || 1;
+
+  return (
+    <div style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      
+      {/* Control Header & Filters */}
+      <div style={{
+        background: 'rgba(15, 23, 42, 0.65)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
+        borderRadius: '16px',
+        padding: '1.25rem',
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '1rem'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{
+            background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(14, 165, 233, 0.2))',
+            border: '1px solid rgba(59, 130, 246, 0.4)',
+            borderRadius: '12px',
+            padding: '0.6rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <Wrench size={22} style={{ color: '#38bdf8' }} />
+          </div>
+          <div>
+            <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#f8fafc' }}>
+              Meistgenutzte Werkzeuge
+            </h3>
+            <p style={{ margin: 0, fontSize: '0.8rem', color: '#94a3b8' }}>
+              Analyse der Werkzeughäufigkeit über abgearbeitete und eingeplante Arbeitsschritte
+            </p>
+          </div>
+        </div>
+
+        {/* Filter inputs */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.85rem' }}>
+          
+          {/* Machine select */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+            <label style={{ fontSize: '0.7rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>
+              Maschine
+            </label>
+            <select
+              value={selectedMachine}
+              onChange={(e) => setSelectedMachine(e.target.value)}
+              style={{
+                background: 'rgba(30, 41, 59, 0.8)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: '8px',
+                color: '#f8fafc',
+                fontSize: '0.85rem',
+                padding: '0.45rem 0.75rem',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              {machines.map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Past days */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+            <label style={{ fontSize: '0.7rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>
+              Vergangenheit (Tage)
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="365"
+              value={pastDays}
+              onChange={(e) => setPastDays(Math.max(0, parseInt(e.target.value, 10) || 0))}
+              style={{
+                width: '100px',
+                background: 'rgba(30, 41, 59, 0.8)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: '8px',
+                color: '#f8fafc',
+                fontSize: '0.85rem',
+                padding: '0.45rem 0.75rem',
+                outline: 'none'
+              }}
+            />
+          </div>
+
+          {/* Future days */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+            <label style={{ fontSize: '0.7rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>
+              Zukunft (Tage)
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="365"
+              value={futureDays}
+              onChange={(e) => setFutureDays(Math.max(0, parseInt(e.target.value, 10) || 0))}
+              style={{
+                width: '100px',
+                background: 'rgba(30, 41, 59, 0.8)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: '8px',
+                color: '#f8fafc',
+                fontSize: '0.85rem',
+                padding: '0.45rem 0.75rem',
+                outline: 'none'
+              }}
+            />
+          </div>
+
+          {/* Load Button */}
+          <button
+            onClick={fetchMostUsedTools}
+            disabled={loading}
+            style={{
+              marginTop: '1.1rem',
+              background: 'linear-gradient(135deg, #2563eb, #0284c7)',
+              border: 'none',
+              borderRadius: '8px',
+              color: '#ffffff',
+              fontWeight: 600,
+              fontSize: '0.85rem',
+              padding: '0.5rem 1.1rem',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)',
+              opacity: loading ? 0.7 : 1
+            }}
+          >
+            <RefreshCw size={15} className={loading ? 'spin' : ''} />
+            Analyse laden
+          </button>
+        </div>
+      </div>
+
+      {/* KPI Cards */}
+      {resultData && !loading && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: '1rem'
+        }}>
+          <div style={{
+            background: 'rgba(30, 41, 59, 0.5)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: '14px',
+            padding: '1rem 1.25rem'
+          }}>
+            <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Gefundene Werkzeuge</span>
+            <h2 style={{ margin: '0.25rem 0 0 0', fontSize: '1.6rem', color: '#38bdf8', fontWeight: 700 }}>
+              {resultData.uniqueToolsCount}
+            </h2>
+          </div>
+
+          <div style={{
+            background: 'rgba(30, 41, 59, 0.5)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: '14px',
+            padding: '1rem 1.25rem'
+          }}>
+            <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Gesamt-Werkzeugeinsätze</span>
+            <h2 style={{ margin: '0.25rem 0 0 0', fontSize: '1.6rem', color: '#a855f7', fontWeight: 700 }}>
+              {resultData.totalToolUsages}
+            </h2>
+          </div>
+
+          <div style={{
+            background: 'rgba(30, 41, 59, 0.5)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: '14px',
+            padding: '1rem 1.25rem'
+          }}>
+            <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Ausgewertete Arbeitsschritte</span>
+            <h2 style={{ margin: '0.25rem 0 0 0', fontSize: '1.6rem', color: '#10b981', fontWeight: 700 }}>
+              {resultData.totalStepsEvaluated}
+            </h2>
+          </div>
+
+          <div style={{
+            background: 'rgba(30, 41, 59, 0.5)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: '14px',
+            padding: '1rem 1.25rem'
+          }}>
+            <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Top 1 Werkzeug</span>
+            <h2 style={{ margin: '0.25rem 0 0 0', fontSize: '1.1rem', color: '#f59e0b', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {resultData.tools?.[0] ? `${resultData.tools[0].ident} (${resultData.tools[0].count}x)` : 'Keine'}
+            </h2>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Search */}
+      {resultData && !loading && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+          <div style={{ position: 'relative', width: '320px' }}>
+            <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }} />
+            <input
+              type="text"
+              placeholder="Werkzeug filtern (Ident, Nr, Bezeichnung)..."
+              value={searchFilter}
+              onChange={(e) => setSearchFilter(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'rgba(30, 41, 59, 0.6)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '10px',
+                color: '#f8fafc',
+                fontSize: '0.85rem',
+                padding: '0.5rem 0.75rem 0.5rem 2.2rem',
+                outline: 'none'
+              }}
+            />
+          </div>
+          <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+            Zeige {filteredTools.length} von {resultData.uniqueToolsCount} Werkzeugen
+          </span>
+        </div>
+      )}
+
+      {/* Loading state */}
+      {loading && (
+        <div style={{ textAlign: 'center', padding: '3rem 0', color: '#94a3b8' }}>
+          <RefreshCw size={28} className="spin" style={{ marginBottom: '0.75rem', color: '#38bdf8' }} />
+          <p>Lade und analysiere Werkzeuge der Maschine {selectedMachine}...</p>
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.1)',
+          border: '1px solid rgba(239, 68, 68, 0.3)',
+          borderRadius: '12px',
+          padding: '1rem 1.25rem',
+          color: '#fca5a5',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem'
+        }}>
+          <AlertTriangle size={20} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {/* Tool List Table / Cards */}
+      {resultData && !loading && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {filteredTools.length === 0 ? (
+            <div style={{
+              background: 'rgba(30, 41, 59, 0.4)',
+              border: '1px solid var(--border-dim)',
+              borderRadius: '14px',
+              padding: '2.5rem',
+              textAlign: 'center',
+              color: '#94a3b8'
+            }}>
+              Keine Werkzeuge für den gewählten Zeitraum und Maschinenfilter gefunden.
+            </div>
+          ) : (
+            filteredTools.map((tool, index) => {
+              const isExpanded = !!expandedTools[tool.nr];
+              const pct = Math.round((tool.count / maxCount) * 100);
+
+              let rankBadge = `#${index + 1}`;
+              if (index === 0) rankBadge = '🥇 #1';
+              else if (index === 1) rankBadge = '🥈 #2';
+              else if (index === 2) rankBadge = '🥉 #3';
+
+              return (
+                <div
+                  key={tool.nr}
+                  style={{
+                    background: 'rgba(15, 23, 42, 0.55)',
+                    border: '1px solid rgba(255, 255, 255, 0.07)',
+                    borderRadius: '14px',
+                    overflow: 'hidden',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <div
+                    onClick={() => handleToggleExpand(tool.nr)}
+                    style={{
+                      padding: '1rem 1.25rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      cursor: 'pointer',
+                      gap: '1rem'
+                    }}
+                  >
+                    {/* Rank & Ident */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1.2, minWidth: 0 }}>
+                      <span style={{
+                        fontSize: '0.85rem',
+                        fontWeight: 700,
+                        color: index < 3 ? '#f59e0b' : '#64748b',
+                        background: index < 3 ? 'rgba(245, 158, 11, 0.12)' : 'rgba(255,255,255,0.03)',
+                        padding: '0.3rem 0.6rem',
+                        borderRadius: '8px',
+                        minWidth: '55px',
+                        textAlign: 'center'
+                      }}>
+                        {rankBadge}
+                      </span>
+
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontWeight: 700, color: '#f8fafc', fontSize: '0.95rem' }}>
+                            {tool.ident || `Werkzeug #${tool.nr}`}
+                          </span>
+                          <span style={{ fontSize: '0.72rem', color: '#94a3b8', background: 'rgba(255,255,255,0.05)', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>
+                            Nr. {tool.nr}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.8rem', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
+                          {tool.desc || 'Keine Beschreibung'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Frequency Progress Bar */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: '180px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
+                        <span style={{ color: '#cbd5e1', fontWeight: 600 }}>Häufigkeit</span>
+                        <span style={{ color: '#38bdf8', fontWeight: 700 }}>{tool.count}× Nutzungen</span>
+                      </div>
+                      <div style={{ height: '7px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%',
+                          width: `${pct}%`,
+                          background: 'linear-gradient(90deg, #38bdf8, #818cf8)',
+                          borderRadius: '4px'
+                        }} />
+                      </div>
+                    </div>
+
+                    {/* Stats & Machine Status */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                      <div style={{ textAlign: 'right' }}>
+                        <span style={{ fontSize: '0.72rem', color: '#64748b', display: 'block' }}>Arbeitsschritte</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f8fafc' }}>{tool.stepCount} Schritte</span>
+                      </div>
+
+                      <div style={{ textAlign: 'right' }}>
+                        <span style={{ fontSize: '0.72rem', color: '#64748b', display: 'block' }}>Aufträge</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f8fafc' }}>{tool.contractCount} Aufträge</span>
+                      </div>
+
+                      {tool.isCurrentlyLoaded ? (
+                        <span style={{
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          color: '#4ade80',
+                          background: 'rgba(74, 222, 128, 0.12)',
+                          border: '1px solid rgba(74, 222, 128, 0.3)',
+                          padding: '0.25rem 0.6rem',
+                          borderRadius: '20px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.3rem'
+                        }}>
+                          <CheckCircle2 size={12} /> Magazin
+                        </span>
+                      ) : (
+                        <span style={{
+                          fontSize: '0.7rem',
+                          fontWeight: 600,
+                          color: '#64748b',
+                          background: 'rgba(255,255,255,0.03)',
+                          border: '1px solid rgba(255,255,255,0.06)',
+                          padding: '0.25rem 0.6rem',
+                          borderRadius: '20px'
+                        }}>
+                          Nicht gerüstet
+                        </span>
+                      )}
+
+                      <button style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#94a3b8',
+                        cursor: 'pointer',
+                        padding: '0.2rem'
+                      }}>
+                        {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Expanded Sub-table of Steps */}
+                  {isExpanded && (
+                    <div style={{
+                      background: 'rgba(10, 15, 30, 0.6)',
+                      borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                      padding: '1rem 1.25rem'
+                    }}>
+                      <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.82rem', color: '#94a3b8', fontWeight: 600 }}>
+                        Zugeordnete Arbeitsschritte ({tool.steps.length}):
+                      </h4>
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                          <thead>
+                            <tr style={{ color: '#64748b', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                              <th style={{ padding: '0.4rem 0.6rem' }}>Auftrag</th>
+                              <th style={{ padding: '0.4rem 0.6rem' }}>Pos / Schritt</th>
+                              <th style={{ padding: '0.4rem 0.6rem' }}>NC-Programm</th>
+                              <th style={{ padding: '0.4rem 0.6rem' }}>WinTool-Liste</th>
+                              <th style={{ padding: '0.4rem 0.6rem' }}>Datum</th>
+                              <th style={{ padding: '0.4rem 0.6rem' }}>Bezeichnung</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tool.steps.map((st, idx) => (
+                              <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', color: '#cbd5e1' }}>
+                                <td style={{ padding: '0.45rem 0.6rem', fontWeight: 600, color: '#38bdf8' }}>{st.contractNumber || '-'}</td>
+                                <td style={{ padding: '0.45rem 0.6rem' }}>Pos {st.orderPos || '10'} / AS {st.stepPos}</td>
+                                <td style={{ padding: '0.45rem 0.6rem', fontFamily: 'monospace', color: '#a855f7' }}>{st.ncProgram}</td>
+                                <td style={{ padding: '0.45rem 0.6rem', fontFamily: 'monospace', color: '#f59e0b' }}>{st.matchedListIdent || '-'}</td>
+                                <td style={{ padding: '0.45rem 0.6rem' }}>{st.actionDate || '-'}</td>
+                                <td style={{ padding: '0.45rem 0.6rem', color: '#94a3b8' }}>{st.stepDesc}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+    </div>
+  );
+}
+
 // A view listing tools that need to be prepared/built for the planning period
 function ToolsPlanningView({ 
   board, 
@@ -7911,9 +8432,11 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                             </div>
                           )}
                           {/* Header Row */}
-                          <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.15rem' }}>
-                            <span className="card-order-id" style={{ fontSize: '0.78rem', fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '0.25rem', minWidth: 0, flex: 1 }}>
-                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{step.contractNumber || 'Auftrag'}</span>
+                          <div className="card-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.2rem', flexWrap: 'wrap', gap: '0.25rem' }}>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', flexShrink: 0 }}>
+                              <span className="card-order-id" style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f8fafc', whiteSpace: 'nowrap' }}>
+                                {step.contractNumber || 'Auftrag'}
+                              </span>
                               <span 
                                 title={getStepPlacementExplanation(step, idx > 0 ? daySteps[idx - 1] : null)}
                                 style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
@@ -7921,20 +8444,20 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                               >
                                 <Info size={11} style={{ color: '#64748b' }} />
                               </span>
-                            </span>
-                            <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexShrink: 0 }}>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', marginLeft: 'auto' }}>
                               {step.isExecuting && (
                                 <span className="badge badge-aktiv" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.58rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700, whiteSpace: 'nowrap' }}>
                                   ⚡ AKTIV
                                 </span>
                               )}
                               {step.originalStartDate && (
-                                <span style={{ fontSize: '0.66rem', color: '#38bdf8', fontWeight: 600, whiteSpace: 'nowrap' }} title="Geplantes Bearbeitungsdatum nach D4 (AS)">
+                                <span style={{ fontSize: '0.64rem', color: '#38bdf8', fontWeight: 600, whiteSpace: 'nowrap' }} title="Geplantes Bearbeitungsdatum nach D4 (AS)">
                                   📅 D4: {formatDate(step.originalStartDate)}
                                 </span>
                               )}
                               {step.deliveryDate && (
-                                <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: '0.64rem', color: '#94a3b8', fontWeight: 600, whiteSpace: 'nowrap' }}>
                                   Lief: {formatDate(step.deliveryDate)}
                                 </span>
                               )}

@@ -1131,6 +1131,189 @@ app.get('/api/debug-p202675788', (req, res) => {
   res.json({ count: steps.length, steps });
 });
 
+// Most Used Tools Endpoint
+app.get('/api/most-used-tools', async (req, res) => {
+  try {
+    if (!cachedSetupData) {
+      await cacheSetupData();
+    }
+
+    const { listToToolsMap, toolsDetails, toolMachineMap } = cachedSetupData;
+
+    const machineName = req.query.machine || 'Brother';
+    const pastDays = parseInt(req.query.pastDays || '30', 10);
+    const futureDays = parseInt(req.query.futureDays || '30', 10);
+
+    const now = new Date();
+    const pastDate = new Date(now.getTime() - pastDays * 24 * 3600 * 1000);
+    const futureDate = new Date(now.getTime() + futureDays * 24 * 3600 * 1000);
+
+    const poolD4 = await getPoolD4();
+
+    const sqlPath = path.join(__dirname, '../KV_test.sql');
+    let kvSql = fs.readFileSync(sqlPath, 'utf8').replace(/\bgo\b/gi, '');
+    const selectStartMatch = kvSql.match(/\)\s+SELECT\s+ID\s*,\s*IDBEBP\s*,/i);
+    const selectStartIndex = selectStartMatch.index;
+    const ctePart = kvSql.substring(0, selectStartIndex + 1);
+    const selectPartAndSuffix = kvSql.substring(selectStartIndex + 1);
+    const whereIdx = selectPartAndSuffix.lastIndexOf('WHERE ISNULL(IDBEBP, 0) <> 0');
+    const selectPart = selectPartAndSuffix.substring(0, whereIdx);
+
+    const sql = `
+      ${ctePart}
+      SELECT
+        OuterTemp.ID as StepId,
+        OuterTemp.IDBEBP as OrderId,
+        OuterTemp.PSP_POSITION_NUMMER as StepPos,
+        OuterTemp.PSP_TYP_HERKUNFT as TypHerkunft,
+        OuterTemp.PSP_TYP_POSITION as StepTyp,
+        OuterTemp.SPKO as SPKO,
+        b.BP_ARTIKEL_BEZEICHNUNG as OrderDesc,
+        b.BP_POSITION_NUMMER as OrderPos,
+        b.BP_IDAR as ArticleId,
+        p.PSP_BEZEICHNUNG as StepDesc,
+        p.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
+        p.PSP_ZEIT_MINUTEN_PRODUKTION_GESAMT_SOLL as ProdTime,
+        p.PSP_IDMS as MachineId,
+        p.PSP_IDMP as MachinePoolId,
+        bk.BK_BKBE_NUMMER as ContractNumber,
+        COALESCE(
+          (
+            SELECT MIN(zbw.ZBUBW_DATUM_ZEIT_START)
+            FROM [D4].[dbo].[tZE_BUCH] zb
+            JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbw ON zbw.ZBUBW_IDZBU = zb.ID
+            WHERE zb.ZBU_IDPSKP = OuterTemp.ID
+          ),
+          (
+            SELECT MIN(PSPP_DATUM_START)
+            FROM [D4].[dbo].[tPPS_SKKALP_PLAN] planP
+            WHERE planP.PSPP_IDPSKP = OuterTemp.ID
+          )
+        ) as ActionDate
+      FROM (
+        ${selectPart}
+      ) AS OuterTemp
+      INNER JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = OuterTemp.IDBEBP
+      INNER JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
+      LEFT JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = OuterTemp.ID AND OuterTemp.PSP_TYP_HERKUNFT = 0
+      WHERE bk.BK_BKBE_STATUS_BEARBEITUNG = 0 
+        AND bk.BK_BKBE_TYP_BELEG = 2
+    `;
+
+    const queryRes = await poolD4.request().query(sql);
+    const rows = queryRes.recordset;
+
+    const machineIdMap = {
+      'Brother': [8],
+      'Chiron': [21],
+      'C400': [2],
+      'C40': [4],
+      'C42': [25],
+      'RS2_1': [5],
+      'RS2_2': [6]
+    };
+    const poolIdMap = {
+      'C40': [13],
+      'C42': [13],
+      'RS2_1': [9, 12],
+      'RS2_2': [9, 12]
+    };
+
+    const targetMachineIds = machineIdMap[machineName] || [];
+    const targetPoolIds = poolIdMap[machineName] || [];
+
+    const filteredSteps = rows.filter(step => {
+      if (machineName !== 'All') {
+        const matchM = targetMachineIds.includes(step.MachineId);
+        const matchP = targetPoolIds.includes(step.MachinePoolId);
+        if (!matchM && !matchP) return false;
+      }
+
+      if (!step.ActionDate) return false;
+      const d = new Date(step.ActionDate);
+      return d >= pastDate && d <= futureDate;
+    });
+
+    const toolStats = {};
+    let stepsWithTools = 0;
+
+    filteredSteps.forEach(step => {
+      const progs = extractNCPrograms(step.StepDesc);
+      if (progs.length === 0) return;
+      const prog = progs[0];
+
+      const matches = findMatches(prog, cachedToolLists, 0.70);
+      if (matches.length === 0) return;
+      const matchedList = matches[0];
+
+      const tools = listToToolsMap[matchedList.Nr] || [];
+      if (tools.length > 0) stepsWithTools++;
+
+      tools.forEach(toolNr => {
+        if (!toolStats[toolNr]) {
+          const details = toolsDetails[toolNr] || { nr: toolNr, ident: 'Unbekannt', desc: '' };
+          const loadedMachines = toolMachineMap ? (toolMachineMap[toolNr] || []) : [];
+          toolStats[toolNr] = {
+            nr: toolNr,
+            ident: details.ident || '',
+            desc: details.desc || '',
+            keyword: details.keyword || '',
+            dia: details.dia || 0,
+            len: details.len || 0,
+            count: 0,
+            stepIds: new Set(),
+            contracts: new Set(),
+            isCurrentlyLoaded: machineName !== 'All' ? loadedMachines.includes(machineName) : loadedMachines.length > 0,
+            currentMachines: loadedMachines,
+            steps: []
+          };
+        }
+
+        toolStats[toolNr].count += 1;
+        toolStats[toolNr].stepIds.add(step.StepId);
+        if (step.ContractNumber) toolStats[toolNr].contracts.add(String(step.ContractNumber).trim());
+
+        toolStats[toolNr].steps.push({
+          stepId: step.StepId,
+          contractNumber: step.ContractNumber,
+          orderPos: step.OrderPos,
+          stepPos: step.StepPos,
+          stepDesc: (step.StepDesc || '').split('\n')[0],
+          ncProgram: prog,
+          matchedListIdent: matchedList.Ident,
+          actionDate: step.ActionDate ? new Date(step.ActionDate).toISOString().substring(0, 10) : null,
+          spko: step.SPKO
+        });
+      });
+    });
+
+    const sortedTools = Object.values(toolStats).map(t => ({
+      ...t,
+      stepCount: t.stepIds.size,
+      contractCount: t.contracts.size,
+      stepIds: Array.from(t.stepIds),
+      contracts: Array.from(t.contracts)
+    })).sort((a, b) => b.count - a.count);
+
+    const totalToolUsages = sortedTools.reduce((sum, t) => sum + t.count, 0);
+
+    res.json({
+      success: true,
+      machine: machineName,
+      pastDays,
+      futureDays,
+      totalStepsEvaluated: filteredSteps.length,
+      stepsWithToolsCount: stepsWithTools,
+      uniqueToolsCount: sortedTools.length,
+      totalToolUsages,
+      tools: sortedTools
+    });
+  } catch (err) {
+    console.error('Error in /api/most-used-tools:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/debug-kv-steps', (req, res) => {
   if (!cachedSetupData || !cachedSetupData.steps) {
     return res.json({ error: 'Cache not ready' });
