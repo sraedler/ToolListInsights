@@ -8465,7 +8465,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                           </div>
 
                           {/* Secondary Badges Row */}
-                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || step.manualMachineOverride || (isConflictMode && false) || isRobotFlowStep) && (
+                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || step.maxDayQty || step.manualMachineOverride || (isConflictMode && false) || isRobotFlowStep) && (
                             <div style={{ display: 'flex', gap: '0.2rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.1rem', marginBottom: '0.15rem' }}>
                               {isRobotFlowStep && (
                                 <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700 }}>
@@ -8492,10 +8492,23 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                   🔮 Vorgezogen
                                 </span>
                               )}
-                              {step.isNightRunCapable && (
-                                <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', color: '#d8b4fe', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', whiteSpace: 'nowrap' }}>
-                                  🌙 Nacht
-                                </span>
+                              {step.isNightRunCapable ? (
+                                <>
+                                  <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', color: '#d8b4fe', fontSize: '0.55rem', padding: '0.05rem 0.25rem', borderRadius: '3px', whiteSpace: 'nowrap' }} title={`Nachtbauteil | Max. BDE-Stempelungen in 1 Nacht: ${step.maxNightQty ? step.maxNightQty + ' Stk.' : 'k.A.'}`}>
+                                    🌙 Nacht (Max: {step.maxNightQty || 0} Stk)
+                                  </span>
+                                  {step.maxDayQty > 0 && (
+                                    <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#fbbf24', fontSize: '0.55rem', padding: '0.05rem 0.25rem', borderRadius: '3px', whiteSpace: 'nowrap' }} title={`Tagbauteil | Max. BDE-Stempelungen in 1 Tagschicht: ${step.maxDayQty} Stk.`}>
+                                      ☀️ Tag (Max: {step.maxDayQty} Stk)
+                                    </span>
+                                  )}
+                                </>
+                              ) : (
+                                step.maxDayQty > 0 && (
+                                  <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#fbbf24', fontSize: '0.55rem', padding: '0.05rem 0.25rem', borderRadius: '3px', whiteSpace: 'nowrap' }} title={`Tagbauteil | Max. BDE-Stempelungen in 1 Tagschicht: ${step.maxDayQty} Stk.`}>
+                                    ☀️ Tag (Max: {step.maxDayQty} Stk)
+                                  </span>
+                                )
                               )}
                             </div>
                           )}
@@ -8867,11 +8880,12 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                   if (isConflictMode) {
                     daySteps = daySteps.filter(s => s.color && s.color.toLowerCase() !== 'green');
                   }
-                  const totalSetupTime = daySteps.reduce((acc, s) => acc + (s.setupTime || 0), 0);
-                  const totalProdTime = daySteps.reduce((acc, s) => acc + (s.prodTime || 0), 0);
+                  const actualSteps = daySteps.filter(s => !s.isPoolRecommendationCopy);
+                  const totalSetupTime = actualSteps.reduce((acc, s) => acc + (s.setupTime || 0), 0);
+                  const totalProdTime = actualSteps.reduce((acc, s) => acc + (s.prodTime || 0), 0);
                   const totalWorkloadTime = totalSetupTime + totalProdTime;
-                  const totalChanges = daySteps.reduce((acc, s) => acc + (s.missesCount || 0), 0);
-                  const nightRunsCount = daySteps.filter(s => s.isNightRunCapable).length;
+                  const totalChanges = actualSteps.reduce((acc, s) => acc + (s.missesCount || 0), 0);
+                  const nightRunsCount = actualSteps.filter(s => s.isNightRunCapable).length;
 
                   const redStepsCount = daySteps.filter(s => s.color?.toLowerCase() === 'red').length;
                   const yellowStepsCount = daySteps.filter(s => s.color?.toLowerCase() === 'yellow').length;

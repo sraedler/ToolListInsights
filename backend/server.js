@@ -190,7 +190,13 @@ async function fetchActiveStepsAndMaterials(poolD4) {
           AND zbw.ZBUBW_DATUM_ZEIT_START IS NOT NULL
           AND zbw.ZBUBW_DATUM_ZEIT_START <> '1900-01-01'
       ) as UsedDays,
-      bk.BK_BKBE_NUMMER as ContractNumber
+      (
+        SELECT ISNULL(MAX(zb.ZBU_MENGE_IST), 0)
+        FROM [D4].[dbo].[tZE_BUCH] zb
+        WHERE zb.ZBU_IDPSKP = OuterTemp.ID
+      ) as BookedQty,
+      bk.BK_BKBE_NUMMER as ContractNumber,
+      bk.BK_BKBE_TYP_BELEG_ART as BelegArt
     FROM (
       ${selectPart}
     ) AS OuterTemp
@@ -428,13 +434,40 @@ async function cacheSetupData() {
       poolWT.request().query('SELECT ToolListNr, ToolNr FROM [WTDATA].[dbo].[ToolList] WHERE ToolNr IS NOT NULL'),
       poolWT.request().query('SELECT Nr, Design, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools]'),
       poolD4.request().query(`
-        SELECT b.BP_IDAR as ArticleId, p.PSP_POSITION_NUMMER as StepPos, COUNT(*) as NightBookings
-        FROM [D4].[dbo].[tZE_BUCH] zb
-        INNER JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbb ON zbb.ZBUBW_IDZBU = zb.ID
-        INNER JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = zb.ZBU_IDBEBP
-        INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = zb.ZBU_IDPSKP
-        WHERE DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) >= 21 OR DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6
-        GROUP BY b.BP_IDAR, p.PSP_POSITION_NUMMER
+        WITH MovementNightBookings AS (
+          SELECT 
+            b.BP_IDAR as ArticleId, 
+            p.PSP_POSITION_NUMMER as StepPos, 
+            CASE WHEN DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) >= 17 
+                   OR DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6 
+                 THEN 'NIGHT' ELSE 'DAY' END as ShiftType, 
+            CAST(CASE WHEN DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6 
+                      THEN DATEADD(day, -1, zbb.ZBUBW_DATUM_ZEIT_START) 
+                      ELSE zbb.ZBUBW_DATUM_ZEIT_START END AS DATE) as ShiftDate
+          FROM [D4].[dbo].[tZE_BUCH] zb 
+          INNER JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbb ON zbb.ZBUBW_IDZBU = zb.ID 
+          INNER JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = zb.ZBU_IDBEBP 
+          INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = zb.ZBU_IDPSKP 
+          WHERE zbb.ZBUBW_DATUM_ZEIT_START >= '2020-01-01' 
+        ),
+        ShiftDateSummary AS (
+          SELECT 
+            ArticleId,
+            StepPos,
+            ShiftType,
+            ShiftDate,
+            COUNT(*) as ShiftStampsCount
+          FROM MovementNightBookings
+          GROUP BY ArticleId, StepPos, ShiftType, ShiftDate
+        )
+        SELECT 
+          ArticleId, 
+          StepPos, 
+          SUM(CASE WHEN ShiftType = 'NIGHT' THEN ShiftStampsCount ELSE 0 END) as NightBookings, 
+          MAX(CASE WHEN ShiftType = 'NIGHT' THEN ShiftStampsCount ELSE 0 END) as MaxNightQty, 
+          MAX(CASE WHEN ShiftType = 'DAY' THEN ShiftStampsCount ELSE 0 END) as MaxDayQty 
+        FROM ShiftDateSummary 
+        GROUP BY ArticleId, StepPos
       `),
       poolTL.request().query('SELECT Machine, ProgramName FROM MachineToProgram WHERE ProgramName IS NOT NULL'),
       poolTL.request().query('SELECT mtp.Machine, ptt.ToolName FROM ProgramToTool ptt INNER JOIN MachineToProgram mtp ON ptt.MachineToProgramId = mtp.Id WHERE ptt.ToolName IS NOT NULL'),
@@ -517,11 +550,14 @@ async function cacheSetupData() {
       };
     });
 
-    const nightSteps = new Set();
+    const nightStepsMap = new Map();
     nightBookingsResult.recordset.forEach(row => {
-      if (row.NightBookings >= 3) {
-        nightSteps.add(row.ArticleId + '-' + row.StepPos);
-      }
+      const cleanPos = String(row.StepPos || '').trim();
+      nightStepsMap.set(row.ArticleId + '-' + cleanPos, {
+        isNightCapable: (row.NightBookings || 0) >= 3,
+        MaxNightQty: row.MaxNightQty || 0,
+        MaxDayQty: row.MaxDayQty || 0
+      });
     });
 
     const histAvgDaysMap = {};
@@ -536,15 +572,27 @@ async function cacheSetupData() {
 
     // Group steps by OrderId to resolve predecessors correctly within each order
     const ordersMap = {};
+    const releasedContracts = new Set(
+      rows.filter(r => (r.ContractNumber && String(r.ContractNumber).trim().startsWith('P')) || r.BelegArt === 1)
+          .map(r => String(r.ContractNumber || '').trim().replace(/^P/i, ''))
+    );
+
     rows.forEach(row => {
       const cNrStr = String(row.ContractNumber || '').trim();
       const oIdStr = String(row.OrderId || '').trim();
       if (cNrStr === '990001' || oIdStr === '990001' || cNrStr.includes('990001')) return;
+      const cleanContract = cNrStr.replace(/^P/i, '');
+      const isReleased = row.BelegArt === 1 || cNrStr.startsWith('P') || releasedContracts.has(cleanContract);
+      row.belegArt = isReleased ? 1 : (row.BelegArt || 0);
+      row.isFreigegeben = isReleased;
       if (row.BookedMachineId) {
         row.MachineId = row.BookedMachineId;
       }
       const cleanStepPos = String(row.StepPos || '').trim();
-      row.isNightRunCapable = nightSteps.has(row.ArticleId + '-' + cleanStepPos);
+      const nightInfo = nightStepsMap.get(row.ArticleId + '-' + cleanStepPos);
+      row.isNightRunCapable = !!(nightInfo && nightInfo.isNightCapable);
+      row.MaxNightQty = nightInfo ? Math.min(nightInfo.MaxNightQty, row.OrderQuantity || 999999) : 0;
+      row.MaxDayQty = nightInfo ? Math.min(nightInfo.MaxDayQty, row.OrderQuantity || 999999) : (row.OrderQuantity || 0);
       
       row.OrderPlanDays = row.PlannedDays || 1;
       const histAvgDays = histAvgDaysMap[row.ArticleId + '_' + cleanStepPos];
@@ -584,9 +632,19 @@ async function cacheSetupData() {
       });
 
       // Determine real status SPKO for each step in order
-      stepsGroup.forEach(s => {
-        if (s.StatusProduction === 4 || s.SPKO === 4) {
+      stepsGroup.forEach((s, idx) => {
+        // User rule: Step is completed via successor progress ONLY IF reported quantity (MengeIst / BookedQty) is equal to or greater than target quantity (MengeSoll / OrderQuantity)!
+        const targetQty = s.OrderQuantity || 0;
+        const bookedQty = s.BookedQty || 0;
+        const isQtyMet = targetQty > 0 ? (bookedQty >= targetQty) : false;
+
+        const hasStartedSuccessor = stepsGroup.slice(idx + 1).some(succ => 
+          (succ.StatusProduction && succ.StatusProduction >= 1) || (succ.BookedTime && succ.BookedTime > 0) || succ.SPKO === 4
+        );
+
+        if (s.StatusProduction === 4 || s.SPKO === 4 || (hasStartedSuccessor && isQtyMet) || (targetQty > 0 && bookedQty >= targetQty)) {
           s.realSPKO = 4; // Completed
+          s.SPKO = 4;
         } else if (s.BookedTime && s.BookedTime > 0) {
           s.realSPKO = 2; // In Progress
         } else {
@@ -3394,7 +3452,78 @@ app.get('/api/planning', async (req, res) => {
 
     // Filter steps to schedule (include non-green steps if requested via includeNonGreen / isConflictMode)
     const shouldIncludeNonGreen = includeNonGreen === 'true' || isConflictMode === 'true';
-    const greenSteps = shouldIncludeNonGreen ? steps : steps.filter(step => step.color === 'Green');
+    let greenSteps = shouldIncludeNonGreen ? steps : steps.filter(step => step.color === 'Green');
+
+    function getVirtualMachineForStep(step) {
+      // If the step has an explicit D4 machine or machine pool assignment, it is a machining step
+      if ((step.MachineId && step.MachineId > 0) || (step.MachinePoolId && step.MachinePoolId > 0)) {
+        return null;
+      }
+      const desc = (step.StepDesc || '').toLowerCase();
+      if (step.MachineId === 15 || desc.includes('ur5')) return 'Montage UR5';
+      if (step.MachineId === 16 || desc.includes('laser')) return 'Laser';
+      if (step.MachineId === 17 || desc.includes('messmaschine') || desc.includes('zeiss') || desc.includes('kmg')) return 'Messmaschine';
+      if (desc.includes('versand') || desc.includes('verpacken') || desc.includes('etikett')) return 'Versand';
+      if (desc.includes('montage') || desc.includes('gewindeeinsatz') || desc.includes('zapfen brechen')) return 'Montage';
+      if (desc.includes('eingangsprüfung') || desc.includes('ersteilabnahme') || desc.includes('serienprüfung') || desc.includes('stempeln')) return 'Prüfplanung';
+      if (desc.includes('entgrat')) return 'Entgraten';
+      return null;
+    }
+
+    // Rule: In "Planung blockiert" (isConflictMode):
+    // 1. ONLY released orders (belegArt === 1) are allowed! Exclude vorgemerkte (belegArt === 0)!
+    // 2. Each combination of P-Order + Position (ContractNumber/OrderId + OrderPos) must appear AT MOST ONCE PER MACHINE!
+    // 3. If an order position has multiple blocked steps on the same machine, display ONLY the FIRST blocked step for that machine!
+    if (isConflict) {
+      const machinePosMap = {};
+
+      const getTargetMachine = (step) => {
+        const vM = getVirtualMachineForStep(step);
+        if (vM) return vM;
+        if (step.MachineId === 8) return 'Brother';
+        if (step.MachineId === 21) return 'Chiron';
+        if (step.MachineId === 2) return 'C400';
+        if (step.MachineId === 4) return 'C40';
+        if (step.MachineId === 25) return 'C42';
+        if (step.MachineId === 5) return 'RS2_1';
+        if (step.MachineId === 6) return 'RS2_2';
+        if (step.MachinePoolId === 13) return 'C40';
+        if (step.MachinePoolId === 9 || step.MachinePoolId === 12) return 'RS2_1';
+        return 'Unassigned';
+      };
+
+      steps.forEach(s => {
+        if (s.belegArt === 1 || s.BelegArt === 1) {
+          const cNum = String(s.ContractNumber || s.contractNumber || s.OrderId || s.orderId || '').trim();
+          const cleanContract = cNum.replace(/^P/i, '');
+          const oPos = String(s.OrderPos || s.orderPos || '').trim();
+          const targetM = getTargetMachine(s);
+          const machinePosKey = targetM + '_' + cleanContract + '_' + oPos;
+
+          if (!machinePosMap[machinePosKey]) {
+            machinePosMap[machinePosKey] = [];
+          }
+          machinePosMap[machinePosKey].push(s);
+        }
+      });
+
+      const conflictCandidates = [];
+      const seenMachinePosKeys = new Set();
+
+      Object.keys(machinePosMap).forEach(mPosKey => {
+        const group = machinePosMap[mPosKey];
+        group.sort((a, b) => parseInt(a.StepPos || 0, 10) - parseInt(b.StepPos || 0, 10));
+
+        // Find the FIRST non-green (blocked / conflict) step for this machine + order position
+        const firstBlocked = group.find(s => s.color !== 'Green' && s.realSPKO !== 4 && s.SPKO !== 4);
+        if (firstBlocked && !seenMachinePosKeys.has(mPosKey)) {
+          seenMachinePosKeys.add(mPosKey);
+          conflictCandidates.push(firstBlocked);
+        }
+      });
+
+      greenSteps = conflictCandidates;
+    }
 
     // Find default start date (always today to avoid planning in the past by default!)
     const defaultStartStr = new Date().toISOString().substring(0, 10);
@@ -3468,7 +3597,7 @@ app.get('/api/planning', async (req, res) => {
       if (!dbId || !capacities[dbId]) return 360; // Default capacity: 6 hours
       const dayOfWeek = new Date(dateStr).getDay(); // 0 = Sunday, 1 = Monday, etc.
       const cap = capacities[dbId][dayOfWeek];
-      return cap > 0 ? cap : 360; // Fallback to 360 if 0 or null
+      return cap > 0 ? cap : 360; // Returns exact DB capacity value!
     };
 
     const allowLookahead = req.query.allowLookahead === 'true';
@@ -3489,22 +3618,6 @@ app.get('/api/planning', async (req, res) => {
 
     // List to hold pool steps that need dynamic distribution
     const poolSteps = [];
-
-    const getVirtualMachineForStep = (step) => {
-      // If the step has an explicit D4 machine or machine pool assignment, it is a machining step
-      if ((step.MachineId && step.MachineId > 0) || (step.MachinePoolId && step.MachinePoolId > 0)) {
-        return null;
-      }
-      const desc = (step.StepDesc || '').toLowerCase();
-      if (step.MachineId === 15 || desc.includes('ur5')) return 'Montage UR5';
-      if (step.MachineId === 16 || desc.includes('laser')) return 'Laser';
-      if (step.MachineId === 17 || desc.includes('messmaschine') || desc.includes('zeiss') || desc.includes('kmg')) return 'Messmaschine';
-      if (desc.includes('versand') || desc.includes('verpacken') || desc.includes('etikett')) return 'Versand';
-      if (desc.includes('montage') || desc.includes('gewindeeinsatz') || desc.includes('zapfen brechen')) return 'Montage';
-      if (desc.includes('eingangsprüfung') || desc.includes('ersteilabnahme') || desc.includes('serienprüfung') || desc.includes('stempeln')) return 'Prüfplanung';
-      if (desc.includes('entgrat')) return 'Entgraten';
-      return null;
-    };
 
     // Populate steps
     greenSteps.forEach(step => {
@@ -3596,21 +3709,21 @@ app.get('/api/planning', async (req, res) => {
       }
     });
 
-    // Dynamically distribute pool steps to balance workload (total SetupTime on that day)
+    // Dynamically distribute pool steps to balance total workload (SetupTime + prodTime on that day)
     poolSteps.forEach(({ step, dateStr }) => {
       if (step.MachinePoolId === 13) {
-        // Pool C40-C42: distribute to machine with lower setup load on that day
-        const loadC40 = board['C40'][dateStr].reduce((sum, s) => sum + s.SetupTime, 0);
-        const loadC42 = board['C42'][dateStr].reduce((sum, s) => sum + s.SetupTime, 0);
+        // Pool C40-C42: distribute to machine with lower total workload on that day
+        const loadC40 = board['C40'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
+        const loadC42 = board['C42'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
         if (loadC40 <= loadC42) {
           board['C40'][dateStr].push(step);
         } else {
           board['C42'][dateStr].push(step);
         }
       } else if (step.MachinePoolId === 9 || step.MachinePoolId === 12) {
-        // Pool RS2: distribute to machine with lower setup load on that day
-        const loadRS2_1 = board['RS2_1'][dateStr].reduce((sum, s) => sum + s.SetupTime, 0);
-        const loadRS2_2 = board['RS2_2'][dateStr].reduce((sum, s) => sum + s.SetupTime, 0);
+        // Pool RS2: distribute to machine with lower total workload on that day
+        const loadRS2_1 = board['RS2_1'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
+        const loadRS2_2 = board['RS2_2'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
         if (loadRS2_1 <= loadRS2_2) {
           board['RS2_1'][dateStr].push(step);
         } else {
@@ -3643,12 +3756,26 @@ app.get('/api/planning', async (req, res) => {
           tempBoard[d] = board[mName][d].map(s => ({ ...s }));
         });
 
-        planningDays.forEach(day => {
+        planningDays.forEach((day, dayIdx) => {
           const dayCapacity = getCapacityForDay(mName, day);
           dailyCap[day] = dayCapacity;
           const isAutomated = mName !== 'Chiron' && mName !== 'C400' && mName !== 'Brother';
 
-          let dayCandidates = [...overflowQueue, ...tempBoard[day]];
+          // Gather all unscheduled candidates from overflow, current day, AND future days (Front-Loading ASAP Strategy)
+          const futureBoardCandidates = [];
+          for (let i = dayIdx + 1; i < planningDays.length; i++) {
+            const fDay = planningDays[i];
+            (tempBoard[fDay] || []).forEach(s => {
+              if (!scheduledStepIds.has(s.StepId) && !scheduledStepIds.has(s.originalStepId)) {
+                futureBoardCandidates.push({ ...s, isLookahead: true });
+              }
+            });
+          }
+
+          const currentDayCandidates = (tempBoard[day] || []).filter(s => !scheduledStepIds.has(s.StepId) && !scheduledStepIds.has(s.originalStepId));
+          const unassignedOverflow = overflowQueue.map(s => ({ ...s }));
+
+          let dayCandidates = [...unassignedOverflow, ...currentDayCandidates, ...futureBoardCandidates];
           
           if (allowLookahead && lookaheadCandidates[mName] && lookaheadCandidates[mName].length > 0) {
             const currentDayTools = new Set();
@@ -3656,37 +3783,13 @@ app.get('/api/planning', async (req, res) => {
               const tools = listToToolsMap[s.MatchedListNr] || [];
               tools.forEach(t => currentDayTools.add(t));
             });
-            const currentDayArticles = new Set(dayCandidates.map(s => s.ArticleId).filter(Boolean));
-
-            const matchingLookahead = [];
-            const nonMatchingLookahead = [];
 
             lookaheadCandidates[mName].forEach(s => {
-              if (scheduledStepIds.has(s.StepId)) return;
-              const tools = listToToolsMap[s.MatchedListNr] || [];
-              const hasToolOverlap = tools.some(t => currentDayTools.has(t));
-              const hasArticleOverlap = s.ArticleId && currentDayArticles.has(s.ArticleId);
-              if (hasToolOverlap || hasArticleOverlap) {
-                matchingLookahead.push(s);
-              } else {
-                nonMatchingLookahead.push(s);
+              if (scheduledStepIds.has(s.StepId) || scheduledStepIds.has(s.originalStepId)) return;
+              if (!dayCandidates.some(x => x.StepId === s.StepId)) {
+                dayCandidates.push({ ...s, isLookahead: true });
               }
             });
-
-            dayCandidates = [...dayCandidates, ...matchingLookahead];
-
-            // If day is still not fully loaded, pull from non-matching lookahead to fill capacity
-            let currentTotalDuration = dayCandidates.reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
-            if (currentTotalDuration < dayCapacity) {
-              for (const s of nonMatchingLookahead) {
-                const duration = (s.SetupTime || 0) + (s.prodTime || 0);
-                dayCandidates.push(s);
-                currentTotalDuration += duration;
-                if (currentTotalDuration >= dayCapacity) {
-                  break;
-                }
-              }
-            }
           }
 
           let sequencedSteps = [];
@@ -3694,9 +3797,9 @@ app.get('/api/planning', async (req, res) => {
           const isNonMachining = ['Entgraten', 'Montage', 'Montage UR5', 'Laser', 'Messmaschine', 'Prüfplanung', 'Versand'].includes(mName);
 
           if (dayCandidates.length > 0) {
-            // Force executing steps (SPKO === 2) to run first, bypassing the normal/night splitting
-            const executingSteps = dayCandidates.filter(s => s.SPKO === 2);
-            const nonExecutingCandidates = dayCandidates.filter(s => s.SPKO !== 2);
+            // Force executing steps (SPKO === 2 / isExecuting) to run first, bypassing the normal/night splitting
+            const executingSteps = dayCandidates.filter(s => s.SPKO === 2 || s.isExecuting);
+            const nonExecutingCandidates = dayCandidates.filter(s => s.SPKO !== 2 && !s.isExecuting);
 
             let currentMag = [...runningMagazine];
             if (executingSteps.length > 0) {
@@ -3715,13 +3818,13 @@ app.get('/api/planning', async (req, res) => {
                 const nightSteps = nonExecutingCandidates.filter(s => s.isNightRunCapable);
                 const normalSteps = nonExecutingCandidates.filter(s => !s.isNightRunCapable);
 
-                if (normalSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                if (nightSteps.length > 0) {
+                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
-                if (nightSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                if (normalSteps.length > 0) {
+                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
                   sequencedSteps = sequencedSteps.concat(sequenced);
                   currentMag = finalMagazine;
                 }
@@ -3734,41 +3837,87 @@ app.get('/api/planning', async (req, res) => {
             runningMagazine = currentMag;
           }
 
-          // Apply capacity constraint scheduling
-          let totalLoad = 0;
+          // Apply capacity constraint scheduling with Staggered Shift Model (Tag & Nacht Fenster)
+          const isAutomatedCell = ['RS2_1', 'RS2_2', 'C40', 'C42'].includes(mName);
+          const allowNightRun = isAutomatedCell || dayCapacity > 540; // Rules: Robot cells & 24h machines are ALLOWED to overbook into night run up to 24h!
+          const DAY_WINDOW_LIMIT = 540; // 07:00 - 16:00 (9 hours / 540 min)
+          const nightWindowLimit = allowNightRun ? 900 : 0; // Up to 15h night capacity overbooking window
+
+          let usedDayMinutes = 0;
+          let usedDaySetupMinutes = 0; // Tracks external setup station usage (07:00-16:00) on automated robot cells
+          let usedNightMinutes = 0;
           let dayScheduled = [];
           let nextDayOverflow = [];
 
           sequencedSteps.forEach(s => {
-            const stepDuration = (s.SetupTime || 0) + (s.prodTime || 0);
-            const canBypassCapacity = isAutomated && s.isNightRunCapable && s.loadTools && s.loadTools.length === 0;
-            const currentLimit = canBypassCapacity ? 1440 : dayCapacity;
-            const dayRemaining = currentLimit - totalLoad;
-            const stepLimit = (s.MaxProdTag && s.MaxProdTag > 0) ? s.MaxProdTag : currentLimit;
+            const setupTime = s.SetupTime || 0;
+            const prodTime = s.prodTime || 0;
+            const totalDuration = setupTime + prodTime;
+
+            // Determine if step qualifies for night shift on this machine
+            const isNightCapableOnThisMachine = allowNightRun && s.isNightRunCapable;
 
             if (isConflict) {
-              if (totalLoad + stepDuration <= currentLimit || dayScheduled.length === 0) {
-                dayScheduled.push(s);
-                totalLoad += stepDuration;
-              } else {
-                nextDayOverflow.push(s);
+              const stepKeyId = s.originalStepId || s.StepId;
+              if (scheduledStepIds.has(stepKeyId)) {
+                return;
               }
-            } else if (stepDuration <= stepLimit && stepDuration <= dayRemaining) {
-              dayScheduled.push(s);
-              totalLoad += stepDuration;
-            } else {
-              const maxAllocated = Math.min(dayRemaining, stepLimit);
-              if (maxAllocated > (s.SetupTime || 0)) {
-                const fittedProdTime = Math.max(0, maxAllocated - (s.SetupTime || 0));
-                const remainingProdTime = (s.prodTime || 0) - fittedProdTime;
+
+              const currentTotal = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
+              const totalRemainingDay = Math.max(0, 1440 - currentTotal);
+              
+              if (totalRemainingDay > 0 && totalDuration <= totalRemainingDay) {
+                dayScheduled.push({ ...s, scheduledShift: isNightCapableOnThisMachine ? 'NIGHT' : 'DAY' });
+                scheduledStepIds.add(stepKeyId);
+                if (isNightCapableOnThisMachine) {
+                  usedDaySetupMinutes += setupTime;
+                  usedNightMinutes += prodTime;
+                } else {
+                  usedDayMinutes += totalDuration;
+                }
+              } else {
+                // User directive: "Nicht aufteilen in teile" in conflict mode!
+                const stepKey = (s.ContractNumber || s.contractNumber || s.OrderId || s.orderId) + '_' + s.StepPos;
+                if (!nextDayOverflow.some(x => x.StepId === s.StepId || ((x.ContractNumber || x.contractNumber || x.OrderId || x.orderId) + '_' + x.StepPos) === stepKey)) {
+                  nextDayOverflow.push(s);
+                }
+              }
+            } else if (isNightCapableOnThisMachine) {
+              // NIGHT STEP ON ROBOT CELL: Setup happens on external station during Day Window (07:00-16:00, max 540 min)
+              // Setup of next order is ALLOWED to overlap in parallel with production time of other orders!
+              // ABSOLUTE HARD CAP: Total scheduled workload per calendar day MUST NEVER EXCEED 1440 min (24.0 hours)!
+              const currentTotalWorkload = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
+              const totalRemainingDay = Math.max(0, 1440 - currentTotalWorkload);
+              const daySetupRemaining = Math.min(totalRemainingDay, Math.max(0, DAY_WINDOW_LIMIT - (isAutomated ? usedDaySetupMinutes : usedDayMinutes)));
+              const nightRemaining = Math.min(totalRemainingDay, Math.max(0, nightWindowLimit - usedNightMinutes));
+
+              if ((setupTime === 0 || setupTime <= daySetupRemaining) && prodTime <= nightRemaining && (setupTime + prodTime <= totalRemainingDay)) {
+                dayScheduled.push({ ...s, scheduledShift: 'NIGHT' });
+                if (isAutomated) {
+                  usedDaySetupMinutes += setupTime;
+                } else {
+                  usedDayMinutes += setupTime;
+                }
+                usedNightMinutes += prodTime;
+              } else if ((setupTime === 0 || setupTime <= daySetupRemaining) && nightRemaining > 0 && totalRemainingDay > setupTime) {
+                const fittedProdTime = Math.min(nightRemaining, totalRemainingDay - setupTime);
+                const remainingProdTime = prodTime - fittedProdTime;
+
                 dayScheduled.push({
                   ...s,
                   prodTime: fittedProdTime,
                   isSplit: true,
                   splitPart: s.splitPart || 1,
-                  originalStepId: s.originalStepId || s.StepId
+                  originalStepId: s.originalStepId || s.StepId,
+                  scheduledShift: 'NIGHT'
                 });
-                totalLoad += maxAllocated;
+                if (isAutomated) {
+                  usedDaySetupMinutes += setupTime;
+                } else {
+                  usedDayMinutes += setupTime;
+                }
+                usedNightMinutes += fittedProdTime;
+
                 if (remainingProdTime > 0) {
                   nextDayOverflow.push({
                     ...s,
@@ -3782,8 +3931,187 @@ app.get('/api/planning', async (req, res) => {
               } else {
                 nextDayOverflow.push(s);
               }
+            } else {
+              // DAY STEP: Both Setup AND Prod Time fill Day Window (07:00-16:00, max 540 min or dayCapacity)
+              const currentTotalWorkload = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
+              const totalRemainingDay = Math.max(0, 1440 - currentTotalWorkload);
+              const maxDayLimitForMachine = Math.min(DAY_WINDOW_LIMIT, dayCapacity, totalRemainingDay);
+              const dayRemaining = Math.max(0, maxDayLimitForMachine - usedDayMinutes);
+
+              if (dayRemaining > 0) {
+                if (totalDuration <= dayRemaining) {
+                  dayScheduled.push({ ...s, scheduledShift: 'DAY' });
+                  usedDayMinutes += totalDuration;
+                } else if (setupTime <= dayRemaining) {
+                  const fittedProdTime = Math.min(dayRemaining - setupTime, totalRemainingDay - setupTime);
+                  const remainingProdTime = prodTime - fittedProdTime;
+
+                  dayScheduled.push({
+                    ...s,
+                    prodTime: fittedProdTime,
+                    isSplit: true,
+                    splitPart: s.splitPart || 1,
+                    originalStepId: s.originalStepId || s.StepId,
+                    scheduledShift: 'DAY'
+                  });
+                  usedDayMinutes += (setupTime + fittedProdTime);
+
+                  if (remainingProdTime > 0) {
+                    nextDayOverflow.push({
+                      ...s,
+                      SetupTime: 0,
+                      prodTime: remainingProdTime,
+                      isSplit: true,
+                      splitPart: (s.splitPart || 1) + 1,
+                      originalStepId: s.originalStepId || s.StepId
+                    });
+                  }
+                } else {
+                  // Partial setup fits today, remaining setup + prod overflows to next day
+                  const fittedSetupTime = Math.min(dayRemaining, totalRemainingDay);
+                  const remainingSetupTime = setupTime - fittedSetupTime;
+
+                  dayScheduled.push({
+                    ...s,
+                    SetupTime: fittedSetupTime,
+                    prodTime: 0,
+                    isSplit: true,
+                    splitPart: s.splitPart || 1,
+                    originalStepId: s.originalStepId || s.StepId,
+                    scheduledShift: 'DAY'
+                  });
+                  usedDayMinutes += fittedSetupTime;
+
+                  nextDayOverflow.push({
+                    ...s,
+                    SetupTime: remainingSetupTime,
+                    prodTime: prodTime,
+                    isSplit: true,
+                    splitPart: (s.splitPart || 1) + 1,
+                    originalStepId: s.originalStepId || s.StepId
+                  });
+                }
+              } else {
+                nextDayOverflow.push(s);
+              }
             }
           });
+
+          // LOOKAHEAD CAPACITY FILLER PASS: Pull future orders to saturate capacity to 100% if utilized minutes are below 100%
+          if (allowLookahead && lookaheadCandidates[mName] && lookaheadCandidates[mName].length > 0) {
+            const currentDayTools = new Set();
+            dayScheduled.forEach(s => {
+              const tools = listToToolsMap[s.MatchedListNr] || [];
+              tools.forEach(t => currentDayTools.add(t));
+            });
+
+            // Sort future lookahead candidates so orders sharing tools with the current day/night schedule are pulled first!
+            const sortedLookahead = [...lookaheadCandidates[mName]].sort((a, b) => {
+              const toolsA = listToToolsMap[a.MatchedListNr] || [];
+              const toolsB = listToToolsMap[b.MatchedListNr] || [];
+              const overlapA = toolsA.filter(t => currentDayTools.has(t)).length;
+              const overlapB = toolsB.filter(t => currentDayTools.has(t)).length;
+              return overlapB - overlapA; // Highest tool overlap first!
+            });
+
+            // Fill Night Window to 100% (900 min / 15h) with strict 1440 min (24.0h) hard cap
+            if (allowNightRun && usedNightMinutes < nightWindowLimit) {
+              for (const cand of sortedLookahead) {
+                if (usedNightMinutes >= nightWindowLimit) break;
+                if (scheduledStepIds.has(cand.StepId) || scheduledStepIds.has(cand.originalStepId)) continue;
+                if (!cand.isNightRunCapable) continue;
+
+                const currentTotalWorkload = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
+                const totalRemainingDay = Math.max(0, 1440 - currentTotalWorkload);
+                if (totalRemainingDay <= 0) break;
+
+                const candSetup = cand.SetupTime || 0;
+                const candProd = cand.prodTime || 0;
+                const daySetupRem = Math.min(totalRemainingDay, Math.max(0, DAY_WINDOW_LIMIT - (isAutomated ? usedDaySetupMinutes : usedDayMinutes)));
+                const nightRem = Math.min(totalRemainingDay, Math.max(0, nightWindowLimit - usedNightMinutes));
+
+                if ((candSetup === 0 || candSetup <= daySetupRem) && nightRem > 0 && totalRemainingDay > candSetup) {
+                  const fittedProd = Math.min(candProd, nightRem, totalRemainingDay - candSetup);
+                  const remainingProd = candProd - fittedProd;
+
+                  const scheduledCand = {
+                    ...cand,
+                    prodTime: fittedProd,
+                    isSplit: remainingProd > 0 || cand.isSplit,
+                    splitPart: cand.splitPart || 1,
+                    originalStepId: cand.originalStepId || cand.StepId,
+                    scheduledShift: 'NIGHT',
+                    isLookahead: true
+                  };
+
+                  dayScheduled.push(scheduledCand);
+                  if (isAutomated) {
+                    usedDaySetupMinutes += candSetup;
+                  } else {
+                    usedDayMinutes += candSetup;
+                  }
+                  usedNightMinutes += fittedProd;
+                  scheduledStepIds.add(cand.StepId);
+                  if (cand.originalStepId) scheduledStepIds.add(cand.originalStepId);
+
+                  if (remainingProd > 0) {
+                    nextDayOverflow.push({
+                      ...cand,
+                      SetupTime: 0,
+                      prodTime: remainingProd,
+                      isSplit: true,
+                      splitPart: (cand.splitPart || 1) + 1,
+                      originalStepId: cand.originalStepId || cand.StepId,
+                      isLookahead: true
+                    });
+                  }
+                }
+              }
+            }
+
+            // Fill Day Window to 100% (540 min / 9h)
+            if (usedDayMinutes < DAY_WINDOW_LIMIT) {
+              for (const cand of sortedLookahead) {
+                if (usedDayMinutes >= DAY_WINDOW_LIMIT) break;
+                if (scheduledStepIds.has(cand.StepId) || scheduledStepIds.has(cand.originalStepId)) continue;
+
+                const candTotal = (cand.SetupTime || 0) + (cand.prodTime || 0);
+                const dayRem = Math.max(0, DAY_WINDOW_LIMIT - usedDayMinutes);
+
+                if (dayRem > (cand.SetupTime || 0)) {
+                  const fittedProd = Math.min(cand.prodTime || 0, dayRem - (cand.SetupTime || 0));
+                  const remainingProd = (cand.prodTime || 0) - fittedProd;
+
+                  const scheduledCand = {
+                    ...cand,
+                    prodTime: fittedProd,
+                    isSplit: remainingProd > 0 || cand.isSplit,
+                    splitPart: cand.splitPart || 1,
+                    originalStepId: cand.originalStepId || cand.StepId,
+                    scheduledShift: 'DAY',
+                    isLookahead: true
+                  };
+
+                  dayScheduled.push(scheduledCand);
+                  usedDayMinutes += (cand.SetupTime || 0) + fittedProd;
+                  scheduledStepIds.add(cand.StepId);
+                  if (cand.originalStepId) scheduledStepIds.add(cand.originalStepId);
+
+                  if (remainingProd > 0) {
+                    nextDayOverflow.push({
+                      ...cand,
+                      SetupTime: 0,
+                      prodTime: remainingProd,
+                      isSplit: true,
+                      splitPart: (cand.splitPart || 1) + 1,
+                      originalStepId: cand.originalStepId || cand.StepId,
+                      isLookahead: true
+                    });
+                  }
+                }
+              }
+            }
+          }
 
           overflowQueue = nextDayOverflow;
           dayScheduledMap[day] = dayScheduled;
@@ -3872,6 +4200,8 @@ app.get('/api/planning', async (req, res) => {
             stepId: s.StepId,
             orderId: s.OrderId,
             contractNumber: s.ContractNumber || null,
+            belegArt: s.belegArt !== undefined ? s.belegArt : s.BelegArt,
+            isFreigegeben: s.isFreigegeben !== undefined ? s.isFreigegeben : (s.BelegArt === 1),
             deliveryDate: s.DeliveryDate || null,
             stepPos: s.StepPos || null,
             orderPos: s.OrderPos || null,
@@ -3883,6 +4213,9 @@ app.get('/api/planning', async (req, res) => {
             originalSetupTime: s.originalSetupTime !== undefined ? s.originalSetupTime : (s.SetupTime || 0),
             originalProdTime: s.originalProdTime !== undefined ? s.originalProdTime : (s.ProdTime || 0),
             isNightRunCapable: s.isNightRunCapable || false,
+            scheduledShift: s.scheduledShift || 'DAY',
+            maxNightQty: s.MaxNightQty || 0,
+            maxDayQty: s.MaxDayQty || 0,
             isConflict: isConflict || false,
             targetDayTag: 'T' + Math.min(4, Math.max(1, planningDays.indexOf(day) + 1)),
             originalStartDate: originalDateStr || null,
