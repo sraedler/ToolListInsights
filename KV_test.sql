@@ -899,7 +899,7 @@ AS (SELECT CAST(ID AS INT) AS ID,
                                                                                       )
                                                                            )
                                                              )
-                                                         AND (BK_BKBE_TYP_BELEG_ART = 1)
+                                                         AND (BK_BKBE_TYP_BELEG_ART IN (0, 1))
                                                ) AS tBE_BELP_BESTAND_AUFTRAG_1
                                                GROUP BY LG_AU_IDAR
                                            ) AS tBE_BELP_BESTAND_AUFTRAG
@@ -3338,7 +3338,7 @@ AS (SELECT CAST(ID AS INT) AS ID,
                                                                                       )
                                                                            )
                                                              )
-                                                         AND (BK_BKBE_TYP_BELEG_ART = 1)
+                                                         AND (BK_BKBE_TYP_BELEG_ART IN (0, 1))
                                                ) AS tBE_BELP_BESTAND_AUFTRAG_1
                                                GROUP BY LG_AU_IDAR
                                            ) AS tBE_BELP_BESTAND_AUFTRAG

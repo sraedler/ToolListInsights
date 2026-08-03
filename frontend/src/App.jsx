@@ -1,9 +1,28 @@
+
+// Deterministic color generator for distinct contract/order colors
+const getContractColor = (contractNum) => {
+  if (!contractNum) return { bg: 'rgba(59, 130, 246, 0.2)', border: 'rgba(59, 130, 246, 0.5)', text: '#93c5fd', badgeBg: 'rgba(0,0,0,0.4)' };
+  let hash = 0;
+  const str = String(contractNum).trim();
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = Math.abs(hash) % 360;
+  return {
+    bg: `hsla(${hue}, 65%, 28%, 0.45)`,
+    border: `hsla(${hue}, 80%, 55%, 0.65)`,
+    text: `hsl(${hue}, 90%, 88%)`,
+    badgeBg: `hsla(${hue}, 75%, 20%, 0.65)`
+  };
+};
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
   Database, 
   Wrench, 
-  CalendarRange, 
+  CalendarRange,
+  Calendar, 
   Sliders, 
   Search, 
   Activity, 
@@ -15,6 +34,7 @@ import {
   Info, 
   Clock, 
   TrendingDown, 
+  TrendingUp,
   CheckCircle2,
   AlertTriangle,
   XCircle,
@@ -347,6 +367,15 @@ export default function App() {
             </div>
 
             <div 
+              className={`nav-item ${activeTab === 'planning_evaluation' ? 'active' : ''}`}
+              onClick={() => setActiveTab('planning_evaluation')}
+              title={sidebarCollapsed ? "Auswertung Planung" : undefined}
+            >
+              <TrendingUp size={18} style={{ flexShrink: 0, color: activeTab === 'planning_evaluation' ? '#3b82f6' : undefined }} />
+              {!sidebarCollapsed && <span>Auswertung Planung</span>}
+            </div>
+
+            <div 
               className={`nav-item ${activeTab === 'missing_data' ? 'active' : ''}`}
               onClick={() => setActiveTab('missing_data')}
               title={sidebarCollapsed ? "Datenvollständigkeit" : undefined}
@@ -397,7 +426,8 @@ export default function App() {
             </h2>
           </div>
 
-          {/* Global Date Range Filter */}
+          {/* Global Date Range Filter (Only shown on historical evaluation tabs) */}
+          {['time_evaluation', 'most_used_tools', 'missing_data'].includes(activeTab) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(255,255,255,0.02)', padding: '0.45rem 1rem', borderRadius: '12px', border: '1px solid var(--border-dim)' }}>
             <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Zeitraum:</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -437,6 +467,7 @@ export default function App() {
               />
             </div>
           </div>
+          )}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             {/* Theme Toggle Button */}
@@ -478,6 +509,13 @@ export default function App() {
           {activeTab === 'planning_deburring' && <PlanningTab mode="deburring" />}
           {activeTab === 'time_evaluation' && (
             <TimeEvaluationTab 
+              theme={theme}
+              selectedMachine={selectedMachine} 
+              setSelectedMachine={setSelectedMachine} 
+            />
+          )}
+          {activeTab === 'planning_evaluation' && (
+            <PlanningEvaluationTab 
               theme={theme}
               selectedMachine={selectedMachine} 
               setSelectedMachine={setSelectedMachine} 
@@ -917,9 +955,9 @@ function ExplorerTab({ startDate, endDate }) {
                       height: '36px'
                     }}
                   >
-                    <option value="all">Alle Status</option>
-                    <option value="open">Offen</option>
-                    <option value="closed">Erledigt</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="all">Alle Status</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="open">Offen</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="closed">Erledigt</option>
                   </select>
 
                   <select
@@ -937,11 +975,11 @@ function ExplorerTab({ startDate, endDate }) {
                       height: '36px'
                     }}
                   >
-                    <option value="all">Alle Lieferfristen</option>
-                    <option value="overdue">⚠️ Überfällig</option>
-                    <option value="today">📅 Heute fällig</option>
-                    <option value="soon">⏳ In Kürze (&lt;= 7 Tage)</option>
-                    <option value="ontime">✅ Rechtzeitig</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="all">Alle Lieferfristen</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="overdue">⚠️ Überfällig</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="today">📅 Heute fällig</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="soon">⏳ In Kürze (&lt;= 7 Tage)</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="ontime">✅ Rechtzeitig</option>
                   </select>
                 </div>
 
@@ -961,9 +999,9 @@ function ExplorerTab({ startDate, endDate }) {
                       height: '36px'
                     }}
                   >
-                    <option value="all">Alle Termine</option>
-                    <option value="hasDate">Termin gesetzt</option>
-                    <option value="noDate">Ohne Termin</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="all">Alle Termine</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="hasDate">Termin gesetzt</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value="noDate">Ohne Termin</option>
                   </select>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -1658,7 +1696,7 @@ function DemandTab({ startDate, endDate }) {
             }}
           >
             {machines.map(m => (
-              <option key={m.Id} value={m.Name}>
+              <option style={{ background: '#0f172a', color: '#f8fafc' }} key={m.Id} value={m.Name}>
                 {m.Name} (Magazin: {m.MagazineSize} Plätze)
               </option>
             ))}
@@ -1743,10 +1781,10 @@ function DemandTab({ startDate, endDate }) {
               width: '100%'
             }}
           >
-            <option value="All">Alle Arbeitsschritte</option>
-            <option value="Green">Bereit (Grün)</option>
-            <option value="Yellow">In Vorbereitung (Gelb)</option>
-            <option value="Red">Gesperrt (Rot)</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="All">Alle Arbeitsschritte</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="Green">Bereit (Grün)</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="Yellow">In Vorbereitung (Gelb)</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="Red">Gesperrt (Rot)</option>
           </select>
         </div>
       </div>
@@ -2781,7 +2819,7 @@ function SimulationTab({ startDate, endDate }) {
               }}
             >
               {filteredMachines.map(m => (
-                <option key={m.id} value={m.id}>
+                <option style={{ background: '#0f172a', color: '#f8fafc' }} key={m.id} value={m.id}>
                   {m.type === 'pool' ? 'Pool: ' : 'Maschine: '} {m.number} ({m.name})
                 </option>
               ))}
@@ -3354,7 +3392,7 @@ function MachinesTab({ startDate, endDate }) {
               }}
             >
               {filteredMachines.map(m => (
-                <option key={m.id} value={m.id}>
+                <option style={{ background: '#0f172a', color: '#f8fafc' }} key={m.id} value={m.id}>
                   {m.type === 'pool' ? 'Pool: ' : 'Maschine: '} {m.number} ({m.name})
                 </option>
               ))}
@@ -3705,9 +3743,13 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeViewMode, setActiveViewMode] = useState('gantt'); // 'gantt' | 'cards' | 'kanban'
+  const [selectedStepDetail, setSelectedStepDetail] = useState(null);
+  const [hoveredContractNumber, setHoveredContractNumber] = useState(null);
   const [drilldownDate, setDrilldownDate] = useState('');
   const [showRuestFilter, setShowRuestFilter] = useState(true);
   const [showProdFilter, setShowProdFilter] = useState(true);
+  const [reloadTrigger, setReloadTrigger] = useState(0);
 
   const [activeModalStep, setActiveModalStep] = useState(null);
   const [fullRoutingSteps, setFullRoutingSteps] = useState([]);
@@ -5137,13 +5179,13 @@ function MissingDataTab() {
             onChange={(e) => setFilterType(e.target.value)}
             style={{ background: 'rgba(13, 20, 35, 0.4)', border: '1px solid var(--border-dim)', borderRadius: '6px', color: '#fff', fontSize: '0.8rem', padding: '0.25rem 0.5rem', outline: 'none' }}
           >
-            <option value="all">Alle Fehler</option>
-            <option value="nc">NC-Programm fehlt (ERP)</option>
-            <option value="stamm">Stamm fehlt (WinTool - Gesamt)</option>
-            <option value="stamm_p_auftrag">Stamm fehlt (nur P-Auftrag)</option>
-            <option value="stamm_artikel">Stamm fehlt (auch Artikel-AP)</option>
-            <option value="fixture">Vorrichtung fehlt (Spannmittel)</option>
-            <option value="wrong_machine">Falsche Maschine (Direktzuordnung Pool-Maschine)</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="all">Alle Fehler</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="nc">NC-Programm fehlt (ERP)</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="stamm">Stamm fehlt (WinTool - Gesamt)</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="stamm_p_auftrag">Stamm fehlt (nur P-Auftrag)</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="stamm_artikel">Stamm fehlt (auch Artikel-AP)</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="fixture">Vorrichtung fehlt (Spannmittel)</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="wrong_machine">Falsche Maschine (Direktzuordnung Pool-Maschine)</option>
           </select>
         </div>
 
@@ -5154,14 +5196,14 @@ function MissingDataTab() {
             onChange={(e) => setFilterMachine(e.target.value)}
             style={{ background: 'rgba(13, 20, 35, 0.4)', border: '1px solid var(--border-dim)', borderRadius: '6px', color: '#fff', fontSize: '0.8rem', padding: '0.25rem 0.5rem', outline: 'none' }}
           >
-            <option value="all">Alle Maschinen</option>
-            <option value="Brother">Brother</option>
-            <option value="Chiron">Chiron</option>
-            <option value="C400">C400</option>
-            <option value="C40">C40</option>
-            <option value="C42">C42</option>
-            <option value="RS2_1">RS2_1</option>
-            <option value="RS2_2">RS2_2</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="all">Alle Maschinen</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="Brother">Brother</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="Chiron">Chiron</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="C400">C400</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="C40">C40</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="C42">C42</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="RS2_1">RS2_1</option>
+            <option style={{ background: '#0f172a', color: '#f8fafc' }} value="RS2_2">RS2_2</option>
           </select>
         </div>
       </div>
@@ -5527,7 +5569,7 @@ function MostUsedToolsView() {
               }}
             >
               {machines.map(m => (
-                <option key={m.value} value={m.value}>{m.label}</option>
+                <option style={{ background: '#0f172a', color: '#f8fafc' }} key={m.value} value={m.value}>{m.label}</option>
               ))}
             </select>
           </div>
@@ -7415,7 +7457,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
         <AlertTriangle size={32} style={{ color: '#ef4444', marginBottom: '1rem' }} />
         <h3 style={{ color: '#f1f5f9', marginBottom: '0.5rem' }}>Verbindungsfehler</h3>
         <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1.5rem' }}>{error}</p>
-        <button onClick={fetchPlanningData} className="btn btn-primary">Erneut versuchen</button>
+        <button onClick={refetch} className="btn btn-primary">Erneut versuchen</button>
       </div>
     );
   }
@@ -7720,10 +7762,10 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                       cursor: 'pointer'
                     }}
                   >
-                    <option value={5}>5 Arbeitstage</option>
-                    <option value={10}>10 Arbeitstage</option>
-                    <option value={15}>15 Arbeitstage</option>
-                    <option value={20}>20 Arbeitstage</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value={5}>5 Arbeitstage</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value={10}>10 Arbeitstage</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value={15}>15 Arbeitstage</option>
+                    <option style={{ background: '#0f172a', color: '#f8fafc' }} value={20}>20 Arbeitstage</option>
                   </select>
                 </div>
               </div>
@@ -10546,6 +10588,1290 @@ function PDFCanvasViewer({ url, dmsSliderFullscreen }) {
           }} 
         />
       </div>
+    </div>
+  );
+}
+
+
+/* ==========================================
+   PLANNING EVALUATION TAB (Auswertung Planung)
+   ========================================== */
+function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
+  const [weeksCount, setWeeksCount] = useState(4); // 1, 2, 4, 6 weeks
+  const [includeGesperrte, setIncludeGesperrte] = useState(false);
+  const [includeVorgemerkte, setIncludeVorgemerkte] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showRuestFilter, setShowRuestFilter] = useState(true);
+  const [showProdFilter, setShowProdFilter] = useState(true);
+  const [reloadTrigger, setReloadTrigger] = useState(0);
+  const refetch = () => setReloadTrigger(c => c + 1);
+  const [activeViewMode, setActiveViewMode] = useState('gantt'); // 'gantt' | 'cards' | 'kanban'
+  const [selectedStepDetail, setSelectedStepDetail] = useState(null);
+  const [hoveredContractNumber, setHoveredContractNumber] = useState(null);
+
+  const [loading, setLoading] = useState(true);
+  const [loadingPercent, setLoadingPercent] = useState(0);
+  const [loadingStageText, setLoadingStageText] = useState('D4-Auftragsdaten laden...');
+  const [currentDayLoaded, setCurrentDayLoaded] = useState(0);
+
+  const [error, setError] = useState(null);
+  const [boardData, setBoardData] = useState({});
+  const [dailyCapacities, setDailyCapacities] = useState({});
+  const [planningDays, setPlanningDays] = useState([]);
+
+  const [activeModalStep, setActiveModalStep] = useState(null);
+  const [fullRoutingSteps, setFullRoutingSteps] = useState([]);
+  const [loadingRouting, setLoadingRouting] = useState(false);
+
+  // Exact milling machines list (matching "Planung Maschinen")
+  const validMillingMachines = ['Brother', 'Chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2'];
+
+  // Routing Modal loading effect
+  useEffect(() => {
+    if (!activeModalStep) {
+      setFullRoutingSteps([]);
+      return;
+    }
+    const loadFullRouting = async () => {
+      setLoadingRouting(true);
+      try {
+        const res = await fetch(API_BASE + '/orders/' + activeModalStep.orderId + '/steps');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.length > 0) {
+            const mapped = json.map(op => ({
+              stepId: op.StepId,
+              stepPos: op.StepPos,
+              stepDesc: (op.StepDesc || '').trim(),
+              setupTime: op.SetupTime || 0,
+              prodTime: op.ProdTime || 0,
+              isCompleted: op.SPKO === 4,
+              isExecuting: op.SPKO === 2,
+              machineName: op.MachineName || (op.MachineId ? ('Maschine #' + op.MachineId) : 'Pool'),
+              stepTyp: op.StepTyp,
+              stepTypName: op.StepTypName
+            }));
+            setFullRoutingSteps(mapped);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching full routing steps:', err);
+      } finally {
+        setLoadingRouting(false);
+      }
+    };
+    loadFullRouting();
+  }, [activeModalStep]);
+
+  // Fetch planning data with progress bar simulation and AbortController
+  useEffect(() => {
+    const controller = new AbortController();
+    let isCancelled = false;
+
+    setLoading(true);
+    setError(null);
+    setLoadingPercent(5);
+    setLoadingStageText('D4-Auftrags- und Kapazitätsdaten werden abgerufen...');
+    setCurrentDayLoaded(0);
+
+    const totalDaysToLoad = weeksCount * 7;
+    let simulatedDay = 0;
+    const stepInterval = Math.max(180, Math.round(6000 / totalDaysToLoad));
+
+    const interval = setInterval(() => {
+      if (isCancelled) return;
+      simulatedDay += 1;
+      if (simulatedDay <= totalDaysToLoad) {
+        const pct = Math.min(92, Math.round((simulatedDay / totalDaysToLoad) * 88) + 4);
+        setCurrentDayLoaded(simulatedDay);
+        setLoadingPercent(pct);
+        setLoadingStageText('Berechne Belegung für Tag ' + simulatedDay + ' von ' + totalDaysToLoad + '...');
+      } else {
+        setLoadingPercent(95);
+        setLoadingStageText('Optimiere Maschinenfolgen und Rüstzeiten...');
+      }
+    }, stepInterval);
+
+    const runFetch = async () => {
+      try {
+        const days = weeksCount * 7;
+        const res = await fetch(API_BASE + '/planning?daysCount=' + days + '&includeNonGreen=true&useD4Plan=true', {
+          signal: controller.signal
+        });
+        if (!res.ok) {
+          throw new Error('Fehler beim Laden der Planungsdaten (' + res.status + ' ' + res.statusText + ')');
+        }
+        const data = await res.json();
+        if (isCancelled) return;
+
+        setBoardData(data.board || {});
+        setDailyCapacities(data.dailyCapacities || data.capacities || {});
+        const daysList = (data.days || data.planningDays || (
+          data.board && Object.keys(data.board).length > 0 
+            ? Object.keys(data.board[Object.keys(data.board)[0]] || {}) 
+            : []
+        )).filter(d => d !== 'Überlauf');
+        setPlanningDays(daysList);
+
+        clearInterval(interval);
+        setCurrentDayLoaded(totalDaysToLoad);
+        setLoadingPercent(100);
+        setLoadingStageText('Auswertung abgeschlossen!');
+
+        setTimeout(() => {
+          if (!isCancelled) setLoading(false);
+        }, 250);
+      } catch (err) {
+        clearInterval(interval);
+        if (err.name === 'AbortError') {
+          console.log('Planning evaluation fetch aborted cleanly.');
+          return;
+        }
+        if (!isCancelled) {
+          console.error('Error loading planning evaluation data:', err);
+          setError(err.message);
+          setLoading(false);
+        }
+      }
+    };
+
+    runFetch();
+
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+      controller.abort();
+    };
+  }, [weeksCount, includeVorgemerkte, includeGesperrte, reloadTrigger]);
+
+  // Filter board keys to ONLY valid milling machines present in boardData
+  const availableMillingMachines = validMillingMachines.filter(m => boardData[m] !== undefined || Object.keys(boardData).length === 0);
+
+  // Machine / Pool Filter Options
+  const filterOptions = [
+    { value: 'All', label: 'Alle Fräsmaschinen (7)' },
+    { value: 'ROBOTER_ALL', label: '🤖 Alle Roboteranlagen (C40, C42, RS2_1, RS2_2)' },
+    { value: 'POOL_RS2', label: '🤖 Robotersystem RS2 Pool (RS2_1, RS2_2)' },
+    { value: 'POOL_C40_C42', label: '🤖 Robotersystem C40-C42 Pool (C40, C42)' },
+    { value: 'Brother', label: 'Brother (SPEEDIO)' },
+    { value: 'Chiron', label: 'Chiron (FZ 15 W)' },
+    { value: 'C400', label: 'Hermle C400' },
+    { value: 'C40', label: 'Hermle C40' },
+    { value: 'C42', label: 'Hermle C42' },
+    { value: 'RS2_1', label: 'Fräsen RS2-1' },
+    { value: 'RS2_2', label: 'Fräsen RS2-2' }
+  ];
+
+  // Resolve active filter to array of machine names
+  const getSelectedMachineNames = () => {
+    const sel = selectedMachine || 'All';
+    if (sel === 'All') return validMillingMachines;
+    if (sel === 'ROBOTER_ALL') return ['C40', 'C42', 'RS2_1', 'RS2_2'];
+    if (sel === 'POOL_RS2') return ['RS2_1', 'RS2_2'];
+    if (sel === 'POOL_C40_C42') return ['C40', 'C42'];
+    
+    // Check direct or fuzzy match
+    const matched = validMillingMachines.filter(m => {
+      if (m === sel) return true;
+      const selLower = sel.toLowerCase();
+      const mLower = m.toLowerCase();
+      return selLower.includes(mLower) || mLower.includes(selLower);
+    });
+    return matched.length > 0 ? matched : validMillingMachines;
+  };
+
+  const filteredMachines = getSelectedMachineNames();
+
+  // Compute machine utilization summaries
+  const machineSummaries = filteredMachines.map(mName => {
+    const machineBoard = boardData[mName] || {};
+    const machineCaps = dailyCapacities[mName] || {};
+
+    let totalCapMin = 0;
+    let freigegebenMin = 0;
+    let gesperrtMin = 0;
+    let vorgemerktMin = 0;
+    let stepsList = [];
+
+    // Separate 4-week window metrics from overflow backlog to match D4 native evaluation!
+    let windowFreigegebenMin = 0;
+    let windowGesperrtMin = 0;
+    let windowVorgemerktMin = 0;
+
+    let overflowFreigegebenMin = 0;
+    let overflowGesperrtMin = 0;
+    let overflowVorgemerktMin = 0;
+
+    let explicitMin = 0;
+    let poolShareMin = 0;
+
+    const allBoardDays = Array.from(new Set([...planningDays, ...Object.keys(machineBoard)]));
+
+    allBoardDays.forEach(day => {
+      const isWindowDay = planningDays.includes(day);
+      if (isWindowDay) {
+        totalCapMin += (machineCaps[day] || 0);
+      }
+
+      const daySteps = machineBoard[day] || [];
+      daySteps.forEach(s => {
+        const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
+        const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
+
+        // Filter by user selection
+        if (!isFreigegeben && !includeVorgemerkte) {
+          return;
+        }
+        if (isFreigegeben && isGesperrt && !includeGesperrte) {
+          return;
+        }
+
+        // Apply text search query filter
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const match = String(s.contractNumber || '').toLowerCase().includes(q) ||
+                        String(s.orderPos || '').toLowerCase().includes(q) ||
+                        String(s.orderDesc || '').toLowerCase().includes(q) ||
+                        String(s.stepDesc || '').toLowerCase().includes(q);
+          if (!match) return;
+        }
+
+        let stepTime = 0;
+        if (showRuestFilter) stepTime += (s.setupTime || 0);
+        if (showProdFilter) stepTime += (s.prodTime || 0);
+
+        const isPoolStep = !!(s.machinePoolId === 13 || s.machinePoolId === 9 || s.machinePoolId === 12);
+        if (isPoolStep) {
+          poolShareMin += stepTime;
+        } else {
+          explicitMin += stepTime;
+        }
+
+        if (isWindowDay) {
+          if (!isFreigegeben) windowVorgemerktMin += stepTime;
+          else if (isGesperrt) windowGesperrtMin += stepTime;
+          else windowFreigegebenMin += stepTime;
+        } else {
+          if (!isFreigegeben) overflowVorgemerktMin += stepTime;
+          else if (isGesperrt) overflowGesperrtMin += stepTime;
+          else overflowFreigegebenMin += stepTime;
+        }
+
+        if (!isFreigegeben) vorgemerktMin += stepTime;
+        else if (isGesperrt) gesperrtMin += stepTime;
+        else freigegebenMin += stepTime;
+
+        stepsList.push({
+          ...s,
+          day,
+          isFreigegeben,
+          isGesperrt,
+          stepTime,
+          isPoolStep
+        });
+      });
+    });
+
+    const windowPlannedMin = windowFreigegebenMin + windowGesperrtMin + windowVorgemerktMin;
+    const overflowPlannedMin = overflowFreigegebenMin + overflowGesperrtMin + overflowVorgemerktMin;
+
+    const windowFreigegebenHrs = windowFreigegebenMin / 60;
+    const windowGesperrtHrs = windowGesperrtMin / 60;
+    const windowVorgemerktHrs = windowVorgemerktMin / 60;
+    const windowPlannedHrs = windowPlannedMin / 60;
+    const overflowPlannedHrs = overflowPlannedMin / 60;
+
+    const totalCapHrs = totalCapMin / 60;
+    const totalPlannedMin = freigegebenMin + gesperrtMin + vorgemerktMin;
+    const totalPlannedHrs = totalPlannedMin / 60;
+
+    // Window utilization matches strictly the selected time window (1, 2, 4, 6 weeks)
+    const windowUtilizationPct = totalCapHrs > 0 ? (windowPlannedHrs / totalCapHrs) * 100 : 0;
+    const freigegebenPct = totalCapHrs > 0 ? (windowFreigegebenHrs / totalCapHrs) * 100 : 0;
+    const gesperrtPct = totalCapHrs > 0 ? (windowGesperrtHrs / totalCapHrs) * 100 : 0;
+    const vorgemerktPct = totalCapHrs > 0 ? (windowVorgemerktHrs / totalCapHrs) * 100 : 0;
+
+    return {
+      machineName: mName,
+      totalCapMin,
+      totalCapHrs,
+      windowFreigegebenMin,
+      windowFreigegebenHrs,
+      windowGesperrtMin,
+      windowGesperrtHrs,
+      windowVorgemerktMin,
+      windowVorgemerktHrs,
+      windowPlannedMin,
+      windowPlannedHrs,
+      overflowPlannedMin,
+      overflowPlannedHrs,
+      freigegebenHrs: windowFreigegebenHrs, // UI default reflects window
+      gesperrtHrs: windowGesperrtHrs,       // UI default reflects window
+      vorgemerktHrs: windowVorgemerktHrs,   // UI default reflects window
+      totalPlannedHrs: windowPlannedHrs,
+      allTimeFreigegebenHrs: freigegebenMin / 60,
+      allTimeGesperrtHrs: gesperrtMin / 60,
+      allTimeVorgemerktHrs: vorgemerktMin / 60,
+      explicitMin,
+      explicitHrs: explicitMin / 60,
+      poolShareMin,
+      poolShareHrs: poolShareMin / 60,
+      windowUtilizationPct,
+      utilizationPct: windowUtilizationPct,
+      freigegebenPct,
+      gesperrtPct,
+      vorgemerktPct,
+      stepsCount: stepsList.length,
+      stepsList
+    };
+  });
+
+  // Global total metrics for selected filter STRICTLY BASED ON SELECTED TIME WINDOW
+  const globalTotalCapHrs = machineSummaries.reduce((sum, m) => sum + m.totalCapHrs, 0);
+  const globalFreigegebenHrs = machineSummaries.reduce((sum, m) => sum + m.windowFreigegebenHrs, 0);
+  const globalGesperrtHrs = machineSummaries.reduce((sum, m) => sum + m.windowGesperrtHrs, 0);
+  const globalVorgemerktHrs = machineSummaries.reduce((sum, m) => sum + m.windowVorgemerktHrs, 0);
+  const globalTotalPlannedHrs = globalFreigegebenHrs + globalGesperrtHrs + globalVorgemerktHrs;
+  const globalOverflowHrs = machineSummaries.reduce((sum, m) => sum + m.overflowPlannedHrs, 0);
+  const globalUtilizationPct = globalTotalCapHrs > 0 ? (globalTotalPlannedHrs / globalTotalCapHrs) * 100 : 0;
+
+  // Chart data: Timeline per Day FILTERED STRICTLY BY SELECTED MACHINES AND STATUSES
+  const chartData = planningDays.map(day => {
+    let dayCapMin = 0;
+    let dayFreigegebenMin = 0;
+    let dayGesperrtMin = 0;
+    let dayVorgemerktMin = 0;
+
+    filteredMachines.forEach(mName => {
+      dayCapMin += (dailyCapacities[mName]?.[day] || 0);
+      const daySteps = boardData[mName]?.[day] || [];
+      daySteps.forEach(s => {
+        const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
+        const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
+
+        if (!isFreigegeben && !includeVorgemerkte) return;
+        if (isFreigegeben && isGesperrt && !includeGesperrte) return;
+
+        let stepTime = 0;
+        if (showRuestFilter) stepTime += (s.setupTime || 0);
+        if (showProdFilter) stepTime += (s.prodTime || 0);
+
+        if (!isFreigegeben) {
+          dayVorgemerktMin += stepTime;
+        } else if (isGesperrt) {
+          dayGesperrtMin += stepTime;
+        } else {
+          dayFreigegebenMin += stepTime;
+        }
+      });
+    });
+
+    const dObj = new Date(day);
+    const dayLabel = !isNaN(dObj.getTime()) ? (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.') : day;
+
+    return {
+      day,
+      dayLabel,
+      Kapazität: Math.round((dayCapMin / 60) * 10) / 10,
+      Freigegeben: Math.round((dayFreigegebenMin / 60) * 10) / 10,
+      Gesperrt: Math.round((dayGesperrtMin / 60) * 10) / 10,
+      Vorgemerkt: Math.round((dayVorgemerktMin / 60) * 10) / 10,
+      GesamtGeplant: Math.round(((dayFreigegebenMin + dayGesperrtMin + dayVorgemerktMin) / 60) * 10) / 10
+    };
+  });
+
+  if (loading) {
+    return (
+      <div className="glass-card" style={{ padding: '3.5rem 2rem', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1.25rem', maxWidth: '650px', margin: '3rem auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <RefreshCw size={28} className="spinning" style={{ color: '#3b82f6' }} />
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-main)' }}>
+            Berechne Maschinenauslastung für die nächsten {weeksCount} Wochen ({weeksCount * 7} Tage)
+          </div>
+        </div>
+
+        {/* Progress Text */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+          <span>{loadingStageText}</span>
+          <span style={{ color: '#38bdf8', fontWeight: 700 }}>{loadingPercent}%</span>
+        </div>
+
+        {/* Outer Progress Bar Container */}
+        <div style={{ width: '100%', height: '14px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '7px', overflow: 'hidden', border: '1px solid var(--border-glow)' }}>
+          {/* Animated Inner Progress Bar */}
+          <div
+            style={{
+              height: '100%',
+              width: `${loadingPercent}%`,
+              background: 'linear-gradient(90deg, #3b82f6 0%, #38bdf8 50%, #10b981 100%)',
+              borderRadius: '7px',
+              transition: 'width 0.15s ease-out',
+              boxShadow: '0 0 12px rgba(56, 189, 248, 0.5)'
+            }}
+          />
+        </div>
+
+        {/* Day-by-Day Counter Badge */}
+        <div style={{ fontSize: '0.8rem', color: '#94a3b8', background: 'rgba(0, 0, 0, 0.25)', padding: '0.4rem 0.85rem', borderRadius: '20px', border: '1px solid var(--border-dim)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <Calendar size={14} style={{ color: '#38bdf8' }} />
+          <span>Verarbeitete Planungstage: <strong>{currentDayLoaded} / {weeksCount * 7} Tage</strong></span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="glass-card" style={{ padding: '2.5rem', textAlign: 'center', color: '#ef4444', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+        <AlertTriangle size={36} />
+        <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>Fehler beim Laden der Auswertungsdaten</div>
+        <div style={{ fontSize: '0.9rem', color: '#cbd5e1' }}>{error}</div>
+        <button onClick={() => setReloadTrigger(c => c + 1)} className="btn-primary" style={{ marginTop: '0.5rem' }}>
+          Erneut versuchen
+        </button>
+      </div>
+    );
+  }
+
+  const selectedFilterLabel = filterOptions.find(o => o.value === selectedMachine)?.label || selectedMachine;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      {/* Top Filter & Control Panel */}
+      <div className="glass-card" style={{ padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+          
+          {/* Machine / Pool Filter Dropdown */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)' }}>Filter / Anlage:</span>
+            <select
+              value={selectedMachine || 'All'}
+              onChange={(e) => setSelectedMachine(e.target.value)}
+              style={{
+                background: 'var(--bg-input)',
+                color: 'var(--text-main)',
+                border: '1px solid var(--border-glow)',
+                padding: '0.45rem 0.85rem',
+                borderRadius: '8px',
+                fontSize: '0.85rem',
+                fontWeight: 600,
+                outline: 'none',
+                cursor: 'pointer',
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+              }}
+            >
+              {filterOptions.map(opt => (
+                <option key={opt.value} value={opt.value} style={{ background: '#0f172a', color: '#f8fafc', padding: '8px' }}>{opt.label}</option>
+              ))}
+            </select>
+
+            {/* View Mode Toggle: Gantt Tagesfüllung / Karten / Kanban */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(0,0,0,0.3)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glow)' }}>
+              {[
+                { id: 'gantt', label: '📅 Gantt Tagesfüllung' },
+                { id: 'cards', label: '📊 Übersicht & Karten' },
+                { id: 'kanban', label: '📋 Board-Spalten' }
+              ].map(v => (
+                <button
+                  key={v.id}
+                  onClick={() => setActiveViewMode(v.id)}
+                  style={{
+                    background: activeViewMode === v.id ? 'linear-gradient(135deg, #3b82f6, #1d4ed8)' : 'transparent',
+                    color: activeViewMode === v.id ? '#ffffff' : 'var(--text-muted)',
+                    border: 'none',
+                    padding: '0.4rem 0.85rem',
+                    borderRadius: '6px',
+                    fontSize: '0.82rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    boxShadow: activeViewMode === v.id ? '0 2px 8px rgba(59, 130, 246, 0.4)' : 'none',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Weeks Range Selector Buttons */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(0,0,0,0.2)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-dim)' }}>
+              {[
+                { count: 1, label: '1 Woche' },
+                { count: 2, label: '2 Wochen' },
+                { count: 4, label: '4 Wochen' },
+                { count: 6, label: '6 Wochen' }
+              ].map(w => (
+                <button
+                  key={w.count}
+                  onClick={() => setWeeksCount(w.count)}
+                  style={{
+                    background: weeksCount === w.count ? 'var(--accent-primary, #3b82f6)' : 'transparent',
+                    color: weeksCount === w.count ? '#ffffff' : 'var(--text-muted)',
+                    border: 'none',
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '6px',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {w.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Status Checkboxes: Gesperrt & Vorgemerkt */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+              {/* Checkbox: Include Gesperrte */}
+              <label style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer',
+                background: includeGesperrte ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255, 255, 255, 0.04)',
+                padding: '0.45rem 0.75rem',
+                borderRadius: '8px',
+                border: includeGesperrte ? '1px solid rgba(239, 68, 68, 0.5)' : '1px solid var(--border-dim)',
+                transition: 'all 0.2s',
+                userSelect: 'none'
+              }}>
+                <input
+                  type="checkbox"
+                  checked={includeGesperrte}
+                  onChange={(e) => setIncludeGesperrte(e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: '#ef4444', cursor: 'pointer' }}
+                />
+                <span style={{ fontWeight: 600, color: includeGesperrte ? '#ef4444' : 'var(--text-muted)', fontSize: '0.85rem' }}>
+                  Gesperrte Aufträge (D4-Sperre)
+                </span>
+              </label>
+
+              {/* Checkbox: Include Vorgemerkte */}
+              <label style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer',
+                background: includeVorgemerkte ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255, 255, 255, 0.04)',
+                padding: '0.45rem 0.75rem',
+                borderRadius: '8px',
+                border: includeVorgemerkte ? '1px solid rgba(245, 158, 11, 0.5)' : '1px solid var(--border-dim)',
+                transition: 'all 0.2s',
+                userSelect: 'none'
+              }}>
+                <input
+                  type="checkbox"
+                  checked={includeVorgemerkte}
+                  onChange={(e) => setIncludeVorgemerkte(e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: '#f59e0b', cursor: 'pointer' }}
+                />
+                <span style={{ fontWeight: 600, color: includeVorgemerkte ? '#f59e0b' : 'var(--text-muted)', fontSize: '0.85rem' }}>
+                  Vorgemerkte Aufträge (BelegArt 0)
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {/* Right Controls: Rüst/Prod Toggles & Search */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setShowRuestFilter(!showRuestFilter)}
+              style={{
+                background: showRuestFilter ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                color: showRuestFilter ? '#3b82f6' : 'var(--text-muted)',
+                border: showRuestFilter ? '1px solid rgba(59, 130, 246, 0.4)' : '1px solid var(--border-dim)',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Rüstzeit {showRuestFilter ? '✓' : '✕'}
+            </button>
+
+            <button
+              onClick={() => setShowProdFilter(!showProdFilter)}
+              style={{
+                background: showProdFilter ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                color: showProdFilter ? '#10b981' : 'var(--text-muted)',
+                border: showProdFilter ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid var(--border-dim)',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Laufzeit {showProdFilter ? '✓' : '✕'}
+            </button>
+
+            <div style={{ position: 'relative' }}>
+              <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input
+                type="text"
+                placeholder="Auftrag / Artikel suchen..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  background: 'var(--bg-input)',
+                  color: 'var(--text-main)',
+                  border: '1px solid var(--border-dim)',
+                  padding: '0.4rem 0.75rem 0.4rem 2rem',
+                  borderRadius: '6px',
+                  fontSize: '0.8rem',
+                  width: '200px',
+                  outline: 'none'
+                }}
+              />
+            </div>
+
+            <button
+              onClick={refetch}
+              disabled={loading}
+              className="btn-secondary"
+              style={{ padding: '0.4rem 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              <RefreshCw size={14} className={loading ? 'spinning' : ''} />
+              <span>Aktualisieren</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Metric Cards Grid */}
+      <div className="grid-4">
+        <div className="glass-card metric-card">
+          <div className="metric-header">
+            <span>Auslastung ({filteredMachines.length} {filteredMachines.length === 1 ? 'Maschine' : 'Maschinen'})</span>
+            <Activity size={16} style={{ color: globalUtilizationPct > 100 ? '#ef4444' : globalUtilizationPct > 80 ? '#f59e0b' : '#10b981' }} />
+          </div>
+          <div className="metric-value" style={{ color: globalUtilizationPct > 100 ? '#ef4444' : globalUtilizationPct > 80 ? '#f59e0b' : '#10b981' }}>
+            {globalUtilizationPct.toFixed(1)}%
+          </div>
+          <div className="metric-desc">
+            {globalTotalPlannedHrs.toFixed(1)}h Geplant / {globalTotalCapHrs.toFixed(1)}h Kapazität ({weeksCount} {weeksCount === 1 ? 'Woche' : 'Wochen'})
+          </div>
+        </div>
+
+        <div className="glass-card metric-card">
+          <div className="metric-header">
+            <span>Freigegeben</span>
+            <CheckCircle2 size={16} style={{ color: '#3b82f6' }} />
+          </div>
+          <div className="metric-value" style={{ color: '#3b82f6' }}>
+            {globalFreigegebenHrs.toFixed(1)}h
+          </div>
+          <div className="metric-desc">Aktiv bearbeitbare P-Aufträge ohne Sperre</div>
+        </div>
+
+        <div className="glass-card metric-card">
+          <div className="metric-header">
+            <span>Gesperrte Stunden</span>
+            <AlertTriangle size={16} style={{ color: includeGesperrte ? '#ef4444' : 'var(--text-muted)' }} />
+          </div>
+          <div className="metric-value" style={{ color: includeGesperrte ? '#ef4444' : 'var(--text-muted)' }}>
+            {includeGesperrte ? (globalGesperrtHrs.toFixed(1) + 'h') : 'Ausgeblendet'}
+          </div>
+          <div className="metric-desc">
+            {includeGesperrte ? 'BelegArt 1 mit D4-Sperre' : 'Per Checkbox oben aktivierbar'}
+          </div>
+        </div>
+
+        <div className="glass-card metric-card">
+          <div className="metric-header">
+            <span>Vorgemerkte Stunden</span>
+            <Clock size={16} style={{ color: includeVorgemerkte ? '#f59e0b' : 'var(--text-muted)' }} />
+          </div>
+          <div className="metric-value" style={{ color: includeVorgemerkte ? '#f59e0b' : 'var(--text-muted)' }}>
+            {includeVorgemerkte ? (globalVorgemerktHrs.toFixed(1) + 'h') : 'Ausgeblendet'}
+          </div>
+          <div className="metric-desc">
+            {includeVorgemerkte ? 'BelegArt 0 (Vorgemerkt / Vertrieb)' : 'Per Checkbox oben aktivierbar'}
+          </div>
+        </div>
+      </div>
+
+      {/* Chart Section */}
+      <div className="glass-card" style={{ padding: '1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <div>
+            <h3 style={{ fontWeight: 600, fontSize: '1.05rem', margin: 0 }}>
+              Kapazitätsverlauf: {selectedFilterLabel} (nächste {weeksCount} Wochen)
+            </h3>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0 0' }}>
+              Tägliche Gegenüberstellung der Belegungsstunden (Entsperrt, Gesperrt, Vorgemerkt) vs. verfügbare Kapazität
+            </p>
+          </div>
+        </div>
+
+        <div style={{ width: '100%', height: 320 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 25 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <XAxis dataKey="dayLabel" stroke="var(--text-muted)" fontSize={11} interval={Math.floor(planningDays.length / 14)} />
+              <YAxis stroke="var(--text-muted)" fontSize={11} unit="h" />
+              <Tooltip
+                contentStyle={{
+                  background: 'rgba(15, 23, 42, 0.95)',
+                  border: '1px solid var(--border-glow)',
+                  borderRadius: '8px',
+                  color: '#fff',
+                  fontSize: '0.85rem'
+                }}
+              />
+              <Legend wrapperStyle={{ paddingTop: '10px', fontSize: '0.8rem' }} />
+              <Bar dataKey="Freigegeben" stackId="a" fill="#3b82f6" name="Freigegeben (h)" />
+              {includeGesperrte && (
+                <Bar dataKey="Gesperrt" stackId="a" fill="#ef4444" name="Gesperrt (h)" />
+              )}
+              {includeVorgemerkte && (
+                <Bar dataKey="Vorgemerkt" stackId="a" fill="#f59e0b" name="Vorgemerkt (h)" />
+              )}
+              <Line type="monotone" dataKey="Kapazität" stroke="#10b981" strokeWidth={2} dot={false} name="Max. Kapazität (h)" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* GANTT TAGESFÜLLUNGS-ANSICHT (WER / WO / WIE LANGE GEPLANT IST) */}
+      {activeViewMode === 'gantt' && (
+        <div className="glass-card" style={{ padding: '1.25rem', overflowX: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Calendar size={18} style={{ color: '#38bdf8' }} />
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
+                Gantt Tagesfüllung – Kalenderansicht ({weeksCount} {weeksCount === 1 ? 'Woche' : 'Wochen'})
+              </h3>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#3b82f6' }}></span> Freigegeben
+              </span>
+              {includeGesperrte && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#ef4444' }}></span> Gesperrt
+                </span>
+              )}
+              {includeVorgemerkte && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#f59e0b' }}></span> Vorgemerkt
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Matrix Table Timeline Container with Sticky Header & Sticky Machine Column */}
+          <div style={{ maxHeight: '78vh', overflow: 'auto', borderRadius: '8px', border: '1px solid var(--border-glow)', position: 'relative' }}>
+            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.74rem', minWidth: (planningDays.length * 85 + 140) + 'px' }}>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 30, background: '#0f172a' }}>
+                <tr style={{ background: '#0f172a', borderBottom: '2px solid var(--border-glow)' }}>
+                  <th style={{ padding: '0.75rem 1rem', textAlign: 'left', minWidth: '180px', position: 'sticky', top: 0, left: 0, background: '#0f172a', zIndex: 40, borderRight: '2px solid var(--border-glow)', borderBottom: '2px solid var(--border-glow)' }}>
+                    Maschine / Anlage
+                  </th>
+                  {planningDays.map(day => {
+                    const dObj = new Date(day);
+                    const dayOfWeek = isNaN(dObj.getTime()) ? '' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][dObj.getDay()];
+                    const dayFormatted = isNaN(dObj.getTime()) ? day : (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.');
+                    const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
+
+                    return (
+                      <th
+                        key={day}
+                        style={{
+                          padding: '0.4rem 0.15rem',
+                          textAlign: 'center',
+                          minWidth: '85px',
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 30,
+                          background: isWeekend ? '#1e293b' : '#0f172a',
+                          borderRight: '1px solid var(--border-dim)',
+                          borderBottom: '2px solid var(--border-glow)'
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, color: isWeekend ? '#94a3b8' : '#f8fafc', fontSize: '0.85rem' }}>
+                          {dayOfWeek} {dayFormatted}
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredMachines.map(mName => {
+                  const mSummary = machineSummaries.find(x => x.machineName === mName);
+                  const mBoard = boardData[mName] || {};
+
+                  return (
+                    <tr key={mName} style={{ borderBottom: '1px solid var(--border-dim)', background: 'rgba(255,255,255,0.01)' }}>
+                      {/* Sticky Machine Name Column */}
+                      <td style={{ padding: '0.75rem 1rem', fontWeight: 700, position: 'sticky', left: 0, background: '#0f172a', zIndex: 20, borderRight: '2px solid var(--border-glow)', borderBottom: '1px solid var(--border-dim)' }}>
+                        <div style={{ color: 'var(--text-main)', fontSize: '0.9rem' }}>{mName}</div>
+                        {mSummary && (
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px', fontWeight: 500 }}>
+                            {mSummary.windowPlannedHrs.toFixed(1)}h / {mSummary.totalCapHrs.toFixed(1)}h ({mSummary.windowUtilizationPct.toFixed(0)}%)
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Calendar Day Cells */}
+                      {planningDays.map(day => {
+                        const dayCapMin = dailyCapacities[mName]?.[day] || 360;
+                        const dayCapHrs = dayCapMin / 60;
+                        const daySteps = (mBoard[day] || []).filter(s => {
+                          const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
+                          const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
+
+                          if (!isFreigegeben && !includeVorgemerkte) return false;
+                          if (isFreigegeben && isGesperrt && !includeGesperrte) return false;
+
+                          if (searchQuery.trim()) {
+                            const q = searchQuery.toLowerCase();
+                            return String(s.contractNumber || '').toLowerCase().includes(q) ||
+                                   String(s.orderPos || '').toLowerCase().includes(q) ||
+                                   String(s.orderDesc || '').toLowerCase().includes(q) ||
+                                   String(s.stepDesc || '').toLowerCase().includes(q);
+                          }
+                          return true;
+                        });
+
+                        let totalDayMin = 0;
+                        daySteps.forEach(s => {
+                          if (showRuestFilter) totalDayMin += (s.setupTime || 0);
+                          if (showProdFilter) totalDayMin += (s.prodTime || 0);
+                        });
+                        const totalDayHrs = totalDayMin / 60;
+                        const fillPct = dayCapMin > 0 ? Math.min(100, (totalDayMin / dayCapMin) * 100) : 0;
+                        const isOverCapacity = totalDayMin > dayCapMin;
+
+                        return (
+                          <td
+                            key={day}
+                            style={{
+                              padding: '0.25rem 0.15rem',
+                              verticalAlign: 'top',
+                              borderRight: '1px solid var(--border-dim)',
+                              background: isOverCapacity ? 'rgba(239, 68, 68, 0.04)' : 'transparent'
+                            }}
+                          >
+                            {/* Ultra-compact Day Capacity Bar inside cell */}
+                            <div style={{ marginBottom: '0.25rem', background: 'rgba(0,0,0,0.35)', padding: '0.15rem 0.25rem', borderRadius: '3px', border: '1px solid var(--border-dim)', textAlign: 'center' }}>
+                              <div style={{ fontSize: '0.62rem', fontWeight: 700, color: isOverCapacity ? '#ef4444' : fillPct > 80 ? '#f59e0b' : '#38bdf8' }}>
+                                {totalDayHrs.toFixed(1)}h
+                              </div>
+                              <div style={{ height: '3px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '1px', overflow: 'hidden' }}>
+                                <div
+                                  style={{
+                                    height: '100%',
+                                    width: fillPct + '%',
+                                    background: isOverCapacity ? '#ef4444' : fillPct > 80 ? '#f59e0b' : '#3b82f6',
+                                    transition: 'width 0.3s'
+                                  }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Stacked Compact Order Step Cards with Distinct Order Colors */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              {daySteps.length === 0 ? (
+                                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.15)', textAlign: 'center', padding: '0.35rem 0' }}>
+                                  —
+                                </div>
+                              ) : (
+                                daySteps.map((step, sIdx) => {
+                                  const isFreigegeben = step.isFreigegeben !== undefined ? step.isFreigegeben : (step.belegArt === 1);
+                                  const isGesperrt = !!(step.isGesperrt || step.typSperre > 0);
+
+                                  const setupH = ((step.setupTime || 0) / 60).toFixed(1);
+                                  const prodH = ((step.prodTime || 0) / 60).toFixed(1);
+                                  const totalH = (((step.setupTime || 0) + (step.prodTime || 0)) / 60).toFixed(1);
+
+                                  // Get unique vibrant color palette per contract number
+                                  const orderColor = getContractColor(step.contractNumber);
+
+                                  const statusDot = !isFreigegeben ? '🟡' : isGesperrt ? '🔴' : '🟢';
+
+                                  const displayTitle = (step.contractNumber || 'Auftrag') + ' / Pos ' + (step.orderPos || '10');
+                                  const articleLabel = step.orderDesc || step.stepDesc || 'Artikel';
+
+                                  const isSameContract = hoveredContractNumber && step.contractNumber === hoveredContractNumber;
+                                  const isOtherContract = hoveredContractNumber && step.contractNumber !== hoveredContractNumber;
+
+                                  return (
+                                    <div
+                                      key={sIdx}
+                                      onClick={() => setSelectedStepDetail(step)}
+                                      onMouseEnter={() => setHoveredContractNumber(step.contractNumber)}
+                                      onMouseLeave={() => setHoveredContractNumber(null)}
+                                      style={{
+                                        background: isSameContract ? orderColor.border : orderColor.bg,
+                                        borderLeft: '4px solid ' + (isGesperrt ? '#ef4444' : !isFreigegeben ? '#f59e0b' : orderColor.border),
+                                        borderTop: '1px solid ' + orderColor.border,
+                                        borderRight: '1px solid ' + orderColor.border,
+                                        borderBottom: '1px solid ' + orderColor.border,
+                                        borderRadius: '4px',
+                                        padding: '0.2rem 0.25rem',
+                                        cursor: 'pointer',
+                                        opacity: isOtherContract ? 0.35 : 1,
+                                        transform: isSameContract ? 'scale(1.08)' : 'scale(1)',
+                                        zIndex: isSameContract ? 50 : 1,
+                                        boxShadow: isSameContract ? ('0 0 14px ' + orderColor.border + ', 0 2px 8px rgba(0,0,0,0.5)') : '0 1px 3px rgba(0,0,0,0.3)',
+                                        transition: 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s, boxShadow 0.15s, background 0.15s',
+                                        overflow: 'hidden'
+                                      }}
+                                      title={step.contractNumber + ' Pos ' + step.orderPos + ' - AS ' + step.stepPos + '\nArtikel: ' + articleLabel + '\nRüst: ' + setupH + 'h | Lauf: ' + prodH + 'h | Gesamt: ' + totalH + 'h'}
+                                    >
+                                      {/* Micro 1-Line: P-Nummer / Pos */}
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{statusDot}</span>
+                                        <span style={{ fontWeight: 800, color: orderColor.text, fontSize: '0.68rem', letterSpacing: '-0.2px' }}>
+                                          {displayTitle}
+                                        </span>
+                                      </div>
+
+                                      {/* Micro 2-Line: Artikel / Duration Pill */}
+                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.62rem', color: '#ffffff', opacity: 0.9, marginTop: '1px' }}>
+                                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '45px' }} title={articleLabel}>
+                                          {articleLabel}
+                                        </span>
+                                        <span style={{ fontWeight: 700, color: '#38bdf8', background: 'rgba(0,0,0,0.4)', padding: '0px 3px', borderRadius: '2px' }}>
+                                          {totalH}h
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Step Detail Modal */}
+      {selectedStepDetail && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }} onClick={() => setSelectedStepDetail(null)}>
+          <div className="glass-card" style={{ maxWidth: '550px', width: '100%', padding: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', border: '1px solid var(--border-glow)' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
+              <div>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, color: '#fff' }}>
+                  Auftrag: {selectedStepDetail.contractNumber} – Pos {selectedStepDetail.orderPos}
+                </h3>
+                <span style={{ fontSize: '0.8rem', color: '#38bdf8', fontWeight: 600 }}>
+                  Arbeitsschritt {selectedStepDetail.stepPos} ({selectedStepDetail.stepDesc})
+                </span>
+              </div>
+              <button onClick={() => setSelectedStepDetail(null)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '1.2rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', fontSize: '0.85rem' }}>
+              <div>
+                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>Artikelbezeichnung</span>
+                <strong style={{ color: '#fff' }}>{selectedStepDetail.orderDesc || 'K.A.'}</strong>
+              </div>
+              <div>
+                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>Geplantes Datum</span>
+                <strong style={{ color: '#38bdf8' }}>{selectedStepDetail.day}</strong>
+              </div>
+              <div>
+                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>Rüstzeit (Soll)</span>
+                <strong style={{ color: '#fbbf24' }}>{((selectedStepDetail.setupTime || 0) / 60).toFixed(2)} Std. ({selectedStepDetail.setupTime || 0} min)</strong>
+              </div>
+              <div>
+                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>Laufzeit / Bearbeitung (Soll)</span>
+                <strong style={{ color: '#34d399' }}>{((selectedStepDetail.prodTime || 0) / 60).toFixed(2)} Std. ({selectedStepDetail.prodTime || 0} min)</strong>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '0.5rem', borderTop: '1px solid var(--border-dim)' }}>
+              <button onClick={() => setSelectedStepDetail(null)} className="btn-secondary" style={{ padding: '0.45rem 1rem', fontSize: '0.85rem' }}>
+                Schließen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Machine Utilization Cards Grid */}
+      {activeViewMode === 'cards' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1.25rem' }}>
+        {machineSummaries.map(m => {
+          const isOverloaded = m.utilizationPct > 100;
+          const isHigh = m.utilizationPct >= 80 && m.utilizationPct <= 100;
+          const barColor = isOverloaded ? '#ef4444' : isHigh ? '#f59e0b' : '#10b981';
+
+          return (
+            <div key={m.machineName} className="glass-card" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {/* Card Header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <h4 style={{ fontWeight: 700, fontSize: '1rem', margin: 0, color: 'var(--text-main)' }}>{m.machineName}</h4>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    {m.stepsCount} {m.stepsCount === 1 ? 'Arbeitsschritt' : 'Arbeitsschritte'} geplant
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  {m.overflowPlannedHrs > 0 && (
+                    <span style={{
+                      background: 'rgba(245, 158, 11, 0.15)',
+                      color: '#f59e0b',
+                      border: '1px solid rgba(245, 158, 11, 0.4)',
+                      padding: '0.25rem 0.55rem',
+                      borderRadius: '20px',
+                      fontWeight: 600,
+                      fontSize: '0.75rem'
+                    }} title="Zusätzlicher Arbeitsvorrat im D4-Überlauf / Rückstand">
+                      +{m.overflowPlannedHrs.toFixed(1)}h Überlauf
+                    </span>
+                  )}
+                  <div style={{
+                    background: isOverloaded ? 'rgba(239, 68, 68, 0.15)' : isHigh ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                    color: barColor,
+                    border: '1px solid ' + barColor + '40',
+                    padding: '0.25rem 0.65rem',
+                    borderRadius: '20px',
+                    fontWeight: 700,
+                    fontSize: '0.85rem'
+                  }} title={"Auslastung im " + weeksCount + "-Wochen-Fenster (ohne Überlauf)"}>
+                    {m.windowUtilizationPct.toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+
+              {/* Triple Progress Bar */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                  <span>Planung ({weeksCount} {weeksCount === 1 ? 'Woche' : 'Wochen'}) / Kapazität</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+                    {m.windowPlannedHrs.toFixed(1)}h / {m.totalCapHrs.toFixed(1)}h
+                    {m.overflowPlannedHrs > 0 && <span style={{ color: '#f59e0b', fontSize: '0.7rem', marginLeft: '4px' }}>(+{m.overflowPlannedHrs.toFixed(1)}h Überlauf)</span>}
+                  </span>
+                </div>
+                
+                <div style={{
+                  height: '10px',
+                  width: '100%',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  borderRadius: '5px',
+                  overflow: 'hidden',
+                  display: 'flex'
+                }}>
+                  {/* Freigegeben bar (Blue) */}
+                  <div
+                    style={{
+                      height: '100%',
+                      width: Math.min(100, m.freigegebenPct) + '%',
+                      background: '#3b82f6',
+                      transition: 'width 0.3s'
+                    }}
+                    title={'Freigegeben: ' + m.freigegebenHrs.toFixed(1) + 'h (' + m.freigegebenPct.toFixed(1) + '%)'}
+                  />
+                  {/* Gesperrt bar (Red) */}
+                  {includeGesperrte && (
+                    <div
+                      style={{
+                        height: '100%',
+                        width: Math.min(100 - m.freigegebenPct, m.gesperrtPct) + '%',
+                        background: '#ef4444',
+                        transition: 'width 0.3s'
+                      }}
+                      title={'Gesperrt: ' + m.gesperrtHrs.toFixed(1) + 'h (' + m.gesperrtPct.toFixed(1) + '%)'}
+                    />
+                  )}
+                  {/* Vorgemerkt bar (Orange) */}
+                  {includeVorgemerkte && (
+                    <div
+                      style={{
+                        height: '100%',
+                        width: Math.min(100 - m.freigegebenPct - (includeGesperrte ? m.gesperrtPct : 0), m.vorgemerktPct) + '%',
+                        background: '#f59e0b',
+                        transition: 'width 0.3s'
+                      }}
+                      title={'Vorgemerkt: ' + m.vorgemerktHrs.toFixed(1) + 'h (' + m.vorgemerktPct.toFixed(1) + '%)'}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* Hours Details Row */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid var(--border-dim)' }}>
+                  <div>
+                    <span style={{ color: '#3b82f6', fontWeight: 600 }}>Freigegeben: </span>
+                    <span style={{ fontWeight: 700 }}>{m.freigegebenHrs.toFixed(1)}h</span>
+                  </div>
+                  {includeGesperrte && (
+                    <div>
+                      <span style={{ color: '#ef4444', fontWeight: 600 }}>Gesperrt: </span>
+                      <span style={{ fontWeight: 700 }}>{m.gesperrtHrs.toFixed(1)}h</span>
+                    </div>
+                  )}
+                  {includeVorgemerkte && (
+                    <div>
+                      <span style={{ color: '#f59e0b', fontWeight: 600 }}>Vorgemerkt: </span>
+                      <span style={{ fontWeight: 700 }}>{m.vorgemerktHrs.toFixed(1)}h</span>
+                    </div>
+                  )}
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Kapazität: </span>
+                    <span style={{ fontWeight: 700 }}>{m.totalCapHrs.toFixed(1)}h</span>
+                  </div>
+                </div>
+
+                {/* Pool Allocation Visualizer (50/50 Split) */}
+                {m.poolShareHrs > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', background: 'rgba(59, 130, 246, 0.08)', padding: '0.4rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#93c5fd' }}>
+                      <span style={{ fontWeight: 700 }}>Pool-Aufteilung (50/50):</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.6rem' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Fest: <strong style={{ color: '#fff' }}>{m.explicitHrs.toFixed(1)}h</strong></span>
+                      <span style={{ color: '#38bdf8' }}>+ 50% Pool-Anteil: <strong style={{ color: '#38bdf8' }}>{(m.poolShareHrs / 2).toFixed(1)}h</strong></span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Expandable Step List Preview */}
+              {m.stepsList.length > 0 && (
+                <div style={{ marginTop: '0.25rem' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                    Geplante Aufträge ({m.stepsList.length}):
+                  </div>
+                  <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.35rem', paddingRight: '4px' }}>
+                    {m.stepsList.slice(0, 15).map((s, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => setActiveModalStep(s)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          border: s.isGesperrt ? '1px solid rgba(239, 68, 68, 0.3)' : (s.isFreigegeben ? '1px solid rgba(59, 130, 246, 0.2)' : '1px solid rgba(245, 158, 11, 0.2)'),
+                          borderRadius: '6px',
+                          padding: '0.4rem 0.6rem',
+                          cursor: 'pointer',
+                          fontSize: '0.75rem',
+                          transition: 'background 0.2s'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', overflow: 'hidden' }}>
+                          <span style={{
+                            padding: '1px 5px',
+                            borderRadius: '4px',
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            background: s.isGesperrt ? 'rgba(239, 68, 68, 0.2)' : (s.isFreigegeben ? 'rgba(59, 130, 246, 0.2)' : 'rgba(245, 158, 11, 0.2)'),
+                            color: s.isGesperrt ? '#ef4444' : (s.isFreigegeben ? '#3b82f6' : '#f59e0b')
+                          }}>
+                            {s.isGesperrt ? '🔒 GESPERRT ' : ''}{s.contractNumber} Pos {s.orderPos}
+                          </span>
+                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-main)' }}>
+                            AS {s.stepPos}: {s.stepDesc}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                          <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>
+                            {formatMinutes(s.stepTime)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                    {m.stepsList.length > 15 && (
+                      <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-muted)', paddingTop: '4px' }}>
+                        + {m.stepsList.length - 15} weitere Arbeitsschritte...
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      )}
+
+      {/* Modal for Order Routing Details */}
+      {activeModalStep && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div className="glass-card" style={{ width: '700px', maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', padding: '1.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                  Arbeitsplan für {activeModalStep.contractNumber} Pos {activeModalStep.orderPos}
+                </h3>
+                <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  {activeModalStep.orderDesc}
+                </p>
+              </div>
+              <button
+                onClick={() => setActiveModalStep(null)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
+              {loadingRouting ? (
+                <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem' }}>Lade Arbeitsplan...</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {fullRoutingSteps.map(op => (
+                    <div
+                      key={op.stepId}
+                      style={{
+                        padding: '0.65rem 0.85rem',
+                        borderRadius: '6px',
+                        background: op.stepId === activeModalStep.stepId ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                        border: op.stepId === activeModalStep.stepId ? '1px solid #3b82f6' : '1px solid var(--border-dim)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between'
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-main)' }}>
+                          AS {op.stepPos}: {op.stepDesc}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Maschine: {op.machineName}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                        Rüst: {op.setupTime}m | Lauf: {op.prodTime}m
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

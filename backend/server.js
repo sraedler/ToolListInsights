@@ -1,3 +1,54 @@
+
+async function fetchFastD4NativePlan(startDateStr, endDateStr) {
+  try {
+    const poolD4 = await getPoolD4();
+    const res = await poolD4.request().query(`
+      SELECT 
+        p.ID as PlanId,
+        sk.ID as StepId,
+        CONVERT(varchar(10), p.PSPP_DATUM_START, 120) as DateStr,
+        p.PSPP_ZEIT as ScheduledMin,
+        bk.BK_BKBE_NUMMER as ContractNumber,
+        bp.BP_POSITION_NUMMER as OrderPos,
+        bp.BP_ARTIKEL_BEZEICHNUNG as ArticleDesc,
+        sk.PSP_POSITION_NUMMER as StepPos,
+        sk.PSP_BEZEICHNUNG as StepDesc,
+        sk.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
+        sk.PSP_ZEIT_MINUTEN_PRODUKTION_GESAMT_SOLL as ProdTime,
+        ISNULL(sk.PSP_IDMS, 0) as MachineId,
+        ISNULL(sk.PSP_IDMP, 0) as MachinePoolId,
+        m.MS_BEZEICHNUNG as MachineName,
+        bk.BK_BKBE_TYP_BELEG_ART as BelegArt,
+        ISNULL(sk.PSP_TYP_SPERRE, 0) as TypSperre,
+        ISNULL(sk.PSP_TYP_SPERRE_WEITERVERARBEITUNG, 0) as SperreWeiter,
+        sk.PSP_PP_STATUS_PRODUKTION as StatusProd,
+        k.PSK_IDBEBP as IdBeBp,
+        CASE WHEN ISNULL(au.BK_BKBE_AU_PP_ZUSTAND_PLANUNG, 0) > 0 
+             THEN au.BK_BKBE_AU_PP_ZUSTAND_PLANUNG - 1 
+             ELSE ISNULL(bp.BP_PP_ZUSTAND_PLANUNG, 0) 
+        END as ZustandPlanung
+      FROM [D4].[dbo].[tPPS_SKKALP_PLAN] p WITH (NOLOCK)
+      INNER JOIN [D4].[dbo].[tPPS_SKKALP] sk WITH (NOLOCK) ON sk.ID = p.PSPP_IDPSKP
+      LEFT JOIN [D4].[dbo].[tPPS_MASTA] m WITH (NOLOCK) ON m.ID = sk.PSP_IDMS
+      INNER JOIN [D4].[dbo].[tPPS_SKKALK] k WITH (NOLOCK) ON k.ID = sk.PSP_IDPSKKK
+      INNER JOIN [D4].[dbo].[tbe_Belp] bp WITH (NOLOCK) ON bp.ID = k.PSK_IDBEBP
+      INNER JOIN [D4].[dbo].[tBE_BELK_BKBE] bk WITH (NOLOCK) ON bk.BK_BKBE_IDBEBK = bp.BP_IDBEBK
+      LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au WITH (NOLOCK) ON au.BK_BKBE_AU_IDBKBE = bk.ID
+      WHERE sk.PSP_PP_STATUS_PRODUKTION <> 4
+        AND bk.BK_BKBE_STATUS_BEARBEITUNG = 0
+        AND bk.BK_BKBE_TYP_BELEG = 2
+        AND LTRIM(RTRIM(ISNULL(bk.BK_BKBE_NUMMER, ''))) <> '990001'
+        AND p.PSPP_DATUM_START >= CAST('${startDateStr}' AS DATE)
+        AND p.PSPP_DATUM_START <= CAST('${endDateStr}' AS DATE)
+      ORDER BY p.PSPP_DATUM_START, bk.BK_BKBE_NUMMER, bp.BP_POSITION_NUMMER
+    `);
+    return res.recordset || [];
+  } catch (err) {
+    console.error('Error in fetchFastD4NativePlan:', err);
+    return [];
+  }
+}
+
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const express = require('express');
 const cors = require('cors');
@@ -125,6 +176,8 @@ async function fetchActiveStepsAndMaterials(poolD4) {
       p.PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG as MaxProdTag,
       p.PSP_MENGE_SOLL as Quantity,
       p.PSP_PP_STATUS_PRODUKTION as StatusProduction,
+      ISNULL(p.PSP_TYP_SPERRE, 0) as TypSperre,
+      ISNULL(p.PSP_TYP_SPERRE_WEITERVERARBEITUNG, 0) as SperreWeiter,
       CASE
         WHEN b.BP_PP_DATUM_TERMIN IS NOT NULL THEN b.BP_PP_DATUM_TERMIN
         ELSE
@@ -196,7 +249,11 @@ async function fetchActiveStepsAndMaterials(poolD4) {
         WHERE zb.ZBU_IDPSKP = OuterTemp.ID
       ) as BookedQty,
       bk.BK_BKBE_NUMMER as ContractNumber,
-      bk.BK_BKBE_TYP_BELEG_ART as BelegArt
+      bk.BK_BKBE_TYP_BELEG_ART as BelegArt,
+      CASE WHEN ISNULL(au.BK_BKBE_AU_PP_ZUSTAND_PLANUNG, 0) > 0 
+           THEN au.BK_BKBE_AU_PP_ZUSTAND_PLANUNG - 1 
+           ELSE ISNULL(b.BP_PP_ZUSTAND_PLANUNG, 0) 
+      END as ZustandPlanung
     FROM (
       ${selectPart}
     ) AS OuterTemp
@@ -572,18 +629,22 @@ async function cacheSetupData() {
 
     // Group steps by OrderId to resolve predecessors correctly within each order
     const ordersMap = {};
-    const releasedContracts = new Set(
-      rows.filter(r => (r.ContractNumber && String(r.ContractNumber).trim().startsWith('P')) || r.BelegArt === 1)
-          .map(r => String(r.ContractNumber || '').trim().replace(/^P/i, ''))
-    );
-
     rows.forEach(row => {
       const cNrStr = String(row.ContractNumber || '').trim();
       const oIdStr = String(row.OrderId || '').trim();
       if (cNrStr === '990001' || oIdStr === '990001' || cNrStr.includes('990001')) return;
-      const cleanContract = cNrStr.replace(/^P/i, '');
-      const isReleased = row.BelegArt === 1 || cNrStr.startsWith('P') || releasedContracts.has(cleanContract);
-      row.belegArt = isReleased ? 1 : (row.BelegArt || 0);
+      
+      const upperContract = cNrStr.toUpperCase();
+      const rawBelegArt = row.BelegArt !== undefined ? parseInt(row.BelegArt, 10) : 0;
+
+      // EXACT D4 ZUSTAND_PLANUNG IDENTIFICATION:
+      // ZustandPlanung = 0 -> Freigegeben
+      // ZustandPlanung = 1 -> Vorgemerkt
+      const rawZustand = row.ZustandPlanung !== undefined ? parseInt(row.ZustandPlanung, 10) : 0;
+      const isReleased = (rawZustand === 0);
+
+      row.zustandPlanung = rawZustand;
+      row.belegArt = isReleased ? 1 : 0;
       row.isFreigegeben = isReleased;
       if (row.BookedMachineId) {
         row.MachineId = row.BookedMachineId;
@@ -3372,7 +3433,8 @@ app.get('/api/planning', async (req, res) => {
       await cacheSetupData();
     }
 
-    const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount, includeNonGreen, isConflictMode } = req.query;
+    const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount, includeNonGreen, isConflictMode, useD4Plan: useD4PlanParam } = req.query;
+const useD4Plan = useD4PlanParam === 'true';
     const isConflict = isConflictMode === 'true';
     const parsedDaysCount = daysCount !== undefined ? parseInt(daysCount, 10) : (isConflict ? 4 : 5);
     const shouldOptimizeFixture = optimizeFixture === 'true';
@@ -3614,6 +3676,17 @@ app.get('/api/planning', async (req, res) => {
       planningDays.forEach(day => {
         board[mName][day] = [];
       });
+      board[mName]['Überlauf'] = [];
+    });
+
+    // Fetch fast native D4 schedule entries from tPPS_SKKALP_PLAN for exact D4 date matching
+    const d4PlanEntries = await fetchFastD4NativePlan(planningDays[0], planningDays[planningDays.length - 1]);
+    const d4PlanMap = {};
+    d4PlanEntries.forEach(p => {
+      const k = String(p.StepId);
+      if (!d4PlanMap[k]) {
+        d4PlanMap[k] = { dateStr: p.DateStr, scheduledMin: p.ScheduledMin };
+      }
     });
 
     // List to hold pool steps that need dynamic distribution
@@ -3621,23 +3694,33 @@ app.get('/api/planning', async (req, res) => {
 
     // Populate steps
     greenSteps.forEach(step => {
-      const stepDate = step.StartDate || step.DeliveryDate || planningDays[0];
-      let stepDateStr = new Date(stepDate).toISOString().substring(0, 10);
-
-      // Backlog catch-up: if step is in the past, reschedule to the first day of planning!
-      if (stepDateStr < planningDays[0]) {
-        stepDateStr = planningDays[0];
+      const sKey = String(step.StepId || step.originalStepId || '');
+      const d4Entry = d4PlanMap[sKey];
+      let stepDateStr = d4Entry ? d4Entry.dateStr : null;
+      if (!stepDateStr) {
+        // If strict useD4Plan mode is active, steps without tPPS_SKKALP_PLAN entry go to Überlauf!
+        if (useD4Plan) {
+          stepDateStr = 'Überlauf';
+        } else {
+          const stepDate = step.StartDate || step.DeliveryDate || planningDays[0];
+          stepDateStr = new Date(stepDate).toISOString().substring(0, 10);
+        }
       }
 
-      // Active steps (in execution) must always be scheduled on the first day of planning (today)!
-      if (step.SPKO === 2) {
+      // If step has no D4 plan date or date is in the past, route to Überlauf backlog!
+      if (!stepDateStr || stepDateStr < planningDays[0]) {
+        stepDateStr = 'Überlauf';
+      }
+
+      // Active steps (in execution): in interactive board mode, schedule on day 1; in useD4Plan mode, keep exact D4 date/Überlauf
+      if (step.SPKO === 2 && !useD4Plan) {
         stepDateStr = planningDays[0];
       }
 
       // Check if it belongs to a deburring/assembly/laser virtual column
       const virtualM = getVirtualMachineForStep(step);
       if (virtualM) {
-        const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : (shouldIncludeNonGreen ? planningDays[0] : null);
+        const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : 'Überlauf';
         if (targetDay) {
           board[virtualM][targetDay].push(step);
         } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
@@ -3682,9 +3765,12 @@ app.get('/api/planning', async (req, res) => {
       }
 
       if (targetM) {
-        const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : (shouldIncludeNonGreen ? planningDays[0] : null);
+        const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : 'Überlauf';
         if (targetDay) {
-          board[targetM][targetDay].push(step);
+          const stepToAdd = (useD4Plan && d4Entry && d4Entry.scheduledMin)
+            ? { ...step, prodTime: Math.max(0, d4Entry.scheduledMin - (step.setupTime || 0)) }
+            : step;
+          board[targetM][targetDay].push(stepToAdd);
         } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
           if (!lookaheadCandidates[targetM].some(x => x.StepId === step.StepId)) {
             lookaheadCandidates[targetM].push(step);
@@ -3693,7 +3779,7 @@ app.get('/api/planning', async (req, res) => {
       } else {
         // Pool assignment step - save to list to distribute dynamically after baseline load
         if (step.MachinePoolId === 13 || step.MachinePoolId === 9 || step.MachinePoolId === 12) {
-          const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : (shouldIncludeNonGreen ? planningDays[0] : null);
+          const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : 'Überlauf';
           if (targetDay) {
             poolSteps.push({ step, dateStr: targetDay });
           } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
@@ -3709,28 +3795,48 @@ app.get('/api/planning', async (req, res) => {
       }
     });
 
-    // Dynamically distribute pool steps to balance total workload (SetupTime + prodTime on that day)
+    // Dynamically distribute pool steps (only when not in strict useD4Plan mode)
+    if (!useD4Plan) {
     poolSteps.forEach(({ step, dateStr }) => {
+      const stepDuration = (step.SetupTime || 0) + (step.prodTime || 0);
+
       if (step.MachinePoolId === 13) {
-        // Pool C40-C42: distribute to machine with lower total workload on that day
+        // Pool C40-C42
+        const capC40 = (capacities[4] && capacities[4][new Date(dateStr).getDay()]) || 900;
+        const capC42 = (capacities[25] && capacities[25][new Date(dateStr).getDay()]) || 900;
+
         const loadC40 = board['C40'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
         const loadC42 = board['C42'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
-        if (loadC40 <= loadC42) {
+
+        if (loadC40 + stepDuration <= capC40 && loadC40 <= loadC42) {
+          board['C40'][dateStr].push(step);
+        } else if (loadC42 + stepDuration <= capC42) {
+          board['C42'][dateStr].push(step);
+        } else if (loadC40 + stepDuration <= capC40) {
           board['C40'][dateStr].push(step);
         } else {
-          board['C42'][dateStr].push(step);
+          board['C40']['Überlauf'].push(step);
         }
       } else if (step.MachinePoolId === 9 || step.MachinePoolId === 12) {
-        // Pool RS2: distribute to machine with lower total workload on that day
+        // Pool RS2
+        const capRS1 = (capacities[5] && capacities[5][new Date(dateStr).getDay()]) || 900;
+        const capRS2 = (capacities[6] && capacities[6][new Date(dateStr).getDay()]) || 900;
+
         const loadRS2_1 = board['RS2_1'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
         const loadRS2_2 = board['RS2_2'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
-        if (loadRS2_1 <= loadRS2_2) {
+
+        if (loadRS2_1 + stepDuration <= capRS1 && loadRS2_1 <= loadRS2_2) {
+          board['RS2_1'][dateStr].push(step);
+        } else if (loadRS2_2 + stepDuration <= capRS2) {
+          board['RS2_2'][dateStr].push(step);
+        } else if (loadRS2_1 + stepDuration <= capRS1) {
           board['RS2_1'][dateStr].push(step);
         } else {
-          board['RS2_2'][dateStr].push(step);
+          board['RS2_1']['Überlauf'].push(step);
         }
       }
     });
+    }
 
     const shouldOptimize = isConflict ? false : (optimize !== 'false');
     const optimizeNightRun = isConflict ? false : (req.query.optimizeNightRun !== 'false');
@@ -3738,6 +3844,158 @@ app.get('/api/planning', async (req, res) => {
 
     const finalBoard = {};
     const dailyCapacities = {};
+
+    // If client requested native D4 Plan (for Auswertung Planung), return exact tPPS_SKKALP_PLAN board directly from D4
+    if (useD4Plan) {
+      machinesList.forEach(mName => {
+        finalBoard[mName] = {};
+        dailyCapacities[mName] = {};
+        const mCaps = capacities[machineIdMap[mName]] || {};
+        planningDays.forEach(day => {
+          finalBoard[mName][day] = [];
+          const dObj = new Date(day);
+          const dayOfWeek = isNaN(dObj.getTime()) ? 1 : dObj.getDay();
+          dailyCapacities[mName][day] = mCaps[dayOfWeek] || 360;
+        });
+        finalBoard[mName]['Überlauf'] = [];
+      });
+
+      // Helper to calculate total loaded minutes for a machine across all days in finalBoard
+      const getBoardTotalLoadMin = (m) => {
+        if (!finalBoard[m]) return 0;
+        let tot = 0;
+        Object.keys(finalBoard[m]).forEach(d => {
+          const list = finalBoard[m][d] || [];
+          list.forEach(s => { tot += (s.scheduledMin || (s.setupTime || 0) + (s.prodTime || 0)); });
+        });
+        return tot;
+      };
+
+      // Directly populate from d4PlanEntries with strict capacity-ratio load balancing for Auswertung Planung
+      d4PlanEntries.forEach(p => {
+        let mName = null;
+        if (p.MachineId === 8) mName = 'Brother';
+        else if (p.MachineId === 21) mName = 'Chiron';
+        else if (p.MachineId === 2) mName = 'C400';
+        else if (p.MachineId === 4) mName = 'C40';
+        else if (p.MachineId === 25) mName = 'C42';
+        else if (p.MachineId === 5) mName = 'RS2_1';
+        else if (p.MachineId === 6) mName = 'RS2_2';
+
+        const day = planningDays.includes(p.DateStr) ? p.DateStr : 'Überlauf';
+
+        if (!mName) {
+          // Unassigned Pool step load balancing based on combined daily & window capacity utilization ratio
+          const capC40 = (capacities[4] && capacities[4][new Date(day).getDay()]) || 900;
+          const capC42 = (capacities[25] && capacities[25][new Date(day).getDay()]) || 900;
+          const capRS1 = (capacities[5] && capacities[5][new Date(day).getDay()]) || 900;
+          const capRS2 = (capacities[6] && capacities[6][new Date(day).getDay()]) || 900;
+
+          if (p.MachinePoolId === 13) {
+            // Pool C40 vs C42
+            const dayLoadC40 = (finalBoard['C40'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
+            const dayLoadC42 = (finalBoard['C42'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
+
+            const dayRatioC40 = dayLoadC40 / capC40;
+            const dayRatioC42 = dayLoadC42 / capC42;
+
+            const winLoadC40 = getBoardTotalLoadMin('C40');
+            const winLoadC42 = getBoardTotalLoadMin('C42');
+
+            const scoreC40 = (dayRatioC40 * 0.7) + ((winLoadC40 / (planningDays.length * 900)) * 0.3);
+            const scoreC42 = (dayRatioC42 * 0.7) + ((winLoadC42 / (planningDays.length * 900)) * 0.3);
+
+            mName = (scoreC40 <= scoreC42) ? 'C40' : 'C42';
+
+          } else if (p.MachinePoolId === 9 || p.MachinePoolId === 12) {
+            // Pool RS2_1 vs RS2_2
+            const dayLoadRS1 = (finalBoard['RS2_1'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
+            const dayLoadRS2 = (finalBoard['RS2_2'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
+
+            const dayRatioRS1 = dayLoadRS1 / capRS1;
+            const dayRatioRS2 = dayLoadRS2 / capRS2;
+
+            const winLoadRS1 = getBoardTotalLoadMin('RS2_1');
+            const winLoadRS2 = getBoardTotalLoadMin('RS2_2');
+
+            const scoreRS1 = (dayRatioRS1 * 0.7) + ((winLoadRS1 / (planningDays.length * 900)) * 0.3);
+            const scoreRS2 = (dayRatioRS2 * 0.7) + ((winLoadRS2 / (planningDays.length * 900)) * 0.3);
+
+            mName = (scoreRS1 <= scoreRS2) ? 'RS2_1' : 'RS2_2';
+          }
+        }
+
+        if (!mName || !finalBoard[mName]) return;
+
+        const isFreigegeben = (p.ZustandPlanung === 0);
+        const isGesperrt = p.TypSperre > 0 || p.SperreWeiter > 0;
+
+        finalBoard[mName][day].push({
+          stepId: p.StepId,
+          StepId: p.StepId,
+          contractNumber: p.ContractNumber,
+          ContractNumber: p.ContractNumber,
+          orderPos: p.OrderPos,
+          articleDesc: p.ArticleDesc,
+          stepPos: p.StepPos,
+          stepDesc: p.StepDesc,
+          setupTime: p.SetupTime || 0,
+          prodTime: Math.max(0, (p.ScheduledMin || 0) - (p.SetupTime || 0)),
+          scheduledMin: p.ScheduledMin || 0,
+          belegArt: p.BelegArt,
+          zustandPlanung: p.ZustandPlanung,
+          isFreigegeben,
+          isGesperrt,
+          typSperre: p.TypSperre,
+          sperreWeiter: p.SperreWeiter,
+          day
+        });
+      });
+
+      // Put non-planned overflow steps into Überlauf with optimal capacity-ratio Pool load balancing
+      greenSteps.forEach(s => {
+        const sKey = String(s.StepId || s.originalStepId || '');
+        if (!d4PlanMap[sKey]) {
+          let targetM = null;
+          if (s.MachineId === 8) targetM = 'Brother';
+          else if (s.MachineId === 21) targetM = 'Chiron';
+          else if (s.MachineId === 2) targetM = 'C400';
+          else if (s.MachineId === 4) targetM = 'C40';
+          else if (s.MachineId === 25) targetM = 'C42';
+          else if (s.MachineId === 5) targetM = 'RS2_1';
+          else if (s.MachineId === 6) targetM = 'RS2_2';
+          else if (s.MachinePoolId === 13) {
+            const loadC40 = (finalBoard['C40']['Überlauf'] || []).reduce((sum, x) => sum + (x.setupTime || 0) + (x.prodTime || 0), 0);
+            const loadC42 = (finalBoard['C42']['Überlauf'] || []).reduce((sum, x) => sum + (x.setupTime || 0) + (x.prodTime || 0), 0);
+            targetM = (loadC40 <= loadC42) ? 'C40' : 'C42';
+          } else if (s.MachinePoolId === 9 || s.MachinePoolId === 12) {
+            const loadRS1 = (finalBoard['RS2_1']['Überlauf'] || []).reduce((sum, x) => sum + (x.setupTime || 0) + (x.prodTime || 0), 0);
+            const loadRS2 = (finalBoard['RS2_2']['Überlauf'] || []).reduce((sum, x) => sum + (x.setupTime || 0) + (x.prodTime || 0), 0);
+            targetM = (loadRS1 <= loadRS2) ? 'RS2_1' : 'RS2_2';
+          }
+
+          if (targetM && finalBoard[targetM]) {
+            finalBoard[targetM]['Überlauf'].push({
+              ...s,
+              day: 'Überlauf'
+            });
+          }
+        }
+      });
+
+      return res.json({
+        board: finalBoard,
+        days: planningDays,
+        planningDays,
+        dailyCapacities,
+        capacities,
+        lookaheadCandidates,
+        summary: {
+          totalSteps: greenSteps.length,
+          useD4Plan: true
+        }
+      });
+    }
 
     machinesList.forEach(mName => {
       // Define a local helper to run the entire 5-day scheduling loop for a single algorithm
@@ -3753,7 +4011,7 @@ app.get('/api/planning', async (req, res) => {
         // Shallow clone candidate steps to prevent state contamination between runs
         const tempBoard = {};
         planningDays.forEach(d => {
-          tempBoard[d] = board[mName][d].map(s => ({ ...s }));
+          tempBoard[d] = JSON.parse(JSON.stringify(board[mName][d]));
         });
 
         planningDays.forEach((day, dayIdx) => {
@@ -3761,21 +4019,11 @@ app.get('/api/planning', async (req, res) => {
           dailyCap[day] = dayCapacity;
           const isAutomated = mName !== 'Chiron' && mName !== 'C400' && mName !== 'Brother';
 
-          // Gather all unscheduled candidates from overflow, current day, AND future days (Front-Loading ASAP Strategy)
-          const futureBoardCandidates = [];
-          for (let i = dayIdx + 1; i < planningDays.length; i++) {
-            const fDay = planningDays[i];
-            (tempBoard[fDay] || []).forEach(s => {
-              if (!scheduledStepIds.has(s.StepId) && !scheduledStepIds.has(s.originalStepId)) {
-                futureBoardCandidates.push({ ...s, isLookahead: true });
-              }
-            });
-          }
-
+          // Unscheduled candidates: Overflow from previous days + current day candidates (no duplicate future pulling into overflow!)
           const currentDayCandidates = (tempBoard[day] || []).filter(s => !scheduledStepIds.has(s.StepId) && !scheduledStepIds.has(s.originalStepId));
           const unassignedOverflow = overflowQueue.map(s => ({ ...s }));
 
-          let dayCandidates = [...unassignedOverflow, ...currentDayCandidates, ...futureBoardCandidates];
+          let dayCandidates = [...unassignedOverflow, ...currentDayCandidates];
           
           if (allowLookahead && lookaheadCandidates[mName] && lookaheadCandidates[mName].length > 0) {
             const currentDayTools = new Set();
@@ -3839,9 +4087,11 @@ app.get('/api/planning', async (req, res) => {
 
           // Apply capacity constraint scheduling with Staggered Shift Model (Tag & Nacht Fenster)
           const isAutomatedCell = ['RS2_1', 'RS2_2', 'C40', 'C42'].includes(mName);
-          const allowNightRun = isAutomatedCell || dayCapacity > 540; // Rules: Robot cells & 24h machines are ALLOWED to overbook into night run up to 24h!
+          // PLANUNG MASCHINEN: Robot cells & automated machines ALLOW 24h (1440 min) unmanned night run!
+          const allowNightRun = isAutomatedCell || dayCapacity > 540;
           const DAY_WINDOW_LIMIT = 540; // 07:00 - 16:00 (9 hours / 540 min)
-          const nightWindowLimit = allowNightRun ? 900 : 0; // Up to 15h night capacity overbooking window
+          const nightWindowLimit = allowNightRun ? 900 : Math.max(0, dayCapacity - DAY_WINDOW_LIMIT);
+          const maxDayCap = allowNightRun ? 1440 : dayCapacity;
 
           let usedDayMinutes = 0;
           let usedDaySetupMinutes = 0; // Tracks external setup station usage (07:00-16:00) on automated robot cells
@@ -3864,7 +4114,7 @@ app.get('/api/planning', async (req, res) => {
               }
 
               const currentTotal = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
-              const totalRemainingDay = Math.max(0, 1440 - currentTotal);
+              const totalRemainingDay = Math.max(0, maxDayCap - currentTotal);
               
               if (totalRemainingDay > 0 && totalDuration <= totalRemainingDay) {
                 dayScheduled.push({ ...s, scheduledShift: isNightCapableOnThisMachine ? 'NIGHT' : 'DAY' });
@@ -3879,15 +4129,15 @@ app.get('/api/planning', async (req, res) => {
                 // User directive: "Nicht aufteilen in teile" in conflict mode!
                 const stepKey = (s.ContractNumber || s.contractNumber || s.OrderId || s.orderId) + '_' + s.StepPos;
                 if (!nextDayOverflow.some(x => x.StepId === s.StepId || ((x.ContractNumber || x.contractNumber || x.OrderId || x.orderId) + '_' + x.StepPos) === stepKey)) {
-                  nextDayOverflow.push(s);
+                  if (!nextDayOverflow.some(x => (x.originalStepId || x.StepId) === (s.originalStepId || s.StepId))) { nextDayOverflow.push(s); }
                 }
               }
             } else if (isNightCapableOnThisMachine) {
               // NIGHT STEP ON ROBOT CELL: Setup happens on external station during Day Window (07:00-16:00, max 540 min)
               // Setup of next order is ALLOWED to overlap in parallel with production time of other orders!
-              // ABSOLUTE HARD CAP: Total scheduled workload per calendar day MUST NEVER EXCEED 1440 min (24.0 hours)!
+              // ABSOLUTE HARD CAP: Total scheduled workload per calendar day MUST NEVER EXCEED D4 dayCapacity limit!
               const currentTotalWorkload = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
-              const totalRemainingDay = Math.max(0, 1440 - currentTotalWorkload);
+              const totalRemainingDay = Math.max(0, maxDayCap - currentTotalWorkload);
               const daySetupRemaining = Math.min(totalRemainingDay, Math.max(0, DAY_WINDOW_LIMIT - (isAutomated ? usedDaySetupMinutes : usedDayMinutes)));
               const nightRemaining = Math.min(totalRemainingDay, Math.max(0, nightWindowLimit - usedNightMinutes));
 
@@ -3929,12 +4179,12 @@ app.get('/api/planning', async (req, res) => {
                   });
                 }
               } else {
-                nextDayOverflow.push(s);
+                if (!nextDayOverflow.some(x => (x.originalStepId || x.StepId) === (s.originalStepId || s.StepId))) { nextDayOverflow.push(s); }
               }
             } else {
               // DAY STEP: Both Setup AND Prod Time fill Day Window (07:00-16:00, max 540 min or dayCapacity)
               const currentTotalWorkload = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
-              const totalRemainingDay = Math.max(0, 1440 - currentTotalWorkload);
+              const totalRemainingDay = Math.max(0, maxDayCap - currentTotalWorkload);
               const maxDayLimitForMachine = Math.min(DAY_WINDOW_LIMIT, dayCapacity, totalRemainingDay);
               const dayRemaining = Math.max(0, maxDayLimitForMachine - usedDayMinutes);
 
@@ -3992,7 +4242,7 @@ app.get('/api/planning', async (req, res) => {
                   });
                 }
               } else {
-                nextDayOverflow.push(s);
+                if (!nextDayOverflow.some(x => (x.originalStepId || x.StepId) === (s.originalStepId || s.StepId))) { nextDayOverflow.push(s); }
               }
             }
           });
@@ -4022,7 +4272,7 @@ app.get('/api/planning', async (req, res) => {
                 if (!cand.isNightRunCapable) continue;
 
                 const currentTotalWorkload = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
-                const totalRemainingDay = Math.max(0, 1440 - currentTotalWorkload);
+                const totalRemainingDay = Math.max(0, maxDayCap - currentTotalWorkload);
                 if (totalRemainingDay <= 0) break;
 
                 const candSetup = cand.SetupTime || 0;
@@ -4123,11 +4373,17 @@ app.get('/api/planning', async (req, res) => {
           });
         });
 
-        dayScheduledMap['Überlauf'] = overflowQueue.filter(s => {
-          const sDate = s.StartDate || s.DeliveryDate;
-          const sDateStr = sDate ? new Date(sDate).toISOString().substring(0, 10) : '';
-          return sDateStr <= planningDays[planningDays.length - 1];
+        const seenOverflowIds = new Set();
+        const deduplicatedOverflow = [];
+        overflowQueue.forEach(s => {
+          const keyId = s.originalStepId || s.StepId || s.stepId || s.id;
+          if (!seenOverflowIds.has(keyId)) {
+            seenOverflowIds.add(keyId);
+            deduplicatedOverflow.push(s);
+          }
         });
+
+        dayScheduledMap['Überlauf'] = deduplicatedOverflow;
         dayScheduledMap['Überlauf'].forEach(s => {
           totalChanges += (s.missesCount || 0);
         });
@@ -4202,6 +4458,8 @@ app.get('/api/planning', async (req, res) => {
             contractNumber: s.ContractNumber || null,
             belegArt: s.belegArt !== undefined ? s.belegArt : s.BelegArt,
             isFreigegeben: s.isFreigegeben !== undefined ? s.isFreigegeben : (s.BelegArt === 1),
+            isGesperrt: (s.TypSperre > 0 || s.SperreWeiter > 0) || false,
+            typSperre: s.TypSperre || 0,
             deliveryDate: s.DeliveryDate || null,
             stepPos: s.StepPos || null,
             orderPos: s.OrderPos || null,
