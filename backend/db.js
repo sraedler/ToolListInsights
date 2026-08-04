@@ -184,15 +184,31 @@ async function getPoolD4() {
   if (poolD4) return poolD4;
   if (!poolD4Promise) {
     poolD4Promise = (async () => {
-      const activeConfig = currentDbMode === 'live' ? configD4Live : configD4Dev;
+      let activeConfig = currentDbMode === 'live' ? configD4Live : configD4Dev;
       console.log(`Initializing D4 database pool in ${currentDbMode} mode...`);
-      const pool = new sql.ConnectionPool(activeConfig);
+      let pool = new sql.ConnectionPool(activeConfig);
       try {
         await pool.connect();
         poolD4 = pool;
         console.log(`D4 database pool initialized in ${currentDbMode} mode.`);
         return pool;
       } catch (err) {
+        if (currentDbMode === 'live') {
+          console.warn(`Failed to initialize D4 pool in live mode (${err.message}). Falling back to dev mode (localhost)...`);
+          currentDbMode = 'dev';
+          activeConfig = configD4Dev;
+          pool = new sql.ConnectionPool(activeConfig);
+          try {
+            await pool.connect();
+            poolD4 = pool;
+            console.log(`D4 database pool successfully initialized in fallback dev mode (localhost).`);
+            return pool;
+          } catch (devErr) {
+            console.error(`Failed to initialize D4 pool in fallback dev mode:`, devErr.message);
+            poolD4Promise = null;
+            throw devErr;
+          }
+        }
         console.error(`Failed to initialize D4 pool in ${currentDbMode} mode:`, err.message);
         poolD4Promise = null;
         throw err;
@@ -206,15 +222,30 @@ async function getPoolWT() {
   if (poolWT) return poolWT;
   if (!poolWTPromise) {
     poolWTPromise = (async () => {
-      const activeConfig = currentDbMode === 'live' ? configWTLive : configWTDev;
+      let activeConfig = currentDbMode === 'live' ? configWTLive : configWTDev;
       console.log(`Initializing WTDATA database pool in ${currentDbMode} mode...`);
-      const pool = new sql.ConnectionPool(activeConfig);
+      let pool = new sql.ConnectionPool(activeConfig);
       try {
         await pool.connect();
         poolWT = pool;
         console.log(`WTDATA database pool initialized in ${currentDbMode} mode.`);
         return pool;
       } catch (err) {
+        if (currentDbMode === 'live') {
+          console.warn(`Failed to initialize WTDATA pool in live mode (${err.message}). Falling back to dev mode (localhost)...`);
+          activeConfig = configWTDev;
+          pool = new sql.ConnectionPool(activeConfig);
+          try {
+            await pool.connect();
+            poolWT = pool;
+            console.log(`WTDATA database pool successfully initialized in fallback dev mode (localhost).`);
+            return pool;
+          } catch (devErr) {
+            console.error(`Failed to initialize WTDATA pool in fallback dev mode:`, devErr.message);
+            poolWTPromise = null;
+            throw devErr;
+          }
+        }
         console.error(`Failed to initialize WTDATA pool in ${currentDbMode} mode:`, err.message);
         poolWTPromise = null;
         throw err;

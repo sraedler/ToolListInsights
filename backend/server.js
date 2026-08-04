@@ -268,7 +268,9 @@ async function fetchActiveStepsAndMaterials(poolD4) {
   `;
 
   console.log('Executing database query for active steps/materials...');
-  const result = await poolD4.request().query(finalSql);
+  const req = poolD4.request();
+  req.timeout = 180000;
+  const result = await req.query(finalSql);
   return result.recordset;
 }
 
@@ -1699,9 +1701,69 @@ app.get('/api/orders/:id/steps', async (req, res) => {
     const { id } = req.params;
     const poolD4 = await getPoolD4();
 
-    // 1. Fetch active planning steps from tPPS_SKKALP
+    let targetOrderId = parseInt(id, 10);
+    let resolvedOrderId = null;
+
+    if (!isNaN(targetOrderId) && targetOrderId > 0) {
+      // 1. Check if id is an OrderId in tbe_Belp
+      try {
+        const checkBelp = await poolD4.request()
+          .input('oid', sql.Int, targetOrderId)
+          .query(`SELECT TOP 1 ID FROM tbe_Belp WHERE ID = @oid`);
+        if (checkBelp.recordset.length > 0) {
+          resolvedOrderId = checkBelp.recordset[0].ID;
+        } else {
+          // 2. Check if id is a StepId in tPPS_SKKALP or tSK_KALP
+          const checkStep = await poolD4.request()
+            .input('sid', sql.Int, targetOrderId)
+            .query(`
+              SELECT TOP 1 k.PSK_IDBEBP as OrderId
+              FROM tPPS_SKKALP p
+              INNER JOIN tPPS_SKKALK k ON k.ID = p.PSP_IDPSKKK
+              WHERE p.ID = @sid
+              UNION ALL
+              SELECT TOP 1 k.KK_IDBEBP as OrderId
+              FROM tSK_KALP p
+              INNER JOIN tSK_KALK k ON k.ID = p.KP_IDSKKK
+              WHERE p.ID = @sid
+            `);
+          if (checkStep.recordset.length > 0) {
+            resolvedOrderId = checkStep.recordset[0].OrderId;
+          }
+        }
+      } catch (errCheck) {
+        console.warn('Error checking OrderId/StepId in DB:', errCheck.message);
+      }
+    }
+
+    if (!resolvedOrderId) {
+      // 3. Look up by ContractNumber / Belegnummer / Projekt-Nummer
+      try {
+        const findReq = poolD4.request();
+        findReq.input('cn', sql.VarChar, id);
+        const findRes = await findReq.query(`
+          SELECT TOP 1 b.ID
+          FROM tbe_Belp b
+          INNER JOIN tBE_BELK_BKBE bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
+          LEFT JOIN tBE_BELK_BKBE_AU au ON au.BK_BKBE_AU_IDBKBE = bk.ID
+          WHERE bk.BK_BKBE_NUMMER = @cn
+             OR b.BP_POSITION_NUMMER = @cn
+             OR b.BP_ARTIKEL_BEZEICHNUNG = @cn
+        `);
+        if (findRes.recordset.length > 0) {
+          resolvedOrderId = findRes.recordset[0].ID;
+        }
+      } catch (errCn) {
+        console.warn('Error checking ContractNumber in DB:', errCn.message);
+      }
+    }
+
+    const finalSearchId = resolvedOrderId || (isNaN(targetOrderId) ? 0 : targetOrderId);
+
+    // Fetch active planning steps from tPPS_SKKALP
     const requestActive = poolD4.request();
-    requestActive.input('orderId', sql.Int, id);
+    requestActive.input('orderId', sql.Int, finalSearchId);
+    requestActive.input('cnStr', sql.VarChar, id);
     const resultActive = await requestActive.query(`
       SELECT
         p.ID as StepId,
@@ -1760,13 +1822,14 @@ app.get('/api/orders/:id/steps', async (req, res) => {
       LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
       LEFT JOIN [D4].[dbo].[tPPS_MASTA] masta ON masta.ID = p.PSP_IDMS
       LEFT JOIN [D4].[dbo].[tPPS_MASCHPOOL] pool ON pool.ID = p.PSP_IDMP
-      WHERE k.PSK_IDBEBP = @orderId
+      WHERE k.PSK_IDBEBP = @orderId OR bk.BK_BKBE_NUMMER = @cnStr
       ORDER BY p.PSP_POSITION_NUMMER
     `);
 
-    // 2. Fetch all calculation template steps from tSK_KALP
+    // Fetch all calculation template steps from tSK_KALP
     const requestTsk = poolD4.request();
-    requestTsk.input('orderId', sql.Int, id);
+    requestTsk.input('orderId', sql.Int, finalSearchId);
+    requestTsk.input('cnStr', sql.VarChar, id);
     const resultTsk = await requestTsk.query(`
       SELECT
         p.ID as StepId,
@@ -1782,7 +1845,10 @@ app.get('/api/orders/:id/steps', async (req, res) => {
         END as SPKO
       FROM [D4].[dbo].[tSK_KALK] k
       INNER JOIN [D4].[dbo].[tSK_KALP] p ON p.KP_IDSKKK = k.ID
-      WHERE k.KK_IDBEBP = @orderId
+      LEFT JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = k.KK_IDBEBP
+      LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE] bk ON bk.BK_BKBE_IDBEBK = b.BP_IDBEBK
+      LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au ON au.BK_BKBE_AU_IDBKBE = bk.ID
+      WHERE k.KK_IDBEBP = @orderId OR bk.BK_BKBE_NUMMER = @cnStr
       ORDER BY p.KP_POSITION_NUMMER
     `);
 
@@ -1809,10 +1875,68 @@ app.get('/api/orders/:id/steps', async (req, res) => {
           StartDate: null,
           MachineId: null,
           MachinePoolId: null,
-          MachineName: 'Sonstige/Extern'
+          MachineName: (tskRow.StepTyp === 1 || (tskRow.StepDesc && /fremd|extern|härten|beschichten|eloxieren|verzinken|schleifen/i.test(tskRow.StepDesc))) ? 'Extern' : 'Sonstige'
         });
       }
     });
+
+    // Fallback: If DB queries yield 0 steps, search server memory cachedSetupData
+    if (combinedSteps.length === 0 && cachedSetupData && cachedSetupData.length > 0) {
+      const matchId = String(id).toLowerCase();
+      const foundSteps = cachedSetupData.filter(s => 
+        String(s.OrderId) === String(id) ||
+        String(s.StepId) === String(id) ||
+        String(s.ContractNumber || s.contractNumber || '').toLowerCase() === matchId
+      );
+
+      if (foundSteps.length > 0) {
+        const sample = foundSteps[0];
+        const targetCn = String(sample.ContractNumber || sample.contractNumber || '').toLowerCase();
+        const targetOid = String(sample.OrderId || sample.orderId || '');
+
+        const allOrderSteps = cachedSetupData.filter(s => 
+          (targetOid && String(s.OrderId || s.orderId || '') === targetOid) ||
+          (targetCn && String(s.ContractNumber || s.contractNumber || '').toLowerCase() === targetCn)
+        );
+
+        allOrderSteps.sort((a, b) => (parseInt(a.StepPos || a.stepPos || 0) - parseInt(b.StepPos || b.stepPos || 0)));
+
+        const memoryFormatted = allOrderSteps.map(s => {
+          const isActualMachine = !!((s.MachineId || s.machineId) && (s.MachineId || s.machineId) > 0);
+          const isPool = !isActualMachine && !!((s.MachinePoolId || s.machinePoolId) && (s.MachinePoolId || s.machinePoolId) > 0);
+          const isFremd = s.StepTyp === 1 || (s.StepDesc || s.stepDesc || '').toLowerCase().includes('fremd') || (s.StepDesc || s.stepDesc || '').toLowerCase().includes('extern');
+          let cleanName = (s.MachineName || s.machineName || '').replace(/\s*\(\s*Pool\s*\)/gi, '').trim();
+          if (cleanName === 'Sonstige/Extern') cleanName = '';
+
+          let mName = cleanName;
+          if (isPool) {
+            mName = cleanName ? `${cleanName} (Pool)` : 'Pool';
+          } else if (!cleanName) {
+            mName = isActualMachine ? `Maschine #${s.MachineId || s.machineId}` : (isFremd ? 'Extern' : 'Sonstige');
+          }
+
+          return {
+            StepId: s.StepId || s.stepId,
+            StepPos: s.StepPos || s.stepPos,
+            OrderPos: s.OrderPos || s.orderPos || 10,
+            StepTyp: s.StepTyp || 0,
+            StepDesc: s.StepDesc || s.stepDesc || 'Arbeitsgang',
+            SetupTime: s.SetupTime || s.setupTime || 0,
+            ProdTime: s.ProdTime || s.prodTime || 0,
+            TargetQty: s.Quantity || 0,
+            StatusProduction: s.StatusProduction || 0,
+            SPKO: s.SPKO || (s.isCompleted ? 4 : (s.isExecuting ? 2 : 1)),
+            DeliveryDate: s.DeliveryDate || s.deliveryDate,
+            MachineId: s.MachineId || s.machineId,
+            MachinePoolId: s.MachinePoolId || s.machinePoolId,
+            MachineName: mName,
+            isPool
+          };
+        });
+
+        return res.json(memoryFormatted);
+      }
+    }
 
     // Re-sort combined list by step position
     combinedSteps.sort((a, b) => {
@@ -1855,6 +1979,21 @@ app.get('/api/orders/:id/steps', async (req, res) => {
     const processedSteps = combinedSteps.map(step => {
       if (step.BookedMachineId) {
         step.MachineId = step.BookedMachineId;
+      }
+
+      const isActualMachine = !!(step.MachineId && step.MachineId > 0);
+      const isPool = !isActualMachine && !!(step.MachinePoolId && step.MachinePoolId > 0);
+      const isFremd = step.StepTyp === 1 || (step.StepDesc && /fremd|extern|härten|beschichten|eloxieren|verzinken|schleifen/i.test(step.StepDesc));
+
+      let cleanName = (step.MachineName || '').replace(/\s*\(\s*Pool\s*\)/gi, '').trim();
+      if (cleanName === 'Sonstige/Extern') cleanName = '';
+
+      if (isPool) {
+        step.MachineName = cleanName ? `${cleanName} (Pool)` : 'Pool';
+        step.isPool = true;
+      } else {
+        step.MachineName = cleanName || (isActualMachine ? `Maschine #${step.MachineId}` : (isFremd ? 'Extern' : 'Sonstige'));
+        step.isPool = false;
       }
       const stepTypName = 
         step.StepTyp === 0 ? 'Arbeitsschritt' :
@@ -3871,6 +4010,12 @@ const useD4Plan = useD4PlanParam === 'true';
         return tot;
       };
 
+      const greenStepMap = {};
+      greenSteps.forEach(s => {
+        const k = String(s.StepId || s.stepId || '');
+        if (k) greenStepMap[k] = s;
+      });
+
       // Directly populate from d4PlanEntries with strict capacity-ratio load balancing for Auswertung Planung
       d4PlanEntries.forEach(p => {
         let mName = null;
@@ -3929,19 +4074,53 @@ const useD4Plan = useD4PlanParam === 'true';
 
         const isFreigegeben = (p.ZustandPlanung === 0);
         const isGesperrt = p.TypSperre > 0 || p.SperreWeiter > 0;
+        const origStep = greenStepMap[String(p.StepId)] || {};
 
         finalBoard[mName][day].push({
+          ...origStep,
           stepId: p.StepId,
           StepId: p.StepId,
-          contractNumber: p.ContractNumber,
-          ContractNumber: p.ContractNumber,
-          orderPos: p.OrderPos,
-          articleDesc: p.ArticleDesc,
+          orderId: origStep.OrderId || origStep.orderId || p.OrderId,
+          OrderId: origStep.OrderId || origStep.orderId || p.OrderId,
+          contractNumber: p.ContractNumber || origStep.ContractNumber || origStep.contractNumber,
+          ContractNumber: p.ContractNumber || origStep.ContractNumber || origStep.contractNumber,
+          orderPos: p.OrderPos || origStep.OrderPos || origStep.orderPos,
+          OrderPos: p.OrderPos || origStep.OrderPos || origStep.orderPos,
+          articleDesc: p.ArticleDesc || origStep.ArticleDesc || origStep.articleDesc || origStep.OrderDesc || origStep.orderDesc,
+          ArticleDesc: p.ArticleDesc || origStep.ArticleDesc || origStep.articleDesc || origStep.OrderDesc || origStep.orderDesc,
+          orderDesc: origStep.OrderDesc || origStep.orderDesc || p.ArticleDesc,
+          OrderDesc: origStep.OrderDesc || origStep.orderDesc || p.ArticleDesc,
+          articleId: origStep.ArticleId || origStep.articleId,
+          ArticleId: origStep.ArticleId || origStep.articleId,
+          deliveryDate: origStep.DeliveryDate || origStep.deliveryDate,
+          DeliveryDate: origStep.DeliveryDate || origStep.deliveryDate,
+          ncProgram: origStep.NCProgram || origStep.ncProgram,
+          NCProgram: origStep.NCProgram || origStep.ncProgram,
+          matchedListNr: origStep.MatchedListNr || origStep.matchedListNr,
+          MatchedListNr: origStep.MatchedListNr || origStep.matchedListNr,
+          matchedListIdent: origStep.MatchedListIdent || origStep.matchedListIdent,
+          MatchedListIdent: origStep.MatchedListIdent || origStep.matchedListIdent,
+          matchedListNcp: origStep.MatchedListNcp || origStep.matchedListNcp,
+          MatchedListNcp: origStep.MatchedListNcp || origStep.matchedListNcp,
+          fixture: origStep.Fixture || origStep.fixture,
+          Fixture: origStep.Fixture || origStep.fixture,
+          fixtureLocation: origStep.FixtureLocation || origStep.fixtureLocation,
+          FixtureLocation: origStep.FixtureLocation || origStep.fixtureLocation,
+          fixtureLocationFromDb: origStep.FixtureLocationFromDb || origStep.fixtureLocationFromDb,
+          PlannedDays: origStep.PlannedDays || 1,
+          OrderPlanDays: origStep.OrderPlanDays || 1,
+          UsedDays: origStep.UsedDays || 0,
+          ThroughputDays: origStep.ThroughputDays || 1,
           stepPos: p.StepPos,
+          StepPos: p.StepPos,
           stepDesc: p.StepDesc,
-          setupTime: p.SetupTime || 0,
+          StepDesc: p.StepDesc,
+          setupTime: p.SetupTime || origStep.SetupTime || 0,
+          SetupTime: p.SetupTime || origStep.SetupTime || 0,
           prodTime: Math.max(0, (p.ScheduledMin || 0) - (p.SetupTime || 0)),
+          ProdTime: Math.max(0, (p.ScheduledMin || 0) - (p.SetupTime || 0)),
           scheduledMin: p.ScheduledMin || 0,
+          ScheduledMin: p.ScheduledMin || 0,
           belegArt: p.BelegArt,
           zustandPlanung: p.ZustandPlanung,
           isFreigegeben,
@@ -3993,6 +4172,258 @@ const useD4Plan = useD4PlanParam === 'true';
         summary: {
           totalSteps: greenSteps.length,
           useD4Plan: true
+        }
+      });
+    }
+
+    const isEvaluationMode = req.query.isEvaluationMode === 'true';
+
+    // DEDICATED BOTTLENECK SCHEDULING ALGORITHM (DRUM-BUFFER-ROPE) FOR EXCLUSIVE USE IN "AUSWERTUNG PLANUNG" (Optimierter Plan)
+    if (isEvaluationMode && !useD4Plan) {
+      const evalBoard = {};
+      const evalDailyCapacities = {};
+      const evalMillingMachines = ['Brother', 'Chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2'];
+
+      evalMillingMachines.forEach(mName => {
+        evalBoard[mName] = {};
+        evalDailyCapacities[mName] = {};
+        const mId = machineIdMap[mName];
+        const mCaps = capacities[mId] || {};
+        planningDays.forEach(day => {
+          evalBoard[mName][day] = [];
+          const dObj = new Date(day);
+          const dayOfWeek = isNaN(dObj.getTime()) ? 1 : dObj.getDay();
+          evalDailyCapacities[mName][day] = mCaps[dayOfWeek] || 360;
+        });
+        evalBoard[mName]['Überlauf'] = [];
+      });
+
+      // 1. Calculate Machine Demands to Identify Primary Bottleneck (Drum)
+      const machineDemandMap = {};
+      evalMillingMachines.forEach(m => machineDemandMap[m] = 0);
+
+      const resolveTargetMachine = (s) => {
+        if (s.MachineId === 8) return 'Brother';
+        if (s.MachineId === 21) return 'Chiron';
+        if (s.MachineId === 2) return 'C400';
+        if (s.MachineId === 4) return 'C40';
+        if (s.MachineId === 25) return 'C42';
+        if (s.MachineId === 5) return 'RS2_1';
+        if (s.MachineId === 6) return 'RS2_2';
+        if (s.MachinePoolId === 13) return 'C40_POOL';
+        if (s.MachinePoolId === 9 || s.MachinePoolId === 12) return 'RS2_POOL';
+        return null;
+      };
+
+      greenSteps.forEach(s => {
+        const duration = (s.SetupTime || s.setupTime || 0) + (s.ProdTime || s.prodTime || (s.ScheduledMin || s.scheduledMin || 0));
+        let m = resolveTargetMachine(s);
+        if (m === 'C40_POOL') m = 'C40';
+        if (m === 'RS2_POOL') m = 'RS2_1';
+        if (m && machineDemandMap[m] !== undefined) {
+          machineDemandMap[m] += duration;
+        }
+      });
+
+      // Rank machines by capacity load ratio (Demand / Total Window Capacity)
+      const machineRanks = evalMillingMachines.map(mName => {
+        const totCap = planningDays.reduce((sum, d) => sum + (evalDailyCapacities[mName][d] || 360), 0);
+        const demand = machineDemandMap[mName] || 0;
+        const ratio = totCap > 0 ? (demand / totCap) : 0;
+        return { machineName: mName, demand, totCap, ratio };
+      }).sort((a, b) => b.ratio - a.ratio);
+
+      const primaryBottleneck = machineRanks[0] ? machineRanks[0].machineName : 'C42';
+      const primaryBottleneckRatio = machineRanks[0] ? Math.round(machineRanks[0].ratio * 100) : 0;
+
+      // 2. Bottleneck-First Scheduling (Drum-Buffer-Rope)
+      const scheduledStepIds = new Set();
+      const stepScheduledDayMap = {};
+
+      const isFremdleistungStep = (s) => {
+        const desc = String(s.StepDesc || s.stepDesc || '').toLowerCase();
+        return desc.includes('härt') || desc.includes('haert') || desc.includes('beschicht') || 
+               desc.includes('verzink') || desc.includes('elox') || desc.includes('fremd') || 
+               desc.includes('verlager') || desc.includes('fl') || desc.includes('wärme') || desc.includes('waerme');
+      };
+
+      const canScheduleStepOnDay = (s, currentDayIdx) => {
+        const oId = s.OrderId;
+        if (!oId || !ordersMap[oId]) return true;
+
+        const orderSteps = ordersMap[oId];
+        const sPos = parseInt(s.StepPos || s.stepPos || 0, 10);
+
+        for (const pStep of orderSteps) {
+          const pPos = parseInt(pStep.StepPos || pStep.stepPos || 0, 10);
+          if (pPos < sPos) {
+            if (pStep.SPKO === 4 || pStep.realSPKO === 4 || pStep.isCompleted) {
+              continue;
+            }
+            const pId = String(pStep.StepId || pStep.originalStepId || '');
+            const pScheduledDay = stepScheduledDayMap[pId];
+
+            if (pScheduledDay === undefined) {
+              if (!greenSteps.some(x => String(x.StepId || x.originalStepId || '') === pId)) {
+                continue;
+              }
+              return false;
+            }
+
+            if (isFremdleistungStep(pStep)) {
+              const FL_BUFFER_DAYS = 4;
+              if (currentDayIdx < pScheduledDay + FL_BUFFER_DAYS) {
+                return false;
+              }
+            } else {
+              if (currentDayIdx < pScheduledDay) {
+                return false;
+              }
+            }
+          }
+        }
+        return true;
+      };
+
+      const orderedMachines = machineRanks.map(x => x.machineName);
+
+      const remainingDurationMap = {};
+      greenSteps.forEach(s => {
+        const sId = String(s.StepId || s.originalStepId || '');
+        const fullSetup = s.SetupTime || s.setupTime || 0;
+        const fullProd = s.ProdTime || s.prodTime || Math.max(0, (s.ScheduledMin || s.scheduledMin || 0) - fullSetup);
+        remainingDurationMap[sId] = fullSetup + fullProd;
+      });
+
+      orderedMachines.forEach(mName => {
+        planningDays.forEach((day, dayIdx) => {
+          const dayCap = evalDailyCapacities[mName][day] || 360;
+          let usedCap = evalBoard[mName][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
+
+          const candidates = greenSteps.filter(s => {
+            const sId = String(s.StepId || s.originalStepId || '');
+            if (scheduledStepIds.has(sId)) return false;
+
+            let targetM = resolveTargetMachine(s);
+            if (targetM === 'C40_POOL') {
+              const capC40 = evalDailyCapacities['C40'][day] || 360;
+              const capC42 = evalDailyCapacities['C42'][day] || 360;
+              const loadC40 = evalBoard['C40'][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
+              const loadC42 = evalBoard['C42'][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
+              targetM = (loadC40 / capC40 <= loadC42 / capC42) ? 'C40' : 'C42';
+            } else if (targetM === 'RS2_POOL') {
+              const capRS1 = evalDailyCapacities['RS2_1'][day] || 360;
+              const capRS2 = evalDailyCapacities['RS2_2'][day] || 360;
+              const loadRS1 = evalBoard['RS2_1'][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
+              const loadRS2 = evalBoard['RS2_2'][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
+              targetM = (loadRS1 / capRS1 <= loadRS2 / capRS2) ? 'RS2_1' : 'RS2_2';
+            }
+
+            if (targetM !== mName) return false;
+            return canScheduleStepOnDay(s, dayIdx);
+          });
+
+          const { sequenced } = sequenceSteps(candidates, machineMagazines[mName]?.magazine || [], machineMagazines[mName]?.size || 40, listToToolsMap, 'greedy', shouldOptimizeFixture, parsedFixtureWeight);
+
+          for (const s of sequenced) {
+            const sId = String(s.StepId || s.originalStepId || '');
+            if (scheduledStepIds.has(sId)) continue;
+            if (usedCap >= dayCap) break;
+
+            const remDur = remainingDurationMap[sId];
+            if (remDur <= 0) continue;
+
+            const availInDay = dayCap - usedCap;
+            const allocMin = Math.min(remDur, availInDay);
+
+            const fullSetup = s.SetupTime || s.setupTime || 0;
+            const fullProd = s.ProdTime || s.prodTime || Math.max(0, (s.ScheduledMin || s.scheduledMin || 0) - fullSetup);
+            let allocSetup = 0;
+            let allocProd = 0;
+
+            if (fullSetup > 0 && remainingDurationMap[sId] === (fullSetup + fullProd)) {
+              allocSetup = Math.min(fullSetup, allocMin);
+              allocProd = Math.max(0, allocMin - allocSetup);
+            } else {
+              allocSetup = 0;
+              allocProd = allocMin;
+            }
+
+            evalBoard[mName][day].push({
+              ...s,
+              day,
+              setupTime: allocSetup,
+              SetupTime: allocSetup,
+              prodTime: allocProd,
+              ProdTime: allocProd,
+              scheduledMin: allocMin,
+              ScheduledMin: allocMin,
+              fullSetupTime: fullSetup,
+              fullProdTime: fullProd,
+              contractNumber: s.ContractNumber || s.contractNumber || 'P-Auftrag',
+              ContractNumber: s.ContractNumber || s.contractNumber || 'P-Auftrag',
+              orderPos: s.OrderPos || s.orderPos || s.BP_POSITION_NUMMER || '10',
+              OrderPos: s.OrderPos || s.orderPos || s.BP_POSITION_NUMMER || '10',
+              stepPos: s.StepPos || s.stepPos || s.PSP_POSITION_NUMMER || '10',
+              StepPos: s.StepPos || s.stepPos || s.PSP_POSITION_NUMMER || '10',
+              stepDesc: s.StepDesc || s.stepDesc || '',
+              StepDesc: s.StepDesc || s.stepDesc || '',
+              isFreigegeben: s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true)
+            });
+
+            usedCap += allocMin;
+            remainingDurationMap[sId] -= allocMin;
+
+            if (remainingDurationMap[sId] <= 0) {
+              scheduledStepIds.add(sId);
+              stepScheduledDayMap[sId] = dayIdx;
+            }
+          }
+        });
+      });
+
+      greenSteps.forEach(s => {
+        const sId = String(s.StepId || s.originalStepId || '');
+        if (!scheduledStepIds.has(sId)) {
+          let targetM = resolveTargetMachine(s);
+          if (targetM === 'C40_POOL') targetM = 'C40';
+          if (targetM === 'RS2_POOL') targetM = 'RS2_1';
+
+          if (targetM && evalBoard[targetM]) {
+            evalBoard[targetM]['Überlauf'].push({
+              ...s,
+              day: 'Überlauf',
+              setupTime: s.SetupTime || s.setupTime || 0,
+              prodTime: s.ProdTime || s.prodTime || 0,
+              scheduledMin: (s.ScheduledMin || s.scheduledMin) || ((s.SetupTime || s.setupTime || 0) + (s.ProdTime || s.prodTime || 0)),
+              contractNumber: s.ContractNumber || s.contractNumber || 'P-Auftrag',
+              ContractNumber: s.ContractNumber || s.contractNumber || 'P-Auftrag',
+              orderPos: s.OrderPos || s.orderPos || s.BP_POSITION_NUMMER || '10',
+              OrderPos: s.OrderPos || s.orderPos || s.BP_POSITION_NUMMER || '10',
+              stepPos: s.StepPos || s.stepPos || s.PSP_POSITION_NUMMER || '10',
+              StepPos: s.StepPos || s.stepPos || s.PSP_POSITION_NUMMER || '10',
+              stepDesc: s.StepDesc || s.stepDesc || '',
+              StepDesc: s.StepDesc || s.stepDesc || '',
+              isFreigegeben: s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true)
+            });
+          }
+        }
+      });
+
+      return res.json({
+        board: evalBoard,
+        days: planningDays,
+        planningDays,
+        dailyCapacities: evalDailyCapacities,
+        capacities,
+        lookaheadCandidates: {},
+        summary: {
+          algorithm: 'bottleneck',
+          primaryBottleneck,
+          primaryBottleneckRatio: primaryBottleneckRatio + '%',
+          scheduledSteps: scheduledStepIds.size,
+          totalSteps: greenSteps.length,
+          useD4Plan: false
         }
       });
     }
@@ -4429,7 +4860,8 @@ const useD4Plan = useD4PlanParam === 'true';
 
           const entireArbeitsplan = (ordersMap[s.OrderId] || [])
             .map(planStep => {
-              let machineName = 'Sonstige/Extern';
+              const isFremd = planStep.StepTyp === 1 || (planStep.StepDesc && /fremd|extern|härten|beschichten|eloxieren|verzinken|schleifen/i.test(planStep.StepDesc));
+              let machineName = isFremd ? 'Extern' : 'Sonstige';
               if (planStep.MachineId && machineMap[planStep.MachineId]) {
                 machineName = machineMap[planStep.MachineId];
               } else if (planStep.MachinePoolId && poolMap[planStep.MachinePoolId]) {

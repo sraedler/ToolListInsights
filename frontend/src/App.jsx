@@ -16,6 +16,17 @@ const getContractColor = (contractNum) => {
   };
 };
 
+function getISOWeekNumber(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+  const week1 = new Date(d.getFullYear(), 0, 4);
+  const kw = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+  return 'KW ' + String(kw).padStart(2, '0');
+}
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
@@ -35,6 +46,7 @@ import {
   Clock, 
   TrendingDown, 
   TrendingUp,
+  Minus,
   CheckCircle2,
   AlertTriangle,
   XCircle,
@@ -65,6 +77,7 @@ import {
   Tooltip, 
   Legend,
   ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer 
 } from 'recharts';
 
@@ -10597,9 +10610,18 @@ function PDFCanvasViewer({ url, dmsSliderFullscreen }) {
    PLANNING EVALUATION TAB (Auswertung Planung)
    ========================================== */
 function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
-  const [weeksCount, setWeeksCount] = useState(4); // 1, 2, 4, 6 weeks
+  const ganttContainerRef = useRef(null);
+  const chartContainerRef = useRef(null);
+
+  const [highlightedDayIndex, setHighlightedDayIndex] = useState(null);
+  const [weeksCount, setWeeksCount] = useState(4); // 1 to 20 weeks
+  const [tempWeeksCount, setTempWeeksCount] = useState(4);
+  useEffect(() => { setTempWeeksCount(weeksCount); }, [weeksCount]);
   const [includeGesperrte, setIncludeGesperrte] = useState(false);
   const [includeVorgemerkte, setIncludeVorgemerkte] = useState(false);
+  const [useOptimizedPlan, setUseOptimizedPlan] = useState(false);
+  const [chartViewType, setChartViewType] = useState('ruest_lauf'); // 'ruest_lauf' | 'status'
+  const [showTrendline, setShowTrendline] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [showRuestFilter, setShowRuestFilter] = useState(true);
   const [showProdFilter, setShowProdFilter] = useState(true);
@@ -10618,27 +10640,161 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   const [boardData, setBoardData] = useState({});
   const [dailyCapacities, setDailyCapacities] = useState({});
   const [planningDays, setPlanningDays] = useState([]);
+  const [summaryInfo, setSummaryInfo] = useState(null);
+  const [visibleStepLimits, setVisibleStepLimits] = useState({});
+
+  const handleLoadMoreSteps = (mName, count = 25) => {
+    setVisibleStepLimits(prev => ({
+      ...prev,
+      [mName]: (prev[mName] || 15) + count
+    }));
+  };
+
+  const handleShowAllSteps = (mName, totalCount) => {
+    setVisibleStepLimits(prev => ({
+      ...prev,
+      [mName]: totalCount
+    }));
+  };
+
+  const handleCollapseSteps = (mName) => {
+    setVisibleStepLimits(prev => ({
+      ...prev,
+      [mName]: 15
+    }));
+  };
+
+  const handleChartDayClick = (targetIdx) => {
+    if (targetIdx === undefined || targetIdx === null || targetIdx < 0) return;
+    setActiveViewMode('gantt');
+    setHighlightedDayIndex(targetIdx);
+
+    setTimeout(() => {
+      setHighlightedDayIndex(null);
+    }, 4000);
+  };
+
+  useEffect(() => {
+    if (highlightedDayIndex !== null && highlightedDayIndex !== undefined) {
+      if (activeViewMode !== 'gantt') {
+        setActiveViewMode('gantt');
+      }
+
+      const animateScroll = (element, targetPos, isHorizontal = false, duration = 500) => {
+        if (!element) return;
+        const startPos = isHorizontal ? element.scrollLeft : element.scrollTop;
+        const change = targetPos - startPos;
+        if (Math.abs(change) < 2) return;
+
+        const startTime = performance.now();
+
+        const step = (currentTime) => {
+          const elapsed = currentTime - startTime;
+          const progress = Math.min(1, elapsed / duration);
+          const easeProgress = progress < 0.5 
+            ? 4 * progress * progress * progress 
+            : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+          const currentScrollPos = startPos + change * easeProgress;
+          if (isHorizontal) {
+            element.scrollLeft = currentScrollPos;
+          } else {
+            element.scrollTop = currentScrollPos;
+          }
+
+          if (progress < 1) {
+            requestAnimationFrame(step);
+          }
+        };
+
+        requestAnimationFrame(step);
+      };
+
+      const timer = setTimeout(() => {
+        const contentBody = document.querySelector('.content-body');
+        const ganttSec = document.getElementById('gantt-section');
+        const el = document.getElementById('gantt-col-idx-' + highlightedDayIndex);
+        const container = ganttContainerRef.current;
+
+        if (contentBody && ganttSec) {
+          const topPos = ganttSec.offsetTop - contentBody.offsetTop;
+          animateScroll(contentBody, Math.max(0, topPos - 15), false, 450);
+        } else if (ganttSec) {
+          ganttSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        if (container && el) {
+          const targetLeft = el.offsetLeft - (container.clientWidth / 2) + (el.clientWidth / 2);
+          animateScroll(container, Math.max(0, targetLeft), true, 500);
+        }
+      }, 80);
+
+      return () => clearTimeout(timer);
+    }
+  }, [highlightedDayIndex, activeViewMode]);
 
   const [activeModalStep, setActiveModalStep] = useState(null);
   const [fullRoutingSteps, setFullRoutingSteps] = useState([]);
   const [loadingRouting, setLoadingRouting] = useState(false);
+  const [modalBookings, setModalBookings] = useState([]);
+
+  // d.velop DMS Drawing Slider States for PlanningEvaluationTab
+  const [dmsSliderOpen, setDmsSliderOpen] = useState(false);
+  const [dmsSliderList, setDmsSliderList] = useState([]);
+  const [dmsSliderIndex, setDmsSliderIndex] = useState(0);
+  const [dmsSliderFullscreen, setDmsSliderFullscreen] = useState(false);
+  const [dmsSubDocs, setDmsSubDocs] = useState([]);
+  const [dmsSubIndex, setDmsSubIndex] = useState(0);
+  const [loadingDmsMeta, setLoadingDmsMeta] = useState(false);
+  const [dmsResolvedArticleNumber, setDmsResolvedArticleNumber] = useState('');
+  const [dmsSliderFixture, setDmsSliderFixture] = useState(null);
+
+  const openDmsSlider = (articleId, articleName, customList = null, fixture = null) => {
+    setDmsSliderFixture(fixture || null);
+    setDmsResolvedArticleNumber('');
+    if (customList && customList.length > 0) {
+      setDmsSliderList(customList);
+      const idx = customList.findIndex(item => item.articleId === articleId);
+      setDmsSliderIndex(idx >= 0 ? idx : 0);
+    } else {
+      setDmsSliderList([{ articleId, articleName }]);
+      setDmsSliderIndex(0);
+    }
+    setDmsSliderOpen(true);
+  };
 
   // Exact milling machines list (matching "Planung Maschinen")
   const validMillingMachines = ['Brother', 'Chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2'];
 
-  // Routing Modal loading effect
+  // Routing Modal & BDE Bookings loading effect
   useEffect(() => {
     if (!activeModalStep) {
       setFullRoutingSteps([]);
+      setModalBookings([]);
       return;
     }
-    const loadFullRouting = async () => {
+    const loadModalDetails = async () => {
       setLoadingRouting(true);
       try {
-        const res = await fetch(API_BASE + '/orders/' + activeModalStep.orderId + '/steps');
-        if (res.ok) {
-          const json = await res.json();
-          if (json.length > 0) {
+        const sId = activeModalStep.stepId || activeModalStep.StepId;
+        const cNum = activeModalStep.contractNumber || activeModalStep.ContractNumber;
+        const oId = activeModalStep.orderId || activeModalStep.OrderId || cNum || sId;
+
+        if (oId) {
+          let res = await fetch(API_BASE + '/orders/' + encodeURIComponent(oId) + '/steps');
+          let json = res.ok ? await res.json() : [];
+
+          if ((!json || json.length === 0) && sId && sId !== oId) {
+            res = await fetch(API_BASE + '/orders/' + encodeURIComponent(sId) + '/steps');
+            json = res.ok ? await res.json() : [];
+          }
+
+          if ((!json || json.length === 0) && cNum && cNum !== oId) {
+            res = await fetch(API_BASE + '/orders/' + encodeURIComponent(cNum) + '/steps');
+            json = res.ok ? await res.json() : [];
+          }
+
+          if (Array.isArray(json) && json.length > 0) {
             const mapped = json.map(op => ({
               stepId: op.StepId,
               stepPos: op.StepPos,
@@ -10652,15 +10808,25 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               stepTypName: op.StepTypName
             }));
             setFullRoutingSteps(mapped);
+          } else {
+            setFullRoutingSteps([]);
+          }
+        }
+
+        if (sId) {
+          const bRes = await fetch(API_BASE + '/planning/step-bookings?stepId=' + sId);
+          if (bRes.ok) {
+            const bJson = await bRes.json();
+            setModalBookings(Array.isArray(bJson) ? bJson : []);
           }
         }
       } catch (err) {
-        console.error('Error fetching full routing steps:', err);
+        console.error('Error fetching modal details:', err);
       } finally {
         setLoadingRouting(false);
       }
     };
-    loadFullRouting();
+    loadModalDetails();
   }, [activeModalStep]);
 
   // Fetch planning data with progress bar simulation and AbortController
@@ -10688,14 +10854,14 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         setLoadingStageText('Berechne Belegung für Tag ' + simulatedDay + ' von ' + totalDaysToLoad + '...');
       } else {
         setLoadingPercent(95);
-        setLoadingStageText('Optimiere Maschinenfolgen und Rüstzeiten...');
+        setLoadingStageText(useOptimizedPlan ? 'Berechne Engpass-gesteuerte Maschinenbelegungen...' : 'Erstelle Auswertung aus D4-Originaldaten...');
       }
     }, stepInterval);
 
     const runFetch = async () => {
       try {
         const days = weeksCount * 7;
-        const res = await fetch(API_BASE + '/planning?daysCount=' + days + '&includeNonGreen=true&useD4Plan=true', {
+        const res = await fetch(API_BASE + '/planning?daysCount=' + days + '&includeNonGreen=true&useD4Plan=' + (!useOptimizedPlan), {
           signal: controller.signal
         });
         if (!res.ok) {
@@ -10706,6 +10872,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
         setBoardData(data.board || {});
         setDailyCapacities(data.dailyCapacities || data.capacities || {});
+        setSummaryInfo(data.summary || null);
         const daysList = (data.days || data.planningDays || (
           data.board && Object.keys(data.board).length > 0 
             ? Object.keys(data.board[Object.keys(data.board)[0]] || {}) 
@@ -10742,7 +10909,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
       clearInterval(interval);
       controller.abort();
     };
-  }, [weeksCount, includeVorgemerkte, includeGesperrte, reloadTrigger]);
+  }, [weeksCount, includeVorgemerkte, includeGesperrte, useOptimizedPlan, reloadTrigger]);
 
   // Filter board keys to ONLY valid milling machines present in boardData
   const availableMillingMachines = validMillingMachines.filter(m => boardData[m] !== undefined || Object.keys(boardData).length === 0);
@@ -10826,19 +10993,36 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
           return;
         }
 
+        const contractNumber = s.contractNumber || s.ContractNumber || s.orderId || s.OrderId || s.BK_BKBE_NUMMER || 'P-Auftrag';
+        const orderPos = s.orderPos || s.OrderPos || s.BP_POSITION_NUMMER || '10';
+        const stepPos = s.stepPos || s.StepPos || s.PSP_POSITION_NUMMER || '10';
+        const stepDesc = s.stepDesc || s.StepDesc || s.articleDesc || s.ArticleDesc || s.orderDesc || s.OrderDesc || '';
+
         // Apply text search query filter
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
-          const match = String(s.contractNumber || '').toLowerCase().includes(q) ||
-                        String(s.orderPos || '').toLowerCase().includes(q) ||
-                        String(s.orderDesc || '').toLowerCase().includes(q) ||
-                        String(s.stepDesc || '').toLowerCase().includes(q);
+          const match = String(contractNumber).toLowerCase().includes(q) ||
+                        String(orderPos).toLowerCase().includes(q) ||
+                        String(stepDesc).toLowerCase().includes(q);
           if (!match) return;
         }
 
+        const setupVal = s.setupTime !== undefined ? s.setupTime : (s.SetupTime || 0);
+        const prodVal = s.prodTime !== undefined ? s.prodTime : (s.ProdTime || 0);
+        const schedVal = s.scheduledMin !== undefined ? s.scheduledMin : (s.ScheduledMin || 0);
+
         let stepTime = 0;
-        if (showRuestFilter) stepTime += (s.setupTime || 0);
-        if (showProdFilter) stepTime += (s.prodTime || 0);
+        if (showRuestFilter && showProdFilter) {
+          stepTime = (setupVal + prodVal) > 0 ? (setupVal + prodVal) : schedVal;
+        } else if (showRuestFilter) {
+          stepTime = setupVal;
+        } else if (showProdFilter) {
+          stepTime = prodVal > 0 ? prodVal : schedVal;
+        }
+
+        if (stepTime === 0 && schedVal > 0) {
+          stepTime = schedVal;
+        }
 
         const isPoolStep = !!(s.machinePoolId === 13 || s.machinePoolId === 9 || s.machinePoolId === 12);
         if (isPoolStep) {
@@ -10863,6 +11047,14 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
         stepsList.push({
           ...s,
+          contractNumber,
+          ContractNumber: contractNumber,
+          orderPos,
+          OrderPos: orderPos,
+          stepPos,
+          StepPos: stepPos,
+          stepDesc,
+          StepDesc: stepDesc,
           day,
           isFreigegeben,
           isGesperrt,
@@ -10941,6 +11133,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     let dayFreigegebenMin = 0;
     let dayGesperrtMin = 0;
     let dayVorgemerktMin = 0;
+    let dayRuestMin = 0;
+    let dayLaufMin = 0;
 
     filteredMachines.forEach(mName => {
       dayCapMin += (dailyCapacities[mName]?.[day] || 0);
@@ -10952,9 +11146,13 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         if (!isFreigegeben && !includeVorgemerkte) return;
         if (isFreigegeben && isGesperrt && !includeGesperrte) return;
 
-        let stepTime = 0;
-        if (showRuestFilter) stepTime += (s.setupTime || 0);
-        if (showProdFilter) stepTime += (s.prodTime || 0);
+        let setupMin = showRuestFilter ? (s.setupTime || s.SetupTime || 0) : 0;
+        let prodMin = showProdFilter ? (s.prodTime || s.ProdTime || (s.scheduledMin || s.ScheduledMin || 0) - (s.setupTime || s.SetupTime || 0)) : 0;
+        if (prodMin < 0) prodMin = 0;
+
+        let stepTime = setupMin + prodMin;
+        dayRuestMin += setupMin;
+        dayLaufMin += prodMin;
 
         if (!isFreigegeben) {
           dayVorgemerktMin += stepTime;
@@ -10976,9 +11174,52 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
       Freigegeben: Math.round((dayFreigegebenMin / 60) * 10) / 10,
       Gesperrt: Math.round((dayGesperrtMin / 60) * 10) / 10,
       Vorgemerkt: Math.round((dayVorgemerktMin / 60) * 10) / 10,
+      Rüstzeit: Math.round((dayRuestMin / 60) * 10) / 10,
+      Laufzeit: Math.round((dayLaufMin / 60) * 10) / 10,
       GesamtGeplant: Math.round(((dayFreigegebenMin + dayGesperrtMin + dayVorgemerktMin) / 60) * 10) / 10
     };
   });
+
+  // Calculate linear trend line for GesamtGeplant (total planned workload)
+  const nPoints = chartData.length;
+  let trendSlope = 0;
+  let trendIntercept = 0;
+
+  if (nPoints > 1) {
+    let sumX = 0;
+    let sumY = 0;
+    let sumXY = 0;
+    let sumXX = 0;
+
+    chartData.forEach((item, idx) => {
+      const x = idx;
+      const y = item.GesamtGeplant;
+      sumX += x;
+      sumY += y;
+      sumXY += x * y;
+      sumXX += x * x;
+    });
+
+    const meanX = sumX / nPoints;
+    const meanY = sumY / nPoints;
+    const denom = sumXX - nPoints * meanX * meanX;
+
+    if (denom !== 0) {
+      trendSlope = (sumXY - nPoints * meanX * meanY) / denom;
+      trendIntercept = meanY - trendSlope * meanX;
+    } else {
+      trendIntercept = meanY;
+    }
+  } else if (nPoints === 1) {
+    trendIntercept = chartData[0]?.GesamtGeplant || 0;
+  }
+
+  const slopePerWeek = trendSlope * 7;
+
+  const chartDataWithTrend = chartData.map((item, idx) => ({
+    ...item,
+    Trend: Math.max(0, Math.round((trendSlope * idx + trendIntercept) * 10) / 10)
+  }));
 
   if (loading) {
     return (
@@ -11065,6 +11306,47 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               ))}
             </select>
 
+            {/* Planning Mode Selector: Original D4-Plan vs. Optimierter Plan */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(15, 23, 42, 0.6)', padding: '3px', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+              <button
+                onClick={() => setUseOptimizedPlan(false)}
+                style={{
+                  background: !useOptimizedPlan ? 'linear-gradient(135deg, #1e293b, #334155)' : 'transparent',
+                  color: !useOptimizedPlan ? '#f8fafc' : 'var(--text-muted)',
+                  border: !useOptimizedPlan ? '1px solid #475569' : 'none',
+                  padding: '0.4rem 0.85rem',
+                  borderRadius: '6px',
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                📄 Original D4-Plan
+              </button>
+              <button
+                onClick={() => setUseOptimizedPlan(true)}
+                style={{
+                  background: useOptimizedPlan ? 'linear-gradient(135deg, #3b82f6, #1d4ed8)' : 'transparent',
+                  color: useOptimizedPlan ? '#ffffff' : 'var(--text-muted)',
+                  border: useOptimizedPlan ? '1px solid #3b82f6' : 'none',
+                  padding: '0.4rem 0.85rem',
+                  borderRadius: '6px',
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                ⚡ Optimierter Plan
+              </button>
+              {useOptimizedPlan && summaryInfo?.algorithm === 'bottleneck' && (
+                <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#f59e0b', background: 'rgba(245, 158, 11, 0.15)', padding: '0.35rem 0.65rem', borderRadius: '6px', border: '1px solid rgba(245, 158, 11, 0.4)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  🎯 Engpass-Algorithmus (Drum-Buffer-Rope) | Haupt-Engpass: {summaryInfo.primaryBottleneck || 'C42'} ({summaryInfo.primaryBottleneckRatio || '100%'})
+                </span>
+              )}
+            </div>
+
             {/* View Mode Toggle: Gantt Tagesfüllung / Karten / Kanban */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(0,0,0,0.3)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glow)' }}>
               {[
@@ -11093,32 +11375,62 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               ))}
             </div>
 
-            {/* Weeks Range Selector Buttons */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(0,0,0,0.2)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-dim)' }}>
-              {[
-                { count: 1, label: '1 Woche' },
-                { count: 2, label: '2 Wochen' },
-                { count: 4, label: '4 Wochen' },
-                { count: 6, label: '6 Wochen' }
-              ].map(w => (
-                <button
-                  key={w.count}
-                  onClick={() => setWeeksCount(w.count)}
-                  style={{
-                    background: weeksCount === w.count ? 'var(--accent-primary, #3b82f6)' : 'transparent',
-                    color: weeksCount === w.count ? '#ffffff' : 'var(--text-muted)',
-                    border: 'none',
-                    padding: '0.35rem 0.75rem',
-                    borderRadius: '6px',
-                    fontSize: '0.8rem',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  {w.label}
-                </button>
-              ))}
+            {/* Interactive Range Slider (1 to 26 Weeks in 1-week steps) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', background: 'rgba(15, 23, 42, 0.6)', padding: '0.45rem 0.95rem', borderRadius: '10px', border: '1px solid rgba(59, 130, 246, 0.35)', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                  📅 Zeitraum:
+                </span>
+                <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', padding: '0.2rem 0.6rem', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                  {tempWeeksCount} {tempWeeksCount === 1 ? 'Woche' : 'Wochen'} ({tempWeeksCount * 7} Tage)
+                </span>
+              </div>
+
+              <input
+                type="range"
+                min="1"
+                max="26"
+                step="1"
+                value={tempWeeksCount}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  setTempWeeksCount(val);
+                }}
+                onMouseUp={() => setWeeksCount(tempWeeksCount)}
+                onTouchEnd={() => setWeeksCount(tempWeeksCount)}
+                style={{
+                  width: '150px',
+                  accentColor: '#38bdf8',
+                  cursor: 'pointer'
+                }}
+              />
+
+              {/* Quick Preset Buttons (18 W = 126 Tage) */}
+              <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+                {[4, 8, 12, 18, 24].map(w => (
+                  <button
+                    key={w}
+                    onClick={() => {
+                      setTempWeeksCount(w);
+                      setWeeksCount(w);
+                    }}
+                    style={{
+                      background: weeksCount === w ? 'rgba(56, 189, 248, 0.25)' : 'rgba(255,255,255,0.04)',
+                      color: weeksCount === w ? '#38bdf8' : '#94a3b8',
+                      border: weeksCount === w ? '1px solid #38bdf8' : '1px solid var(--border-dim)',
+                      padding: '0.15rem 0.45rem',
+                      borderRadius: '5px',
+                      fontSize: '0.72rem',
+                      fontWeight: weeksCount === w ? 700 : 500,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                    title={`${w} Wochen (${w * 7} Tage)`}
+                  >
+                    {w}W{w === 18 ? ' (126T)' : ''}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Status Checkboxes: Gesperrt & Vorgemerkt */}
@@ -11205,6 +11517,26 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               }}
             >
               Laufzeit {showProdFilter ? '✓' : '✕'}
+            </button>
+
+            <button
+              onClick={() => setShowTrendline(!showTrendline)}
+              style={{
+                background: showTrendline ? 'rgba(168, 85, 247, 0.15)' : 'transparent',
+                color: showTrendline ? '#c084fc' : 'var(--text-muted)',
+                border: showTrendline ? '1px solid rgba(168, 85, 247, 0.4)' : '1px solid var(--border-dim)',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem'
+              }}
+            >
+              <TrendingUp size={14} />
+              <span>Trendlinie {showTrendline ? '✓' : '✕'}</span>
             </button>
 
             <div style={{ position: 'relative' }}>
@@ -11295,49 +11627,199 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
       {/* Chart Section */}
       <div className="glass-card" style={{ padding: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
-            <h3 style={{ fontWeight: 600, fontSize: '1.05rem', margin: 0 }}>
-              Kapazitätsverlauf: {selectedFilterLabel} (nächste {weeksCount} Wochen)
-            </h3>
+            {(() => {
+              const startKW = planningDays.length > 0 ? getISOWeekNumber(planningDays[0]) : '';
+              const endKW = planningDays.length > 0 ? getISOWeekNumber(planningDays[planningDays.length - 1]) : '';
+              const kwRangeStr = startKW && endKW ? (startKW === endKW ? startKW + ', ' : startKW + ' – ' + endKW + ', ') : '';
+              return (
+                <h3 style={{ fontWeight: 700, fontSize: '1.05rem', margin: 0, color: 'var(--text-main)' }}>
+                  Kapazitätsverlauf: {selectedFilterLabel} ({kwRangeStr}{weeksCount} {weeksCount === 1 ? 'Woche' : 'Wochen'})
+                </h3>
+              );
+            })()}
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0 0' }}>
-              Tägliche Gegenüberstellung der Belegungsstunden (Entsperrt, Gesperrt, Vorgemerkt) vs. verfügbare Kapazität
+              💡 <span style={{ color: '#38bdf8', fontWeight: 600 }}>Tipp:</span> Klicke auf einen Tag im Diagramm, um im Gantt-Kalender direkt zu diesem Tag zu springen! | 
+              {chartViewType === 'ruest_lauf' 
+                ? ' Gestapelte Gegenüberstellung von Rüstzeit (Setup) und Laufzeit (Bearbeitung) vs. Kapazität'
+                : ' Gestapelte Gegenüberstellung der Belegungsstunden nach Auftragsstatus vs. Kapazität'}
             </p>
+          </div>
+
+          {/* Chart Display Mode Selector & Trendline Toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setShowTrendline(!showTrendline)}
+              style={{
+                background: showTrendline ? 'rgba(236, 72, 153, 0.2)' : 'rgba(255,255,255,0.05)',
+                color: showTrendline ? '#ec4899' : 'var(--text-muted)',
+                border: showTrendline ? '1px solid #ec4899' : '1px solid var(--border-dim)',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+            >
+              📈 Linearer Trend {showTrendline ? '✓' : '✕'}
+            </button>
+            {showTrendline && (
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: slopePerWeek >= 0 ? '#10b981' : '#f59e0b', background: 'rgba(0,0,0,0.3)', padding: '0.35rem 0.65rem', borderRadius: '6px', border: '1px solid var(--border-glow)' }}>
+                {slopePerWeek >= 0 ? '📈 Trend: +' : '📉 Trend: '} {slopePerWeek.toFixed(1)}h / Woche
+              </span>
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', background: 'rgba(0,0,0,0.3)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glow)' }}>
+              <button
+                onClick={() => setChartViewType('ruest_lauf')}
+                style={{
+                  background: chartViewType === 'ruest_lauf' ? 'linear-gradient(135deg, #0284c7, #0369a1)' : 'transparent',
+                  color: chartViewType === 'ruest_lauf' ? '#ffffff' : 'var(--text-muted)',
+                  border: 'none',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '6px',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                ⚙️ Rüsten & Laufzeit (Stacked)
+              </button>
+              <button
+                onClick={() => setChartViewType('status')}
+                style={{
+                  background: chartViewType === 'status' ? 'linear-gradient(135deg, #3b82f6, #1d4ed8)' : 'transparent',
+                  color: chartViewType === 'status' ? '#ffffff' : 'var(--text-muted)',
+                  border: 'none',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '6px',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                📊 Nach Status (Stacked)
+              </button>
+            </div>
           </div>
         </div>
 
-        <div style={{ width: '100%', height: 320 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 25 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="dayLabel" stroke="var(--text-muted)" fontSize={11} interval={Math.floor(planningDays.length / 14)} />
-              <YAxis stroke="var(--text-muted)" fontSize={11} unit="h" />
-              <Tooltip
-                contentStyle={{
-                  background: 'rgba(15, 23, 42, 0.95)',
-                  border: '1px solid var(--border-glow)',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '0.85rem'
-                }}
-              />
-              <Legend wrapperStyle={{ paddingTop: '10px', fontSize: '0.8rem' }} />
-              <Bar dataKey="Freigegeben" stackId="a" fill="#3b82f6" name="Freigegeben (h)" />
-              {includeGesperrte && (
-                <Bar dataKey="Gesperrt" stackId="a" fill="#ef4444" name="Gesperrt (h)" />
-              )}
-              {includeVorgemerkte && (
-                <Bar dataKey="Vorgemerkt" stackId="a" fill="#f59e0b" name="Vorgemerkt (h)" />
-              )}
-              <Line type="monotone" dataKey="Kapazität" stroke="#10b981" strokeWidth={2} dot={false} name="Max. Kapazität (h)" />
-            </BarChart>
+        <div
+          id="capacity-chart-container"
+          ref={chartContainerRef}
+          style={{ width: '100%', height: 320, cursor: 'pointer', position: 'relative' }}
+        >
+          <ResponsiveContainer width="100%" height={320} minWidth={0} minHeight={0}>
+            {(() => {
+              const kwBoundaries = [];
+              let lastKW = '';
+              chartDataWithTrend.forEach((item, idx) => {
+                const kw = getISOWeekNumber(item.day);
+                if (kw && kw !== lastKW) {
+                  kwBoundaries.push({ kw, dayLabel: item.dayLabel, startIndex: idx });
+                  lastKW = kw;
+                }
+              });
+
+              return (
+                <BarChart
+                  data={chartDataWithTrend}
+                  margin={{ top: 25, right: 30, left: 0, bottom: 25 }}
+                  style={{ cursor: 'pointer' }}
+                  onClick={(e) => {
+                    if (e && typeof e.activeTooltipIndex === 'number') {
+                      handleChartDayClick(e.activeTooltipIndex);
+                    } else if (e && e.activePayload && e.activePayload.length > 0) {
+                      const idx = chartDataWithTrend.findIndex(item => item.day === e.activePayload[0].payload?.day);
+                      if (idx >= 0) handleChartDayClick(idx);
+                    }
+                  }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  {kwBoundaries.map((b, bIdx) => {
+                    const nextB = kwBoundaries[bIdx + 1];
+                    const endLabel = nextB ? nextB.dayLabel : chartDataWithTrend[chartDataWithTrend.length - 1]?.dayLabel;
+                    const isEven = bIdx % 2 === 0;
+
+                    return (
+                      <React.Fragment key={b.kw}>
+                        {isEven && endLabel && (
+                          <ReferenceArea
+                            x1={b.dayLabel}
+                            x2={endLabel}
+                            fill="rgba(56, 189, 248, 0.03)"
+                            stroke="none"
+                          />
+                        )}
+                        <ReferenceLine
+                          x={b.dayLabel}
+                          stroke="rgba(56, 189, 248, 0.45)"
+                          strokeDasharray="4 4"
+                          strokeWidth={1.5}
+                          label={{
+                            value: '📅 ' + b.kw,
+                            fill: '#38bdf8',
+                            position: 'top',
+                            fontSize: 11,
+                            fontWeight: 800,
+                            offset: 8
+                          }}
+                        />
+                      </React.Fragment>
+                    );
+                  })}
+                  <XAxis dataKey="dayLabel" stroke="var(--text-muted)" fontSize={11} interval={Math.floor(planningDays.length / 14)} />
+                  <YAxis stroke="var(--text-muted)" fontSize={11} unit="h" />
+                  <Tooltip
+                    labelFormatter={(label) => '📅 ' + label}
+                    contentStyle={{
+                      background: 'rgba(15, 23, 42, 0.95)',
+                      border: '1px solid var(--border-glow)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.85rem'
+                    }}
+                  />
+                  <Legend wrapperStyle={{ paddingTop: '10px', fontSize: '0.8rem' }} />
+
+                  {chartViewType === 'ruest_lauf' ? (
+                    <>
+                      <Bar dataKey="Rüstzeit" stackId="rl" fill="#0284c7" name="Rüstzeit (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                      <Bar dataKey="Laufzeit" stackId="rl" fill="#10b981" name="Laufzeit (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                      <Line type="monotone" dataKey="Kapazität" stroke="#f59e0b" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
+                      {showTrendline && (
+                        <Line type="monotone" dataKey="Trend" stroke="#ec4899" strokeWidth={3} strokeDasharray="4 4" dot={false} name="📈 Trend (Gleitender Mittelwert h)" />
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <Bar dataKey="Freigegeben" stackId="st" fill="#3b82f6" name="Freigegeben (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                      {includeGesperrte && (
+                        <Bar dataKey="Gesperrt" stackId="st" fill="#ef4444" name="Gesperrt (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                      )}
+                      {includeVorgemerkte && (
+                        <Bar dataKey="Vorgemerkt" stackId="st" fill="#f59e0b" name="Vorgemerkt (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                      )}
+                      <Line type="monotone" dataKey="Kapazität" stroke="#10b981" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
+                      {showTrendline && (
+                        <Line type="monotone" dataKey="Trend" stroke="#ec4899" strokeWidth={3} strokeDasharray="4 4" dot={false} name="📈 Trend (Gleitender Mittelwert h)" />
+                      )}
+                    </>
+                  )}
+                </BarChart>
+              );
+            })()}
           </ResponsiveContainer>
         </div>
       </div>
 
       {/* GANTT TAGESFÜLLUNGS-ANSICHT (WER / WO / WIE LANGE GEPLANT IST) */}
       {activeViewMode === 'gantt' && (
-        <div className="glass-card" style={{ padding: '1.25rem', overflowX: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div id="gantt-section" className="glass-card" style={{ padding: '1.25rem', overflowX: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Calendar size={18} style={{ color: '#38bdf8' }} />
@@ -11363,42 +11845,71 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
           </div>
 
           {/* Matrix Table Timeline Container with Sticky Header & Sticky Machine Column */}
-          <div style={{ maxHeight: '78vh', overflow: 'auto', borderRadius: '8px', border: '1px solid var(--border-glow)', position: 'relative' }}>
+          <div ref={ganttContainerRef} style={{ maxHeight: '78vh', overflow: 'auto', borderRadius: '8px', border: '1px solid var(--border-glow)', position: 'relative' }}>
             <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.74rem', minWidth: (planningDays.length * 85 + 140) + 'px' }}>
-              <thead style={{ position: 'sticky', top: 0, zIndex: 30, background: '#0f172a' }}>
-                <tr style={{ background: '#0f172a', borderBottom: '2px solid var(--border-glow)' }}>
-                  <th style={{ padding: '0.75rem 1rem', textAlign: 'left', minWidth: '180px', position: 'sticky', top: 0, left: 0, background: '#0f172a', zIndex: 40, borderRight: '2px solid var(--border-glow)', borderBottom: '2px solid var(--border-glow)' }}>
-                    Maschine / Anlage
-                  </th>
-                  {planningDays.map(day => {
-                    const dObj = new Date(day);
-                    const dayOfWeek = isNaN(dObj.getTime()) ? '' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][dObj.getDay()];
-                    const dayFormatted = isNaN(dObj.getTime()) ? day : (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.');
-                    const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
+              {(() => {
+                const weekGroups = [];
+                planningDays.forEach(day => {
+                  const kw = getISOWeekNumber(day);
+                  const lastGroup = weekGroups[weekGroups.length - 1];
+                  if (lastGroup && lastGroup.kw === kw) {
+                    lastGroup.span += 1;
+                  } else {
+                    weekGroups.push({ kw, span: 1 });
+                  }
+                });
 
-                    return (
-                      <th
-                        key={day}
-                        style={{
-                          padding: '0.4rem 0.15rem',
-                          textAlign: 'center',
-                          minWidth: '85px',
-                          position: 'sticky',
-                          top: 0,
-                          zIndex: 30,
-                          background: isWeekend ? '#1e293b' : '#0f172a',
-                          borderRight: '1px solid var(--border-dim)',
-                          borderBottom: '2px solid var(--border-glow)'
-                        }}
-                      >
-                        <div style={{ fontWeight: 700, color: isWeekend ? '#94a3b8' : '#f8fafc', fontSize: '0.85rem' }}>
-                          {dayOfWeek} {dayFormatted}
-                        </div>
+                return (
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 30, background: '#0f172a' }}>
+                    <tr style={{ background: '#1e293b', borderBottom: '1px solid var(--border-glow)' }}>
+                      <th style={{ padding: '0.4rem 1rem', textAlign: 'left', position: 'sticky', top: 0, left: 0, background: '#1e293b', zIndex: 40, borderRight: '2px solid var(--border-glow)', fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8' }}>
+                        📅 Kalenderwochen (KW)
                       </th>
-                    );
-                  })}
-                </tr>
-              </thead>
+                      {weekGroups.map((group, gIdx) => (
+                        <th key={gIdx} colSpan={group.span} style={{ padding: '0.4rem 0.5rem', textAlign: 'center', background: 'rgba(56, 189, 248, 0.08)', color: '#38bdf8', fontSize: '0.78rem', fontWeight: 800, borderRight: '1px solid var(--border-glow)', borderBottom: '1px solid var(--border-glow)', letterSpacing: '0.5px' }}>
+                          📅 {group.kw}
+                        </th>
+                      ))}
+                    </tr>
+                    <tr style={{ background: '#0f172a', borderBottom: '2px solid var(--border-glow)' }}>
+                      <th style={{ padding: '0.75rem 1rem', textAlign: 'left', minWidth: '180px', position: 'sticky', top: 0, left: 0, background: '#0f172a', zIndex: 40, borderRight: '2px solid var(--border-glow)', borderBottom: '2px solid var(--border-glow)' }}>
+                        Maschine / Anlage
+                      </th>
+                      {planningDays.map((day, dIdx) => {
+                        const dObj = new Date(day);
+                        const dayOfWeek = isNaN(dObj.getTime()) ? '' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][dObj.getDay()];
+                        const dayFormatted = isNaN(dObj.getTime()) ? day : (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.');
+                        const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
+
+                        return (
+                          <th
+                            key={day}
+                            id={'gantt-col-idx-' + dIdx}
+                            style={{
+                              padding: '0.4rem 0.15rem',
+                              textAlign: 'center',
+                              minWidth: '85px',
+                              position: 'sticky',
+                              top: 0,
+                              zIndex: 30,
+                              background: highlightedDayIndex === dIdx ? 'rgba(56, 189, 248, 0.35)' : (isWeekend ? '#1e293b' : '#0f172a'),
+                              color: highlightedDayIndex === dIdx ? '#38bdf8' : 'inherit',
+                              boxShadow: highlightedDayIndex === dIdx ? 'inset 0 0 15px rgba(56, 189, 248, 0.8)' : 'none',
+                              transition: 'all 0.3s ease',
+                              borderRight: '1px solid var(--border-dim)',
+                              borderBottom: '2px solid var(--border-glow)'
+                            }}
+                          >
+                            <div style={{ fontWeight: 700, color: isWeekend ? '#94a3b8' : '#f8fafc', fontSize: '0.85rem' }}>
+                              {dayOfWeek} {dayFormatted}
+                            </div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                );
+              })()}
               <tbody>
                 {filteredMachines.map(mName => {
                   const mSummary = machineSummaries.find(x => x.machineName === mName);
@@ -11502,7 +12013,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                                   return (
                                     <div
                                       key={sIdx}
-                                      onClick={() => setSelectedStepDetail(step)}
+                                      onClick={() => setActiveModalStep(step)}
                                       onMouseEnter={() => setHoveredContractNumber(step.contractNumber)}
                                       onMouseLeave={() => setHoveredContractNumber(null)}
                                       style={{
@@ -11557,49 +12068,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         </div>
       )}
 
-      {/* Step Detail Modal */}
-      {selectedStepDetail && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }} onClick={() => setSelectedStepDetail(null)}>
-          <div className="glass-card" style={{ maxWidth: '550px', width: '100%', padding: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', border: '1px solid var(--border-glow)' }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
-              <div>
-                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, color: '#fff' }}>
-                  Auftrag: {selectedStepDetail.contractNumber} – Pos {selectedStepDetail.orderPos}
-                </h3>
-                <span style={{ fontSize: '0.8rem', color: '#38bdf8', fontWeight: 600 }}>
-                  Arbeitsschritt {selectedStepDetail.stepPos} ({selectedStepDetail.stepDesc})
-                </span>
-              </div>
-              <button onClick={() => setSelectedStepDetail(null)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '1.2rem', cursor: 'pointer' }}>✕</button>
-            </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', fontSize: '0.85rem' }}>
-              <div>
-                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>Artikelbezeichnung</span>
-                <strong style={{ color: '#fff' }}>{selectedStepDetail.orderDesc || 'K.A.'}</strong>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>Geplantes Datum</span>
-                <strong style={{ color: '#38bdf8' }}>{selectedStepDetail.day}</strong>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>Rüstzeit (Soll)</span>
-                <strong style={{ color: '#fbbf24' }}>{((selectedStepDetail.setupTime || 0) / 60).toFixed(2)} Std. ({selectedStepDetail.setupTime || 0} min)</strong>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>Laufzeit / Bearbeitung (Soll)</span>
-                <strong style={{ color: '#34d399' }}>{((selectedStepDetail.prodTime || 0) / 60).toFixed(2)} Std. ({selectedStepDetail.prodTime || 0} min)</strong>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '0.5rem', borderTop: '1px solid var(--border-dim)' }}>
-              <button onClick={() => setSelectedStepDetail(null)} className="btn-secondary" style={{ padding: '0.45rem 1rem', fontSize: '0.85rem' }}>
-                Schließen
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Machine Utilization Cards Grid */}
       {activeViewMode === 'cards' && (
@@ -11742,60 +12211,115 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               </div>
 
               {/* Expandable Step List Preview */}
-              {m.stepsList.length > 0 && (
-                <div style={{ marginTop: '0.25rem' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                    Geplante Aufträge ({m.stepsList.length}):
-                  </div>
-                  <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.35rem', paddingRight: '4px' }}>
-                    {m.stepsList.slice(0, 15).map((s, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => setActiveModalStep(s)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          background: 'rgba(255, 255, 255, 0.03)',
-                          border: s.isGesperrt ? '1px solid rgba(239, 68, 68, 0.3)' : (s.isFreigegeben ? '1px solid rgba(59, 130, 246, 0.2)' : '1px solid rgba(245, 158, 11, 0.2)'),
-                          borderRadius: '6px',
-                          padding: '0.4rem 0.6rem',
-                          cursor: 'pointer',
-                          fontSize: '0.75rem',
-                          transition: 'background 0.2s'
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', overflow: 'hidden' }}>
-                          <span style={{
-                            padding: '1px 5px',
-                            borderRadius: '4px',
-                            fontSize: '0.65rem',
-                            fontWeight: 700,
-                            background: s.isGesperrt ? 'rgba(239, 68, 68, 0.2)' : (s.isFreigegeben ? 'rgba(59, 130, 246, 0.2)' : 'rgba(245, 158, 11, 0.2)'),
-                            color: s.isGesperrt ? '#ef4444' : (s.isFreigegeben ? '#3b82f6' : '#f59e0b')
-                          }}>
-                            {s.isGesperrt ? '🔒 GESPERRT ' : ''}{s.contractNumber} Pos {s.orderPos}
-                          </span>
-                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-main)' }}>
-                            AS {s.stepPos}: {s.stepDesc}
-                          </span>
-                        </div>
+              {m.stepsList.length > 0 && (() => {
+                const currentLimit = visibleStepLimits[m.machineName] || 15;
+                const visibleSteps = m.stepsList.slice(0, currentLimit);
+                const hasMore = m.stepsList.length > currentLimit;
+                const isExpanded = currentLimit > 15;
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
-                          <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>
-                            {formatMinutes(s.stepTime)}
-                          </span>
+                return (
+                  <div style={{ marginTop: '0.25rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                      <span>Geplante Aufträge ({m.stepsList.length}):</span>
+                      {isExpanded && (
+                        <button
+                          onClick={() => handleCollapseSteps(m.machineName)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#38bdf8',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            padding: 0
+                          }}
+                        >
+                          ↩ Minimieren (15 anzeigen)
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ maxHeight: isExpanded ? '380px' : '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.35rem', paddingRight: '4px', transition: 'max-height 0.3s ease' }}>
+                      {visibleSteps.map((s, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => setActiveModalStep(s)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            background: 'rgba(255, 255, 255, 0.03)',
+                            border: s.isGesperrt ? '1px solid rgba(239, 68, 68, 0.3)' : (s.isFreigegeben ? '1px solid rgba(59, 130, 246, 0.2)' : '1px solid rgba(245, 158, 11, 0.2)'),
+                            borderRadius: '6px',
+                            padding: '0.4rem 0.6rem',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            transition: 'background 0.2s'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', overflow: 'hidden' }}>
+                            <span style={{
+                              padding: '1px 5px',
+                              borderRadius: '4px',
+                              fontSize: '0.65rem',
+                              fontWeight: 700,
+                              background: s.isGesperrt ? 'rgba(239, 68, 68, 0.2)' : (s.isFreigegeben ? 'rgba(59, 130, 246, 0.2)' : 'rgba(245, 158, 11, 0.2)'),
+                              color: s.isGesperrt ? '#ef4444' : (s.isFreigegeben ? '#3b82f6' : '#f59e0b')
+                            }}>
+                              {s.isGesperrt ? '🔒 GESPERRT ' : ''}{s.contractNumber || s.ContractNumber || s.orderId || s.OrderId || 'P-Auftrag'} Pos {s.orderPos || s.OrderPos || '10'}
+                            </span>
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-main)' }}>
+                              AS {s.stepPos || s.StepPos || '10'}{s.stepDesc || s.StepDesc || s.articleDesc || s.ArticleDesc || s.orderDesc || s.OrderDesc ? (': ' + (s.stepDesc || s.StepDesc || s.articleDesc || s.ArticleDesc || s.orderDesc || s.OrderDesc)) : ''}
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                            <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>
+                              {formatMinutes(s.stepTime)}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    {m.stepsList.length > 15 && (
-                      <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-muted)', paddingTop: '4px' }}>
-                        + {m.stepsList.length - 15} weitere Arbeitsschritte...
-                      </div>
-                    )}
+                      ))}
+
+                      {hasMore && (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', paddingTop: '6px', flexWrap: 'wrap' }}>
+                          <button
+                            onClick={() => handleLoadMoreSteps(m.machineName, 25)}
+                            style={{
+                              background: 'rgba(56, 189, 248, 0.12)',
+                              color: '#38bdf8',
+                              border: '1px solid rgba(56, 189, 248, 0.35)',
+                              borderRadius: '6px',
+                              padding: '0.35rem 0.75rem',
+                              fontSize: '0.73rem',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              transition: 'all 0.2s'
+                            }}
+                          >
+                            ➕ 25 weitere nachladen ({m.stepsList.length - currentLimit} verbleibend)
+                          </button>
+                          <button
+                            onClick={() => handleShowAllSteps(m.machineName, m.stepsList.length)}
+                            style={{
+                              background: 'rgba(255, 255, 255, 0.05)',
+                              color: 'var(--text-main)',
+                              border: '1px solid var(--border-dim)',
+                              borderRadius: '6px',
+                              padding: '0.35rem 0.75rem',
+                              fontSize: '0.73rem',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              transition: 'all 0.2s'
+                            }}
+                          >
+                            📖 Alle {m.stepsList.length} anzeigen
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
           );
         })}
@@ -11803,75 +12327,496 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
       )}
 
       {/* Modal for Order Routing Details */}
+      {/* Full Rich Arbeitsschritt-Details Modal (Matching "Planung Maschinen") */}
       {activeModalStep && (
         <div style={{
           position: 'fixed',
           top: 0,
           left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.75)',
-          backdropFilter: 'blur(4px)',
+          width: '100%',
+          height: '100%',
+          background: 'rgba(4, 6, 10, 0.85)',
+          backdropFilter: 'blur(10px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div className="glass-card" style={{ width: '700px', maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', padding: '1.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                  Arbeitsplan für {activeModalStep.contractNumber} Pos {activeModalStep.orderPos}
+          zIndex: 9999,
+          padding: '2rem',
+          transition: 'all 0.3s ease'
+        }} onClick={() => setActiveModalStep(null)}>
+          <div style={{
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-dim)',
+            borderRadius: '16px',
+            width: '100%',
+            maxWidth: '680px',
+            maxHeight: '90vh',
+            overflowY: 'auto',
+            padding: '2.25rem',
+            boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)',
+            position: 'relative',
+            transition: 'all 0.3s ease'
+          }} onClick={e => e.stopPropagation()}>
+            
+            {/* Close Button */}
+            <button
+              onClick={() => setActiveModalStep(null)}
+              style={{
+                position: 'absolute',
+                top: '1.25rem',
+                right: '1.25rem',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid var(--border-dim)',
+                color: '#94a3b8',
+                cursor: 'pointer',
+                padding: '0.4rem',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s'
+              }}
+            >
+              <X size={18} />
+            </button>
+
+            {/* Modal Header */}
+            <div style={{ marginBottom: '1.5rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                  {activeModalStep.isGesperrt ? (
+                    <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '0.7rem', fontWeight: 700 }}>
+                      🔒 GESPERRT
+                    </span>
+                  ) : activeModalStep.isFreigegeben ? (
+                    <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#60a5fa', fontSize: '0.7rem', fontWeight: 700 }}>
+                      ✓ FREIGEGEBEN
+                    </span>
+                  ) : (
+                    <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#fbbf24', fontSize: '0.7rem', fontWeight: 700 }}>
+                      ⏳ VORGEMERKT
+                    </span>
+                  )}
+                  {activeModalStep.isExecuting && (
+                    <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '0.7rem', fontWeight: 700 }}>
+                      ⚡ IN AUSFÜHRUNG
+                    </span>
+                  )}
+                  {activeModalStep.isSplit && (
+                    <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', fontSize: '0.7rem', fontWeight: 600 }}>
+                      ✂ Teil {activeModalStep.splitPart || 1}
+                    </span>
+                  )}
+                  {activeModalStep.isNightRunCapable && (
+                    <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.7rem', fontWeight: 600 }}>
+                      <Moon size={12} style={{ marginRight: 3 }} /> Nachtlauf
+                    </span>
+                  )}
+                </div>
+                <h3 style={{ color: '#fff', fontSize: '1.4rem', fontWeight: 700, margin: '0.25rem 0' }}>
+                  Arbeitsschritt-Details
                 </h3>
-                <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  {activeModalStep.orderDesc}
+                <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: 0 }}>
+                  Detaillierte Belegungsdaten des Arbeitsschritts (Auswertung Planung)
                 </p>
               </div>
-              <button
-                onClick={() => setActiveModalStep(null)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-              >
-                <X size={20} />
-              </button>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
-              {loadingRouting ? (
-                <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem' }}>Lade Arbeitsplan...</div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {fullRoutingSteps.map(op => (
-                    <div
-                      key={op.stepId}
-                      style={{
-                        padding: '0.65rem 0.85rem',
-                        borderRadius: '6px',
-                        background: op.stepId === activeModalStep.stepId ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.02)',
-                        border: op.stepId === activeModalStep.stepId ? '1px solid #3b82f6' : '1px solid var(--border-dim)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between'
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-main)' }}>
-                          AS {op.stepPos}: {op.stepDesc}
+            {/* Modal Body */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+
+              {/* Row 1: P-Nummer & Lieferdatum */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>P-Nummer (Projekt) / Position</div>
+                  <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>
+                    {activeModalStep.contractNumber || activeModalStep.ContractNumber || 'Keine P-Nummer'} {activeModalStep.orderPos || activeModalStep.OrderPos ? `/ Pos ${activeModalStep.orderPos || activeModalStep.OrderPos}` : ''}
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Eingeplanter Tag</div>
+                  <div style={{ fontSize: '1.05rem', color: '#10b981', fontWeight: 700 }}>
+                    {activeModalStep.day || 'Überlauf'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 2: Artikel */}
+              <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Artikel / Auftrag (Bezeichnung)</div>
+                <div style={{ fontSize: '0.95rem', color: '#fff', fontWeight: 600 }}>{activeModalStep.orderDesc || activeModalStep.articleDesc || activeModalStep.ArticleDesc || 'K.A.'}</div>
+                {(activeModalStep.articleId || activeModalStep.ArticleId) && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.35rem' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Artikel-ID: {activeModalStep.articleId || activeModalStep.ArticleId}</div>
+                    {typeof openDmsSlider === 'function' && (
+                      <button 
+                        onClick={() => openDmsSlider(activeModalStep.articleId || activeModalStep.ArticleId, activeModalStep.orderDesc || activeModalStep.articleDesc)}
+                        style={{ 
+                          background: 'rgba(56, 189, 248, 0.1)', 
+                          color: '#38bdf8', 
+                          border: '1px solid rgba(56, 189, 248, 0.2)', 
+                          padding: '0.2rem 0.6rem', 
+                          borderRadius: '6px', 
+                          fontSize: '0.7rem', 
+                          cursor: 'pointer',
+                          fontWeight: 600, 
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem'
+                        }}
+                      >
+                        📐 Zeichnung im DMS öffnen
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Row 3: Arbeitsplan-Schritt */}
+              <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Arbeitsplan-Position (Arbeitsschritt)</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                  <span style={{ color: '#38bdf8', fontWeight: 700, fontSize: '1.1rem' }}>AS {activeModalStep.stepPos || activeModalStep.StepPos || '10'}</span>
+                  <span style={{ color: '#fff', fontWeight: 600 }}>- {activeModalStep.stepDesc || activeModalStep.StepDesc || ''}</span>
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>Schritt-ID: {activeModalStep.stepId || activeModalStep.StepId || 'N/A'}</div>
+              </div>
+
+              {/* Row 4: Soll vs Ist vs Rest Zeitvergleich & Durchlaufzeit */}
+              {(() => {
+                const originalSetup = activeModalStep.originalSetupTime || activeModalStep.setupTime || activeModalStep.SetupTime || 0;
+                const originalProd = activeModalStep.originalProdTime || activeModalStep.prodTime || activeModalStep.ProdTime || 0;
+                const originalTotal = originalSetup + originalProd;
+
+                const seenBookingIdsForSum = new Set();
+                let totalBookedSetup = 0;
+                let totalBookedProd = 0;
+                (modalBookings || []).forEach(b => {
+                  const bookingId = b.ID;
+                  if (bookingId && !seenBookingIdsForSum.has(bookingId)) {
+                    seenBookingIdsForSum.add(bookingId);
+                    totalBookedSetup += b.ZBU_ZEIT_RUESTUNG_GESAMT || 0;
+                    totalBookedProd += (b.ZBU_ZEIT_PRODUKTION_AK || 0) + (b.ZBU_ZEIT_PRODUKTION_MS || 0);
+                  }
+                });
+                const totalBookedTotal = totalBookedSetup + totalBookedProd;
+
+                let remainingSetup = Math.round(activeModalStep.setupTime !== undefined ? activeModalStep.setupTime : originalSetup);
+                if (totalBookedSetup > originalSetup) {
+                  remainingSetup = originalSetup - totalBookedSetup;
+                }
+                
+                let remainingProd = Math.round(activeModalStep.prodTime !== undefined ? activeModalStep.prodTime : originalProd);
+                if (totalBookedProd > originalProd) {
+                  remainingProd = originalProd - totalBookedProd;
+                }
+
+                let remainingTotal = Math.round((activeModalStep.setupTime || 0) + (activeModalStep.prodTime || 0));
+                if (totalBookedTotal > originalTotal) {
+                  remainingTotal = originalTotal - totalBookedTotal;
+                }
+
+                const setupPct = originalSetup > 0 ? (totalBookedSetup / originalSetup) * 100 : 0;
+                const prodPct = originalProd > 0 ? (totalBookedProd / originalProd) * 100 : 0;
+                const totalPct = originalTotal > 0 ? (totalBookedTotal / originalTotal) * 100 : 0;
+
+                return (
+                  <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-dim)', padding: '1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>Soll / Ist / Rest Zeitvergleich & Durchlaufzeit</span>
+                      <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Werte gerundet in Minuten, Stunden & Tagen</span>
+                    </div>
+
+                    {/* Row 1: Zeitvergleich (Rüsten, Produktion, Gesamtzeit in einer Reihe) */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+                      {/* Rüsten */}
+                      <div style={{ background: 'rgba(249, 115, 22, 0.03)', border: '1px solid rgba(249, 115, 22, 0.15)', padding: '0.65rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.72rem', color: '#fdba74', fontWeight: 700 }}>🛠️ RÜSTEN</span>
+                          <span style={{ fontSize: '0.68rem', color: setupPct > 100 ? '#ef4444' : '#94a3b8', fontWeight: setupPct > 100 ? 700 : 400, fontFamily: 'monospace' }}>{Math.round(setupPct)}%</span>
                         </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          Maschine: {op.machineName}
+                        <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Soll:</span><span style={{ fontWeight: 600 }}>{formatMinutes(originalSetup)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: totalBookedSetup > originalSetup ? '#ef4444' : '#fdba74' }}>{formatMinutes(totalBookedSetup)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(249, 115, 22, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingSetup < 0 ? '#ef4444' : (remainingSetup > 0 ? '#38bdf8' : '#64748b') }}>{formatMinutes(remainingSetup)}</span></div>
+                        </div>
+                        <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.min(100, setupPct)}%`, height: '100%', background: setupPct > 100 ? '#ef4444' : '#f97316', borderRadius: '2px' }} />
                         </div>
                       </div>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                        Rüst: {op.setupTime}m | Lauf: {op.prodTime}m
+
+                      {/* Produktion */}
+                      <div style={{ background: 'rgba(59, 130, 246, 0.03)', border: '1px solid rgba(59, 130, 246, 0.15)', padding: '0.65rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.72rem', color: '#93c5fd', fontWeight: 700 }}>⚙️ PRODUKTION</span>
+                          <span style={{ fontSize: '0.68rem', color: prodPct > 100 ? '#ef4444' : '#94a3b8', fontWeight: prodPct > 100 ? 700 : 400, fontFamily: 'monospace' }}>{Math.round(prodPct)}%</span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Soll:</span><span style={{ fontWeight: 600 }}>{formatMinutes(originalProd)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: totalBookedProd > originalProd ? '#ef4444' : '#60a5fa' }}>{formatMinutes(totalBookedProd)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(59, 130, 246, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingProd < 0 ? '#ef4444' : (remainingProd > 0 ? '#38bdf8' : '#64748b') }}>{formatMinutes(remainingProd)}</span></div>
+                        </div>
+                        <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.min(100, prodPct)}%`, height: '100%', background: prodPct > 100 ? '#ef4444' : '#3b82f6', borderRadius: '2px' }} />
+                        </div>
+                      </div>
+
+                      {/* Gesamtzeit */}
+                      <div style={{ background: 'rgba(16, 185, 129, 0.03)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.65rem 0.75rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.72rem', color: '#6ee7b7', fontWeight: 700 }}>📊 GESAMTZEIT</span>
+                          <span style={{ fontSize: '0.68rem', color: totalPct > 100 ? '#ef4444' : '#94a3b8', fontWeight: totalPct > 100 ? 700 : 400, fontFamily: 'monospace' }}>{Math.round(totalPct)}%</span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Soll:</span><span style={{ fontWeight: 600 }}>{formatMinutes(originalTotal)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ist:</span><span style={{ fontWeight: 600, color: totalBookedTotal > originalTotal ? '#ef4444' : '#10b981' }}>{formatMinutes(totalBookedTotal)}</span></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(16, 185, 129, 0.15)', paddingTop: '0.15rem', marginTop: '0.15rem' }}><span>Rest:</span><span style={{ fontWeight: 700, color: remainingTotal < 0 ? '#ef4444' : (remainingTotal > 0 ? '#38bdf8' : '#64748b') }}>{formatMinutes(remainingTotal)}</span></div>
+                        </div>
+                        <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.min(100, totalPct)}%`, height: '100%', background: totalPct > 100 ? '#ef4444' : '#10b981', borderRadius: '2px' }} />
+                        </div>
                       </div>
                     </div>
-                  ))}
+
+                    {/* Row 2: Durchlaufzeit */}
+                    {(() => {
+                      const mPlannedDays = (activeModalStep.PlannedDays && activeModalStep.PlannedDays > 0) ? activeModalStep.PlannedDays : ((activeModalStep.ThroughputDays && activeModalStep.ThroughputDays > 0) ? activeModalStep.ThroughputDays : 1);
+                      const mOrderPlanDays = activeModalStep.OrderPlanDays ?? mPlannedDays;
+                      const mUsedDays = activeModalStep.UsedDays ?? 0;
+                      const mDaysPct = Math.round((mUsedDays / Math.max(1, mPlannedDays)) * 100);
+                      const mRemainingDays = mPlannedDays - mUsedDays;
+
+                      return (
+                        <div style={{ background: 'rgba(56, 189, 248, 0.03)', border: '1px solid rgba(56, 189, 248, 0.18)', padding: '0.65rem 0.85rem', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                              📅 DURCHLAUFZEIT
+                            </span>
+                            <span style={{ fontSize: '0.7rem', color: mUsedDays > mPlannedDays ? '#ef4444' : '#38bdf8', fontWeight: 700, fontFamily: 'monospace' }}>
+                              {mDaysPct}%
+                            </span>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '0.5rem', fontSize: '0.75rem', color: '#cbd5e1' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>Auftragsplan:</span>
+                              <span style={{ fontWeight: 600 }}>{mOrderPlanDays} {mOrderPlanDays === 1 ? 'Tag' : 'Tage'}</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>Historischer Ø:</span>
+                              <span style={{ fontWeight: 600 }}>{mPlannedDays} {mPlannedDays === 1 ? 'Tag' : 'Tage'}</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>Ist (Gebraucht):</span>
+                              <span style={{ fontWeight: 600, color: mUsedDays > mPlannedDays ? '#ef4444' : '#38bdf8' }}>{mUsedDays} {mUsedDays === 1 ? 'Tag' : 'Tage'}</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>Geplanter Restbedarf:</span>
+                              <span style={{ fontWeight: 700, color: mRemainingDays < 0 ? '#ef4444' : '#38bdf8' }}>{mRemainingDays} {Math.abs(mRemainingDays) === 1 ? 'Tag' : 'Tage'}</span>
+                            </div>
+                          </div>
+                          <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden', marginTop: '0.2rem' }}>
+                            <div style={{ width: `${Math.min(100, mDaysPct)}%`, height: '100%', background: mUsedDays > mPlannedDays ? '#ef4444' : '#38bdf8', borderRadius: '2px' }} />
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })()}
+
+              {/* Row 5: NC & WinTool */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.1rem' }}>NC-Programm</div>
+                  <div style={{ fontSize: '0.88rem', color: (activeModalStep.ncProgram || activeModalStep.NCProgram) ? '#fff' : '#94a3b8', fontFamily: 'monospace', fontWeight: 600 }}>
+                    {activeModalStep.ncProgram || activeModalStep.NCProgram || 'Kein NC-Prog hinterlegt'}
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.1rem' }}>WinTool-Liste</div>
+                  <div style={{ fontSize: '0.88rem', color: '#fff', fontWeight: 600 }}>
+                    {activeModalStep.matchedListIdent || activeModalStep.matchedListNr || activeModalStep.MatchedListNr || 'Keine WinTool-Liste'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 6: Vorrichtung (Fixture) */}
+              {(activeModalStep.fixture || activeModalStep.Fixture) && (
+                <div style={{ background: 'rgba(168, 85, 247, 0.03)', border: '1px solid rgba(168, 85, 247, 0.15)', padding: '0.75rem 1rem', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 600, textTransform: 'uppercase' }}>Spannmittel / Vorrichtung</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.95rem', color: '#e9d5ff', fontWeight: 700 }}>
+                      🛠️ {activeModalStep.fixture || activeModalStep.Fixture}
+                    </span>
+                    {(activeModalStep.fixtureLocation || activeModalStep.FixtureLocation) && (
+                      <span style={{ fontSize: '0.8rem', color: '#a7f3d0', fontWeight: 600, background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '0.15rem 0.4rem', borderRadius: '6px' }}>
+                        📍 Lagerort: {activeModalStep.fixtureLocation || activeModalStep.FixtureLocation}
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
+
+              {/* Entire Arbeitsplan Section (Routing steps chain) */}
+              <div>
+                <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <span>Gesamter Arbeitsplan (Routing Chain)</span>
+                  <span style={{ fontSize: '0.7rem', background: 'rgba(255, 255, 255, 0.04)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#94a3b8' }}>
+                    {loadingRouting ? 'Lade...' : `${fullRoutingSteps.length} Operationen`}
+                  </span>
+                </div>
+                {loadingRouting ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', padding: '1rem', border: '1px solid var(--border-dim)', borderRadius: '10px' }}>
+                    <span>Lade Arbeitsplan...</span>
+                  </div>
+                ) : fullRoutingSteps.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem', border: '1px solid var(--border-dim)', padding: '0.75rem', borderRadius: '10px' }}>
+                    {fullRoutingSteps.map((op, opIdx) => {
+                      const isCurrent = op.stepId === (activeModalStep.stepId || activeModalStep.StepId);
+                      const isCompleted = op.isCompleted;
+                      const isExecuting = op.isExecuting;
+
+                      let statusBadge = null;
+                      let bgStyle = 'var(--bg-card)';
+                      let borderStyle = '1px solid var(--border-dim)';
+
+                      if (isCurrent) {
+                        statusBadge = <span style={{ color: '#60a5fa', fontSize: '0.7rem', fontWeight: 700 }}>Aktuell</span>;
+                        bgStyle = 'rgba(59, 130, 246, 0.15)';
+                        borderStyle = '1px solid rgba(59, 130, 246, 0.4)';
+                      } else if (isCompleted) {
+                        statusBadge = <span style={{ color: '#64748b', fontSize: '0.7rem', fontWeight: 600 }}>✓ Erledigt</span>;
+                        bgStyle = 'transparent';
+                        borderStyle = '1px dashed var(--border-dim)';
+                      } else if (isExecuting) {
+                        statusBadge = <span style={{ color: '#10b981', fontSize: '0.7rem', fontWeight: 700 }}>▶ In Arbeit</span>;
+                        bgStyle = 'rgba(16, 185, 129, 0.1)';
+                        borderStyle = '1px solid rgba(16, 185, 129, 0.3)';
+                      } else {
+                        statusBadge = <span style={{ color: '#94a3b8', fontSize: '0.7rem', fontWeight: 500 }}>Offen</span>;
+                        bgStyle = 'rgba(128,128,128,0.05)';
+                        borderStyle = '1px solid var(--border-dim)';
+                      }
+
+                      return (
+                        <div key={opIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: bgStyle, border: borderStyle, padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', gap: '1rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexGrow: 1, overflow: 'hidden', minWidth: 0 }}>
+                            <span style={{ color: isCurrent ? '#38bdf8' : '#64748b', fontWeight: 700, fontFamily: 'monospace', minWidth: '42px', flexShrink: 0 }}>AS {op.stepPos}</span>
+                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{op.stepDesc}</span>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>({(op.machineName || '').replace(/\s*\(\s*Pool\s*\)/gi, '').trim()})</span>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+                            {statusBadge}
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                              {formatMinutes(op.setupTime + op.prodTime)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem', padding: '0.5rem' }}>
+                    Keine weiteren Operationen im Arbeitsplan gefunden.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* DMS Drawing Slider Drawer Overlay */}
+      {dmsSliderOpen && dmsSliderList.length > 0 && (() => {
+        const currentItem = dmsSliderList[dmsSliderIndex];
+        let iframeSrc = `${API_BASE}/dms/drawing/${encodeURIComponent(currentItem.articleId)}?mode=proxy&index=${dmsSubIndex}`;
+        if (dmsSliderFixture) {
+          iframeSrc += `&fixture=${encodeURIComponent(dmsSliderFixture)}`;
+        }
+        
+        return (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            right: 0,
+            width: dmsSliderFullscreen ? '100%' : '55%',
+            height: '100%',
+            background: '#0f172a',
+            borderLeft: '1px solid rgba(255,255,255,0.1)',
+            boxShadow: '-10px 0 30px rgba(0,0,0,0.5)',
+            zIndex: 99999,
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            {/* Header */}
+            <div style={{
+              padding: '1rem 1.5rem',
+              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              display: 'flex',
+              justify: 'space-between',
+              alignItems: 'center',
+              background: '#1e293b'
+            }}>
+              <div>
+                <span style={{ fontSize: '0.7rem', color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Zeichnungs-Explorer
+                </span>
+                <h4 style={{ color: '#fff', margin: '0.1rem 0 0 0', fontSize: '1.05rem', fontWeight: 600 }}>
+                  Artikel: {dmsResolvedArticleNumber || currentItem.articleId}
+                </h4>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button
+                  onClick={() => setDmsSliderFullscreen(prev => !prev)}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    color: '#fff',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem'
+                  }}
+                >
+                  <span>{dmsSliderFullscreen ? '🗗 Verkleinern' : '🗖 Maximieren'}</span>
+                </button>
+                <button 
+                  onClick={() => setDmsSliderOpen(false)}
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.1)',
+                    color: '#f87171',
+                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  Schließen
+                </button>
+              </div>
+            </div>
+            
+            {/* Viewer Iframe */}
+            <div style={{ flex: 1, background: '#020617', position: 'relative' }}>
+              <iframe
+                src={iframeSrc}
+                style={{ width: '100%', height: '100%', border: 'none' }}
+                title="DMS Zeichnung Viewer"
+              />
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
