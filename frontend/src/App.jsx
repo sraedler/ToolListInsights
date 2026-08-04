@@ -1,4 +1,15 @@
 
+// Global Helper to calculate ISO 8601 Calendar Week (KW 01 - KW 53)
+function getISOWeekNumber(dateInput) {
+  if (!dateInput) return '';
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return '';
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return 'KW ' + String(weekNo).padStart(2, '0');
+}
 // Deterministic color generator for distinct contract/order colors
 const getContractColor = (contractNum) => {
   if (!contractNum) return { bg: 'rgba(59, 130, 246, 0.2)', border: 'rgba(59, 130, 246, 0.5)', text: '#93c5fd', badgeBg: 'rgba(0,0,0,0.4)' };
@@ -65,6 +76,7 @@ import {
   Tooltip, 
   Legend,
   ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer 
 } from 'recharts';
 
@@ -3743,7 +3755,6 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeViewMode, setActiveViewMode] = useState('gantt'); // 'gantt' | 'cards' | 'kanban'
   const [selectedStepDetail, setSelectedStepDetail] = useState(null);
   const [hoveredContractNumber, setHoveredContractNumber] = useState(null);
   const [drilldownDate, setDrilldownDate] = useState('');
@@ -6843,7 +6854,7 @@ function ToolsPlanningView({
                                 }}
                                 title={`${st.contractNumber} (Pos ${st.stepPos}): ${st.stepDesc}`}
                               >
-                                {st.contractNumber} ({st.stepDesc.substring(0, 12)}...)
+                                {st.contractNumber}{st.orderPos ? ` / Pos ${st.orderPos}` : ''} ({(st.stepDesc || st.StepDesc || '').substring(0, 12)}...)
                               </div>
                             ))}
                           </div>
@@ -7457,7 +7468,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
         <AlertTriangle size={32} style={{ color: '#ef4444', marginBottom: '1rem' }} />
         <h3 style={{ color: '#f1f5f9', marginBottom: '0.5rem' }}>Verbindungsfehler</h3>
         <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1.5rem' }}>{error}</p>
-        <button onClick={refetch} className="btn btn-primary">Erneut versuchen</button>
+        <button onClick={() => setReloadTrigger(c => c + 1)} className="btn btn-primary">Erneut versuchen</button>
       </div>
     );
   }
@@ -9067,7 +9078,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                     filter: isBlurryExecuting ? 'blur(0.3px) grayscale(20%)' : 'none'
                                   }}
                                 >
-                                  {s.ncProgram || s.stepDesc.substring(0, 15)}...
+                                  {(s.contractNumber || s.ContractNumber || 'P-Auftrag')}{(s.orderPos || s.OrderPos) ? ` Pos ${s.orderPos || s.OrderPos}` : ''} - {s.ncProgram || (s.stepDesc || s.StepDesc || '').substring(0, 15)}...
                                 </div>
                               );
                             })}
@@ -10597,15 +10608,28 @@ function PDFCanvasViewer({ url, dmsSliderFullscreen }) {
    PLANNING EVALUATION TAB (Auswertung Planung)
    ========================================== */
 function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
-  const [weeksCount, setWeeksCount] = useState(4); // 1, 2, 4, 6 weeks
+  const ganttContainerRef = useRef(null);
+  const chartContainerRef = useRef(null);
+
+  const [planningDays, setPlanningDays] = useState([]);
+  const [boardData, setBoardData] = useState({});
+  const [dailyCapacities, setDailyCapacities] = useState({});
+  const [activeViewMode, setActiveViewMode] = useState('gantt'); // 'gantt' | 'cards' | 'kanban'
+  const [highlightedDayIndex, setHighlightedDayIndex] = useState(null);
+
+  const [weeksCount, setWeeksCount] = useState(4); // 1 to 20 weeks
+  const [tempWeeksCount, setTempWeeksCount] = useState(4);
+  useEffect(() => { setTempWeeksCount(weeksCount); }, [weeksCount]);
   const [includeGesperrte, setIncludeGesperrte] = useState(false);
   const [includeVorgemerkte, setIncludeVorgemerkte] = useState(false);
+  const [useOptimizedPlan, setUseOptimizedPlan] = useState(false);
+  const [chartViewType, setChartViewType] = useState('ruest_lauf'); // 'ruest_lauf' | 'status'
+  const [showTrendLine, setShowTrendLine] = useState(true); // Trendline toggle state
   const [searchQuery, setSearchQuery] = useState('');
   const [showRuestFilter, setShowRuestFilter] = useState(true);
   const [showProdFilter, setShowProdFilter] = useState(true);
   const [reloadTrigger, setReloadTrigger] = useState(0);
   const refetch = () => setReloadTrigger(c => c + 1);
-  const [activeViewMode, setActiveViewMode] = useState('gantt'); // 'gantt' | 'cards' | 'kanban'
   const [selectedStepDetail, setSelectedStepDetail] = useState(null);
   const [hoveredContractNumber, setHoveredContractNumber] = useState(null);
 
@@ -10613,11 +10637,103 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   const [loadingPercent, setLoadingPercent] = useState(0);
   const [loadingStageText, setLoadingStageText] = useState('D4-Auftragsdaten laden...');
   const [currentDayLoaded, setCurrentDayLoaded] = useState(0);
-
   const [error, setError] = useState(null);
-  const [boardData, setBoardData] = useState({});
-  const [dailyCapacities, setDailyCapacities] = useState({});
-  const [planningDays, setPlanningDays] = useState([]);
+
+  const handleChartDayClick = (targetIdx) => {
+    if (targetIdx === undefined || targetIdx === null || targetIdx < 0) return;
+    setActiveViewMode('gantt');
+    setHighlightedDayIndex(targetIdx);
+
+    setTimeout(() => {
+      setHighlightedDayIndex(null);
+    }, 4000);
+  };
+
+  // Custom High-Precision Cubic-Easing Scroll Animation (Guaranteed 500ms Fluid Transition)
+  useEffect(() => {
+    if (highlightedDayIndex !== null && highlightedDayIndex !== undefined) {
+      if (activeViewMode !== 'gantt') {
+        setActiveViewMode('gantt');
+      }
+
+      const animateScroll = (element, targetPos, isHorizontal = false, duration = 500) => {
+        if (!element) return;
+        const startPos = isHorizontal ? element.scrollLeft : element.scrollTop;
+        const change = targetPos - startPos;
+        if (Math.abs(change) < 2) return;
+
+        const startTime = performance.now();
+
+        const step = (currentTime) => {
+          const elapsed = currentTime - startTime;
+          const progress = Math.min(1, elapsed / duration);
+          // Cubic ease-in-out curve
+          const easeProgress = progress < 0.5 
+            ? 4 * progress * progress * progress 
+            : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+          const currentScrollPos = startPos + change * easeProgress;
+          if (isHorizontal) {
+            element.scrollLeft = currentScrollPos;
+          } else {
+            element.scrollTop = currentScrollPos;
+          }
+
+          if (progress < 1) {
+            requestAnimationFrame(step);
+          }
+        };
+
+        requestAnimationFrame(step);
+      };
+
+      const timer = setTimeout(() => {
+        const contentBody = document.querySelector('.content-body');
+        const ganttSec = document.getElementById('gantt-section');
+        const el = document.getElementById('gantt-col-idx-' + highlightedDayIndex);
+        const container = ganttContainerRef.current;
+
+        // 1. Fluid vertical scroll of .content-body
+        if (contentBody && ganttSec) {
+          const topPos = ganttSec.offsetTop - contentBody.offsetTop;
+          animateScroll(contentBody, Math.max(0, topPos - 15), false, 450);
+        } else if (ganttSec) {
+          ganttSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // 2. Fluid horizontal scroll of Gantt table container centered on column
+        if (container && el) {
+          const targetLeft = el.offsetLeft - (container.clientWidth / 2) + (el.clientWidth / 2);
+          animateScroll(container, Math.max(0, targetLeft), true, 500);
+        }
+      }, 80);
+
+      return () => clearTimeout(timer);
+    }
+  }, [highlightedDayIndex, activeViewMode]);
+
+  // Native Capturing Phase Event Listener on Chart Container
+  // Captures click events BEFORE Recharts SVG components can stop propagation!
+  useEffect(() => {
+    const container = chartContainerRef.current || document.getElementById('capacity-chart-container');
+    if (!container) return;
+
+    const handleCapturingClick = (e) => {
+      const rect = container.getBoundingClientRect();
+      const clickX = e.clientX - rect.left - 50;
+      const availWidth = rect.width - 80;
+      if (clickX >= 0 && availWidth > 0 && planningDays.length > 0) {
+        const pct = Math.min(0.999, Math.max(0, clickX / availWidth));
+        const targetIdx = Math.floor(pct * planningDays.length);
+        handleChartDayClick(targetIdx);
+      }
+    };
+
+    container.addEventListener('click', handleCapturingClick, true); // true = DOM Capturing Phase!
+    return () => {
+      container.removeEventListener('click', handleCapturingClick, true);
+    };
+  }, [planningDays]);
 
   const [activeModalStep, setActiveModalStep] = useState(null);
   const [fullRoutingSteps, setFullRoutingSteps] = useState([]);
@@ -10688,14 +10804,14 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         setLoadingStageText('Berechne Belegung für Tag ' + simulatedDay + ' von ' + totalDaysToLoad + '...');
       } else {
         setLoadingPercent(95);
-        setLoadingStageText('Optimiere Maschinenfolgen und Rüstzeiten...');
+        setLoadingStageText(useOptimizedPlan ? 'Berechne optimierte Maschinenbelegungen und Rüstzeiten...' : 'Erstelle Auswertung aus D4-Originaldaten...');
       }
     }, stepInterval);
 
     const runFetch = async () => {
       try {
         const days = weeksCount * 7;
-        const res = await fetch(API_BASE + '/planning?daysCount=' + days + '&includeNonGreen=true&useD4Plan=true', {
+        const res = await fetch(API_BASE + '/planning?daysCount=' + days + '&includeNonGreen=true&useD4Plan=' + (!useOptimizedPlan), {
           signal: controller.signal
         });
         if (!res.ok) {
@@ -10941,6 +11057,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     let dayFreigegebenMin = 0;
     let dayGesperrtMin = 0;
     let dayVorgemerktMin = 0;
+    let dayRuestMin = 0;
+    let dayLaufMin = 0;
 
     filteredMachines.forEach(mName => {
       dayCapMin += (dailyCapacities[mName]?.[day] || 0);
@@ -10952,9 +11070,22 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         if (!isFreigegeben && !includeVorgemerkte) return;
         if (isFreigegeben && isGesperrt && !includeGesperrte) return;
 
-        let stepTime = 0;
-        if (showRuestFilter) stepTime += (s.setupTime || 0);
-        if (showProdFilter) stepTime += (s.prodTime || 0);
+        // Apply text search query filter
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const match = String(s.contractNumber || '').toLowerCase().includes(q) ||
+                        String(s.orderPos || '').toLowerCase().includes(q) ||
+                        String(s.orderDesc || '').toLowerCase().includes(q) ||
+                        String(s.stepDesc || '').toLowerCase().includes(q);
+          if (!match) return;
+        }
+
+        const setupM = (showRuestFilter ? (s.setupTime || 0) : 0);
+        const prodM = (showProdFilter ? (s.prodTime || 0) : 0);
+        const stepTime = setupM + prodM;
+
+        dayRuestMin += setupM;
+        dayLaufMin += prodM;
 
         if (!isFreigegeben) {
           dayVorgemerktMin += stepTime;
@@ -10967,16 +11098,54 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     });
 
     const dObj = new Date(day);
-    const dayLabel = !isNaN(dObj.getTime()) ? (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.') : day;
+    const kwLabel = getISOWeekNumber(day);
+    const dayLabel = !isNaN(dObj.getTime()) 
+      ? (kwLabel ? kwLabel + ' | ' : '') + String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.'
+      : day;
 
     return {
       day,
       dayLabel,
       Kapazität: Math.round((dayCapMin / 60) * 10) / 10,
+      Rüstzeit: Math.round((dayRuestMin / 60) * 10) / 10,
+      Laufzeit: Math.round((dayLaufMin / 60) * 10) / 10,
       Freigegeben: Math.round((dayFreigegebenMin / 60) * 10) / 10,
       Gesperrt: Math.round((dayGesperrtMin / 60) * 10) / 10,
       Vorgemerkt: Math.round((dayVorgemerktMin / 60) * 10) / 10,
-      GesamtGeplant: Math.round(((dayFreigegebenMin + dayGesperrtMin + dayVorgemerktMin) / 60) * 10) / 10
+      GesamtGeplant: Math.round(((dayRuestMin + dayLaufMin) / 60) * 10) / 10
+    };
+  });
+
+  // High-Precision Linear Least-Squares Regression (y = m * x + b) & 7-Day Exponential Moving Average (EMA)
+  const N = chartData.length;
+  const sumX = (N * (N - 1)) / 2;
+  const meanX = N > 0 ? sumX / N : 0;
+  const meanY = N > 0 ? chartData.reduce((sum, item) => sum + item.GesamtGeplant, 0) / N : 0;
+
+  let numSq = 0;
+  let denSq = 0;
+  chartData.forEach((item, idx) => {
+    numSq += (idx - meanX) * (item.GesamtGeplant - meanY);
+    denSq += (idx - meanX) * (idx - meanX);
+  });
+
+  const slope = denSq !== 0 ? numSq / denSq : 0;
+  const intercept = meanY - slope * meanX;
+  const slopePerWeek = slope * 7;
+
+  let emaPrev = N > 0 ? chartData[0].GesamtGeplant : 0;
+  const alphaEMA = 2 / (7 + 1); // 7-day EMA smoothing factor
+
+  const chartDataWithTrend = chartData.map((item, idx) => {
+    const linearTrendVal = Math.max(0, Math.round((slope * idx + intercept) * 10) / 10);
+    emaPrev = (item.GesamtGeplant * alphaEMA) + (emaPrev * (1 - alphaEMA));
+    const emaTrendVal = Math.round(emaPrev * 10) / 10;
+
+    return {
+      ...item,
+      Trend: linearTrendVal,
+      LinearTrend: linearTrendVal,
+      EmaTrend: emaTrendVal
     };
   });
 
@@ -11041,6 +11210,51 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
       <div className="glass-card" style={{ padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
           
+          {/* Planning Mode Selector: Original D4-Plan vs. Optimierter Plan */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(15, 23, 42, 0.6)', padding: '3px', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+            <button
+              onClick={() => setUseOptimizedPlan(false)}
+              style={{
+                background: !useOptimizedPlan ? 'linear-gradient(135deg, #1e293b, #334155)' : 'transparent',
+                color: !useOptimizedPlan ? '#f8fafc' : 'var(--text-muted)',
+                border: !useOptimizedPlan ? '1px solid #475569' : 'none',
+                padding: '0.4rem 0.85rem',
+                borderRadius: '6px',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                transition: 'all 0.2s'
+              }}
+              title="Zeigt die unveränderte Einteilung aus der D4-Datenbank"
+            >
+              <span>📊 Original D4-Plan</span>
+            </button>
+            <button
+              onClick={() => setUseOptimizedPlan(true)}
+              style={{
+                background: useOptimizedPlan ? 'linear-gradient(135deg, #10b981, #059669)' : 'transparent',
+                color: useOptimizedPlan ? '#ffffff' : 'var(--text-muted)',
+                border: useOptimizedPlan ? '1px solid #34d399' : 'none',
+                padding: '0.4rem 0.85rem',
+                borderRadius: '6px',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                boxShadow: useOptimizedPlan ? '0 0 12px rgba(16, 185, 129, 0.4)' : 'none',
+                transition: 'all 0.2s'
+              }}
+              title="Berechnet eine optimierte Maschinenbelegung mit automatischer Nachtschicht-Nutzung"
+            >
+              <span>⚡ Optimierter Plan</span>
+            </button>
+          </div>
+
           {/* Machine / Pool Filter Dropdown */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)' }}>Filter / Anlage:</span>
@@ -11093,32 +11307,56 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               ))}
             </div>
 
-            {/* Weeks Range Selector Buttons */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(0,0,0,0.2)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-dim)' }}>
-              {[
-                { count: 1, label: '1 Woche' },
-                { count: 2, label: '2 Wochen' },
-                { count: 4, label: '4 Wochen' },
-                { count: 6, label: '6 Wochen' }
-              ].map(w => (
-                <button
-                  key={w.count}
-                  onClick={() => setWeeksCount(w.count)}
-                  style={{
-                    background: weeksCount === w.count ? 'var(--accent-primary, #3b82f6)' : 'transparent',
-                    color: weeksCount === w.count ? '#ffffff' : 'var(--text-muted)',
-                    border: 'none',
-                    padding: '0.35rem 0.75rem',
-                    borderRadius: '6px',
-                    fontSize: '0.8rem',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  {w.label}
-                </button>
-              ))}
+            {/* Interactive Range Slider (1 to 20 Weeks) - Load Data Only On Release */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', background: 'rgba(15, 23, 42, 0.6)', padding: '0.45rem 0.95rem', borderRadius: '10px', border: '1px solid rgba(59, 130, 246, 0.35)', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                  📅 Zeitraum:
+                </span>
+                <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', padding: '0.2rem 0.6rem', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                  {tempWeeksCount} {tempWeeksCount === 1 ? 'Woche' : 'Wochen'} ({tempWeeksCount * 7} Tage)
+                </span>
+              </div>
+
+              <input
+                type="range"
+                min={1}
+                max={20}
+                step={1}
+                value={tempWeeksCount}
+                onChange={(e) => setTempWeeksCount(parseInt(e.target.value, 10))}
+                onMouseUp={() => { if (tempWeeksCount !== weeksCount) setWeeksCount(tempWeeksCount); }}
+                onTouchEnd={() => { if (tempWeeksCount !== weeksCount) setWeeksCount(tempWeeksCount); }}
+                onKeyUp={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') setWeeksCount(tempWeeksCount); }}
+                style={{
+                  width: '130px',
+                  accentColor: '#38bdf8',
+                  cursor: 'pointer'
+                }}
+              />
+
+              {/* Quick Preset Buttons */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                {[1, 2, 4, 8, 12, 20].map(w => (
+                  <button
+                    key={w}
+                    onClick={() => { setTempWeeksCount(w); setWeeksCount(w); }}
+                    style={{
+                      background: tempWeeksCount === w ? 'linear-gradient(135deg, #0284c7, #0369a1)' : 'rgba(255, 255, 255, 0.05)',
+                      color: tempWeeksCount === w ? '#ffffff' : 'var(--text-muted)',
+                      border: tempWeeksCount === w ? '1px solid #38bdf8' : '1px solid rgba(255, 255, 255, 0.1)',
+                      padding: '0.2rem 0.5rem',
+                      borderRadius: '5px',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    {w}W
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Status Checkboxes: Gesperrt & Vorgemerkt */}
@@ -11295,24 +11533,170 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
       {/* Chart Section */}
       <div className="glass-card" style={{ padding: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
-            <h3 style={{ fontWeight: 600, fontSize: '1.05rem', margin: 0 }}>
-              Kapazitätsverlauf: {selectedFilterLabel} (nächste {weeksCount} Wochen)
-            </h3>
+            {(() => {
+              const startKW = planningDays.length > 0 ? getISOWeekNumber(planningDays[0]) : '';
+              const endKW = planningDays.length > 0 ? getISOWeekNumber(planningDays[planningDays.length - 1]) : '';
+              const kwRangeStr = startKW && endKW ? (startKW === endKW ? startKW : startKW + ' – ' + endKW + ', ') : '';
+              return (
+                <h3 style={{ fontWeight: 700, fontSize: '1.05rem', margin: 0, color: 'var(--text-main)' }}>
+                  Kapazitätsverlauf: {selectedFilterLabel} ({kwRangeStr}{weeksCount} {weeksCount === 1 ? 'Woche' : 'Wochen'})
+                </h3>
+              );
+            })()}
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0 0' }}>
-              Tägliche Gegenüberstellung der Belegungsstunden (Entsperrt, Gesperrt, Vorgemerkt) vs. verfügbare Kapazität
+              💡 <span style={{ color: '#38bdf8', fontWeight: 600 }}>Tipp:</span> Klicke auf einen Tag im Diagramm, um im Gantt-Kalender direkt zu diesem Tag zu springen! | 
+              {chartViewType === 'ruest_lauf' 
+                ? 'Gestapelte Gegenüberstellung von Rüstzeit (Setup) und Laufzeit (Bearbeitung) vs. Kapazität'
+                : 'Gestapelte Gegenüberstellung der Belegungsstunden nach Auftragsstatus vs. Kapazität'}
             </p>
           </div>
-        </div>
 
-        <div style={{ width: '100%', height: 320 }}>
+          {/* Chart Display Mode Selector & Trendline Toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setShowTrendLine(!showTrendLine)}
+              style={{
+                background: showTrendLine ? 'rgba(236, 72, 153, 0.2)' : 'rgba(255,255,255,0.05)',
+                color: showTrendLine ? '#ec4899' : 'var(--text-muted)',
+                border: showTrendLine ? '1px solid #ec4899' : '1px solid var(--border-dim)',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+            >
+              📈 Linearer Trend {showTrendLine ? '✓' : '✕'}
+            </button>
+            {showTrendLine && (
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: slopePerWeek >= 0 ? '#10b981' : '#f59e0b', background: 'rgba(0,0,0,0.3)', padding: '0.35rem 0.65rem', borderRadius: '6px', border: '1px solid var(--border-glow)' }}>
+                {slopePerWeek >= 0 ? '📈 Trend: +' : '📉 Trend: '} {slopePerWeek.toFixed(1)}h / Woche
+              </span>
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', background: 'rgba(0,0,0,0.3)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glow)' }}>
+            <button
+              onClick={() => setChartViewType('ruest_lauf')}
+              style={{
+                background: chartViewType === 'ruest_lauf' ? 'linear-gradient(135deg, #0284c7, #0369a1)' : 'transparent',
+                color: chartViewType === 'ruest_lauf' ? '#ffffff' : 'var(--text-muted)',
+                border: 'none',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+            >
+              ⚙️ Rüsten & Laufzeit (Stacked)
+            </button>
+            <button
+              onClick={() => setChartViewType('status')}
+              style={{
+                background: chartViewType === 'status' ? 'linear-gradient(135deg, #3b82f6, #1d4ed8)' : 'transparent',
+                color: chartViewType === 'status' ? '#ffffff' : 'var(--text-muted)',
+                border: 'none',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+            >
+              📊 Nach Status (Stacked)
+            </button>
+          </div>
+        </div>
+      </div>
+
+        <div
+          id="capacity-chart-container"
+          ref={chartContainerRef}
+          style={{ width: '100%', height: 320, cursor: 'pointer', position: 'relative' }}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const clickX = e.clientX - rect.left - 50; // margin offset
+            const availWidth = rect.width - 80;
+            if (clickX >= 0 && availWidth > 0 && planningDays.length > 0) {
+              const pct = Math.min(0.999, Math.max(0, clickX / availWidth));
+              const targetIdx = Math.floor(pct * planningDays.length);
+              handleChartDayClick(targetIdx);
+            }
+          }}
+        >
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 25 }}>
+            {(() => {
+              // Find first day of each Calendar Week for Vertical KW Dividers & Shading inside the diagram canvas
+              const kwBoundaries = [];
+              let lastKW = '';
+              chartDataWithTrend.forEach((item, idx) => {
+                const kw = getISOWeekNumber(item.day);
+                if (kw && kw !== lastKW) {
+                  kwBoundaries.push({ kw, dayLabel: item.dayLabel, startIndex: idx });
+                  lastKW = kw;
+                }
+              });
+
+              return (
+                <BarChart
+                data={chartDataWithTrend}
+                margin={{ top: 25, right: 30, left: 0, bottom: 25 }}
+                style={{ cursor: 'pointer' }}
+                onClick={(e) => {
+                  if (e && typeof e.activeTooltipIndex === 'number') {
+                    handleChartDayClick(e.activeTooltipIndex);
+                  } else if (e && e.activePayload && e.activePayload.length > 0) {
+                    const idx = chartDataWithTrend.findIndex(item => item.day === e.activePayload[0].payload?.day);
+                    if (idx >= 0) handleChartDayClick(idx);
+                  }
+                }}
+              >
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+
+              {/* Visual Calendar Week (KW) Background Shading & Vertical Dividers inside the diagram */}
+              {kwBoundaries.map((b, bIdx) => {
+                const nextB = kwBoundaries[bIdx + 1];
+                const endLabel = nextB ? nextB.dayLabel : chartDataWithTrend[chartDataWithTrend.length - 1]?.dayLabel;
+                const isEven = bIdx % 2 === 0;
+
+                return (
+                  <React.Fragment key={b.kw}>
+                    {/* Alternating week background shading */}
+                    {isEven && endLabel && (
+                      <ReferenceArea
+                        x1={b.dayLabel}
+                        x2={endLabel}
+                        fill="rgba(56, 189, 248, 0.03)"
+                        stroke="none"
+                      />
+                    )}
+                    {/* Vertical KW Divider Line with top KW badge */}
+                    <ReferenceLine
+                      x={b.dayLabel}
+                      stroke="rgba(56, 189, 248, 0.45)"
+                      strokeDasharray="4 4"
+                      strokeWidth={1.5}
+                      label={{
+                        value: '🗓️ ' + b.kw,
+                        fill: '#38bdf8',
+                        position: 'top',
+                        fontSize: 11,
+                        fontWeight: 800,
+                        offset: 8
+                      }}
+                    />
+                  </React.Fragment>
+                );
+              })}
               <XAxis dataKey="dayLabel" stroke="var(--text-muted)" fontSize={11} interval={Math.floor(planningDays.length / 14)} />
               <YAxis stroke="var(--text-muted)" fontSize={11} unit="h" />
               <Tooltip
+                labelFormatter={(label) => '🗓️ ' + label}
                 contentStyle={{
                   background: 'rgba(15, 23, 42, 0.95)',
                   border: '1px solid var(--border-glow)',
@@ -11322,22 +11706,41 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                 }}
               />
               <Legend wrapperStyle={{ paddingTop: '10px', fontSize: '0.8rem' }} />
-              <Bar dataKey="Freigegeben" stackId="a" fill="#3b82f6" name="Freigegeben (h)" />
-              {includeGesperrte && (
-                <Bar dataKey="Gesperrt" stackId="a" fill="#ef4444" name="Gesperrt (h)" />
+
+              {chartViewType === 'ruest_lauf' ? (
+                <>
+                  <Bar dataKey="Rüstzeit" stackId="rl" fill="#0284c7" name="Rüstzeit (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                  <Bar dataKey="Laufzeit" stackId="rl" fill="#10b981" name="Laufzeit (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                  <Line type="monotone" dataKey="Kapazität" stroke="#f59e0b" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
+                  {showTrendLine && (
+                    <Line type="monotone" dataKey="Trend" stroke="#ec4899" strokeWidth={3} strokeDasharray="4 4" dot={false} name="📈 Trend (Gleitender Mittelwert h)" />
+                  )}
+                </>
+              ) : (
+                <>
+                  <Bar dataKey="Freigegeben" stackId="st" fill="#3b82f6" name="Freigegeben (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                  {includeGesperrte && (
+                    <Bar dataKey="Gesperrt" stackId="st" fill="#ef4444" name="Gesperrt (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                  )}
+                  {includeVorgemerkte && (
+                    <Bar dataKey="Vorgemerkt" stackId="st" fill="#f59e0b" name="Vorgemerkt (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                  )}
+                  <Line type="monotone" dataKey="Kapazität" stroke="#10b981" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
+                  {showTrendLine && (
+                    <Line type="monotone" dataKey="Trend" stroke="#ec4899" strokeWidth={3} strokeDasharray="4 4" dot={false} name="📈 Trend (Gleitender Mittelwert h)" />
+                  )}
+                </>
               )}
-              {includeVorgemerkte && (
-                <Bar dataKey="Vorgemerkt" stackId="a" fill="#f59e0b" name="Vorgemerkt (h)" />
-              )}
-              <Line type="monotone" dataKey="Kapazität" stroke="#10b981" strokeWidth={2} dot={false} name="Max. Kapazität (h)" />
             </BarChart>
+              );
+            })()}
           </ResponsiveContainer>
         </div>
       </div>
 
       {/* GANTT TAGESFÜLLUNGS-ANSICHT (WER / WO / WIE LANGE GEPLANT IST) */}
       {activeViewMode === 'gantt' && (
-        <div className="glass-card" style={{ padding: '1.25rem', overflowX: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div id="gantt-section" className="glass-card" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Calendar size={18} style={{ color: '#38bdf8' }} />
@@ -11363,14 +11766,39 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
           </div>
 
           {/* Matrix Table Timeline Container with Sticky Header & Sticky Machine Column */}
-          <div style={{ maxHeight: '78vh', overflow: 'auto', borderRadius: '8px', border: '1px solid var(--border-glow)', position: 'relative' }}>
+          <div ref={ganttContainerRef} style={{ maxHeight: '78vh', overflow: 'auto', borderRadius: '8px', border: '1px solid var(--border-glow)', position: 'relative' }}>
             <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.74rem', minWidth: (planningDays.length * 85 + 140) + 'px' }}>
+                        {/* Calculate Calendar Week Spans */}
+          {(() => {
+            const weekGroups = [];
+            planningDays.forEach(day => {
+              const kw = getISOWeekNumber(day);
+              const lastGroup = weekGroups[weekGroups.length - 1];
+              if (lastGroup && lastGroup.kw === kw) {
+                lastGroup.span += 1;
+              } else {
+                weekGroups.push({ kw, span: 1 });
+              }
+            });
+
+            return (
               <thead style={{ position: 'sticky', top: 0, zIndex: 30, background: '#0f172a' }}>
+                {/* TOP ROW: Kalenderwochen (KW) Spans */}
+                <tr style={{ background: '#1e293b', borderBottom: '1px solid var(--border-glow)' }}>
+                  <th style={{ padding: '0.4rem 1rem', textAlign: 'left', position: 'sticky', top: 0, left: 0, background: '#1e293b', zIndex: 40, borderRight: '2px solid var(--border-glow)', fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8' }}>
+                    📅 Kalenderwochen (KW)
+                  </th>
+                  {weekGroups.map((group, gIdx) => (
+                    <th key={gIdx} colSpan={group.span} style={{ padding: '0.4rem 0.5rem', textAlign: 'center', background: 'rgba(56, 189, 248, 0.08)', color: '#38bdf8', fontSize: '0.78rem', fontWeight: 800, borderRight: '1px solid var(--border-glow)', borderBottom: '1px solid var(--border-glow)', letterSpacing: '0.5px' }}>
+                      🗓️ {group.kw}
+                    </th>
+                  ))}
+                </tr>
                 <tr style={{ background: '#0f172a', borderBottom: '2px solid var(--border-glow)' }}>
                   <th style={{ padding: '0.75rem 1rem', textAlign: 'left', minWidth: '180px', position: 'sticky', top: 0, left: 0, background: '#0f172a', zIndex: 40, borderRight: '2px solid var(--border-glow)', borderBottom: '2px solid var(--border-glow)' }}>
                     Maschine / Anlage
                   </th>
-                  {planningDays.map(day => {
+                  {planningDays.map((day, dIdx) => {
                     const dObj = new Date(day);
                     const dayOfWeek = isNaN(dObj.getTime()) ? '' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][dObj.getDay()];
                     const dayFormatted = isNaN(dObj.getTime()) ? day : (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.');
@@ -11379,6 +11807,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                     return (
                       <th
                         key={day}
+                        id={'gantt-col-idx-' + dIdx}
                         style={{
                           padding: '0.4rem 0.15rem',
                           textAlign: 'center',
@@ -11386,7 +11815,10 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                           position: 'sticky',
                           top: 0,
                           zIndex: 30,
-                          background: isWeekend ? '#1e293b' : '#0f172a',
+                          background: highlightedDayIndex === dIdx ? 'rgba(56, 189, 248, 0.35)' : (isWeekend ? '#1e293b' : '#0f172a'),
+                          color: highlightedDayIndex === dIdx ? '#38bdf8' : 'inherit',
+                          boxShadow: highlightedDayIndex === dIdx ? 'inset 0 0 15px rgba(56, 189, 248, 0.8)' : 'none',
+                          transition: 'all 0.3s ease',
                           borderRight: '1px solid var(--border-dim)',
                           borderBottom: '2px solid var(--border-glow)'
                         }}
@@ -11399,6 +11831,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                   })}
                 </tr>
               </thead>
+            );
+          })()}
               <tbody>
                 {filteredMachines.map(mName => {
                   const mSummary = machineSummaries.find(x => x.machineName === mName);
@@ -11439,8 +11873,14 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
                         let totalDayMin = 0;
                         daySteps.forEach(s => {
-                          if (showRuestFilter) totalDayMin += (s.setupTime || 0);
-                          if (showProdFilter) totalDayMin += (s.prodTime || 0);
+                          const stepAlloc = s.scheduledMin || s.ScheduledMin || ((s.setupTime || 0) + (s.prodTime || 0));
+                          if (showRuestFilter && showProdFilter) {
+                            totalDayMin += stepAlloc;
+                          } else if (showRuestFilter) {
+                            totalDayMin += (s.setupTime || s.SetupTime || 0);
+                          } else if (showProdFilter) {
+                            totalDayMin += (s.prodTime || s.ProdTime || stepAlloc);
+                          }
                         });
                         const totalDayHrs = totalDayMin / 60;
                         const fillPct = dayCapMin > 0 ? Math.min(100, (totalDayMin / dayCapMin) * 100) : 0;
@@ -11493,7 +11933,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
                                   const statusDot = !isFreigegeben ? '🟡' : isGesperrt ? '🔴' : '🟢';
 
-                                  const displayTitle = (step.contractNumber || 'Auftrag') + ' / Pos ' + (step.orderPos || '10');
+                                  const displayTitle = (step.contractNumber || step.ContractNumber || 'Auftrag') + ' / Pos ' + (step.orderPos || step.OrderPos || '10');
                                   const articleLabel = step.orderDesc || step.stepDesc || 'Artikel';
 
                                   const isSameContract = hoveredContractNumber && step.contractNumber === hoveredContractNumber;
@@ -11521,7 +11961,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                                         transition: 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s, boxShadow 0.15s, background 0.15s',
                                         overflow: 'hidden'
                                       }}
-                                      title={step.contractNumber + ' Pos ' + step.orderPos + ' - AS ' + step.stepPos + '\nArtikel: ' + articleLabel + '\nRüst: ' + setupH + 'h | Lauf: ' + prodH + 'h | Gesamt: ' + totalH + 'h'}
+                                      title={`${step.contractNumber || step.ContractNumber || 'P-Auftrag'} Pos ${step.orderPos || step.OrderPos || '10'} - AS ${step.stepPos || step.StepPos || '10'}\nArtikel: ${articleLabel}\nRüst: ${setupH}h | Lauf: ${prodH}h | Gesamt: ${totalH}h`}
                                     >
                                       {/* Micro 1-Line: P-Nummer / Pos */}
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -11564,7 +12004,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
               <div>
                 <h3 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, color: '#fff' }}>
-                  Auftrag: {selectedStepDetail.contractNumber} – Pos {selectedStepDetail.orderPos}
+                  Auftrag: {selectedStepDetail.contractNumber || selectedStepDetail.ContractNumber || 'P-Auftrag'} – Pos {selectedStepDetail.orderPos || selectedStepDetail.OrderPos || '10'}
                 </h3>
                 <span style={{ fontSize: '0.8rem', color: '#38bdf8', fontWeight: 600 }}>
                   Arbeitsschritt {selectedStepDetail.stepPos} ({selectedStepDetail.stepDesc})
@@ -11774,7 +12214,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                             background: s.isGesperrt ? 'rgba(239, 68, 68, 0.2)' : (s.isFreigegeben ? 'rgba(59, 130, 246, 0.2)' : 'rgba(245, 158, 11, 0.2)'),
                             color: s.isGesperrt ? '#ef4444' : (s.isFreigegeben ? '#3b82f6' : '#f59e0b')
                           }}>
-                            {s.isGesperrt ? '🔒 GESPERRT ' : ''}{s.contractNumber} Pos {s.orderPos}
+                            {s.isGesperrt ? '🔒 GESPERRT ' : ''}{s.contractNumber || s.ContractNumber || 'P-Auftrag'} Pos {s.orderPos || s.OrderPos || '10'}
                           </span>
                           <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-main)' }}>
                             AS {s.stepPos}: {s.stepDesc}
@@ -11821,7 +12261,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
               <div>
                 <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                  Arbeitsplan für {activeModalStep.contractNumber} Pos {activeModalStep.orderPos}
+                  Arbeitsplan für {activeModalStep.contractNumber || activeModalStep.ContractNumber || 'P-Auftrag'} Pos {activeModalStep.orderPos || activeModalStep.OrderPos || '10'}
                 </h3>
                 <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                   {activeModalStep.orderDesc}

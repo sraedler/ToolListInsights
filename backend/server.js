@@ -14,7 +14,16 @@ async function fetchFastD4NativePlan(startDateStr, endDateStr) {
         sk.PSP_POSITION_NUMMER as StepPos,
         sk.PSP_BEZEICHNUNG as StepDesc,
         sk.PSP_ZEIT_MINUTEN_RUESTUNG_GESAMT_SOLL as SetupTime,
-        sk.PSP_ZEIT_MINUTEN_PRODUKTION_GESAMT_SOLL as ProdTime,
+        CASE
+          WHEN ISNULL(sk.PSP_MENGE_SOLL, 0) > 0 AND ISNULL(sk.PSP_MENGE_IST, 0) > 0 THEN
+            CASE
+              WHEN sk.PSP_MENGE_IST >= sk.PSP_MENGE_SOLL THEN 0
+              ELSE ROUND(((sk.PSP_MENGE_SOLL - sk.PSP_MENGE_IST) / sk.PSP_MENGE_SOLL) * sk.PSP_ZEIT_MINUTEN_PRODUKTION_GESAMT_SOLL, 0)
+            END
+          ELSE sk.PSP_ZEIT_MINUTEN_PRODUKTION_GESAMT_SOLL
+        END as ProdTime,
+        sk.PSP_MENGE_SOLL as QuantitySoll,
+        sk.PSP_MENGE_IST as QuantityIst,
         ISNULL(sk.PSP_IDMS, 0) as MachineId,
         ISNULL(sk.PSP_IDMP, 0) as MachinePoolId,
         m.MS_BEZEICHNUNG as MachineName,
@@ -28,16 +37,19 @@ async function fetchFastD4NativePlan(startDateStr, endDateStr) {
              ELSE ISNULL(bp.BP_PP_ZUSTAND_PLANUNG, 0) 
         END as ZustandPlanung
       FROM [D4].[dbo].[tPPS_SKKALP_PLAN] p WITH (NOLOCK)
-      INNER JOIN [D4].[dbo].[tPPS_SKKALP] sk WITH (NOLOCK) ON sk.ID = p.PSPP_IDPSKP
+      INNER JOIN [D4].[dbo].[tPPS_SKKALP] sk WITH (NOLOCK) ON sk.ID = CASE WHEN ISNULL(p.PSPP_IDPSKP, 0) > 0 THEN p.PSPP_IDPSKP ELSE p.PSPP_IDSKKP END
       LEFT JOIN [D4].[dbo].[tPPS_MASTA] m WITH (NOLOCK) ON m.ID = sk.PSP_IDMS
       INNER JOIN [D4].[dbo].[tPPS_SKKALK] k WITH (NOLOCK) ON k.ID = sk.PSP_IDPSKKK
       INNER JOIN [D4].[dbo].[tbe_Belp] bp WITH (NOLOCK) ON bp.ID = k.PSK_IDBEBP
       INNER JOIN [D4].[dbo].[tBE_BELK_BKBE] bk WITH (NOLOCK) ON bk.BK_BKBE_IDBEBK = bp.BP_IDBEBK
       LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au WITH (NOLOCK) ON au.BK_BKBE_AU_IDBKBE = bk.ID
-      WHERE sk.PSP_PP_STATUS_PRODUKTION <> 4
+      WHERE p.PSPP_STATUS_PLANUNG <> 1
+        AND sk.PSP_PP_STATUS_PRODUKTION <> 4
         AND bk.BK_BKBE_STATUS_BEARBEITUNG = 0
         AND bk.BK_BKBE_TYP_BELEG = 2
-        AND LTRIM(RTRIM(ISNULL(bk.BK_BKBE_NUMMER, ''))) <> '990001'
+        AND ISNULL(bk.BK_BKBE_TYP_BELEG_ART, 1) = 1
+        AND LTRIM(RTRIM(ISNULL(bk.BK_BKBE_NUMMER, ''))) NOT LIKE '99%'
+        AND ISNULL(bp.BP_STATUS_ZEITERFASSUNG, 0) = 0
         AND p.PSPP_DATUM_START >= CAST('${startDateStr}' AS DATE)
         AND p.PSPP_DATUM_START <= CAST('${endDateStr}' AS DATE)
       ORDER BY p.PSPP_DATUM_START, bk.BK_BKBE_NUMMER, bp.BP_POSITION_NUMMER
@@ -3997,6 +4009,338 @@ const useD4Plan = useD4PlanParam === 'true';
       });
     }
 
+    // Advanced Multi-Criteria Priority Bottleneck Engine for Optimierter Plan (useD4Plan = false)
+    machinesList.forEach(mName => {
+      board[mName] = {};
+      if (!dailyCapacities[mName]) dailyCapacities[mName] = {};
+      planningDays.forEach(day => {
+        board[mName][day] = [];
+        dailyCapacities[mName][day] = getCapacityForDay(mName, day);
+      });
+      board[mName]['Überlauf'] = [];
+    });
+
+    const activeStepIdSet = new Set(greenSteps.map(s => String(s.StepId || s.originalStepId || '')));
+
+    // Calculate total remaining workload per order to prioritize Critical Path steps!
+    const orderTotalWorkloadMap = {};
+    greenSteps.forEach(s => {
+      const oId = s.OrderId;
+      if (oId) {
+        const setupT = s.SetupTime || s.setupTime || 0;
+        const prodT = s.ProdTime || s.prodTime || 0;
+        orderTotalWorkloadMap[oId] = (orderTotalWorkloadMap[oId] || 0) + (setupT + prodT);
+      }
+    });
+
+    // Multi-Criteria Priority Score for each step:
+    // Priority = (Critical Path Workload * 0.4) + (Earliest Due Date Priority * 0.4) + (Step Position Priority * 0.2)
+    const stepAssignedMachineMap = {};
+    const remainingDurationMap = {};
+    const stepPriorityMap = {};
+    greenSteps.forEach(s => {
+      const sId = String(s.StepId || s.originalStepId || '');
+      const setupT = s.SetupTime || s.setupTime || 0;
+      const prodT = s.ProdTime || s.prodTime || 0;
+      const dur = (s.ScheduledMin || s.scheduledMin) || (setupT + prodT);
+      remainingDurationMap[sId] = dur;
+
+      const dueTime = s.DeliveryDate ? new Date(s.DeliveryDate).getTime() : 0;
+      const dueDays = dueTime > 0 ? (dueTime - new Date().getTime()) / 86400000 : 999;
+      const orderWorkload = orderTotalWorkloadMap[s.OrderId] || 0;
+      const stepPosNum = parseInt(s.StepPos || s.stepPos || 0, 10);
+
+      // Multi-Criteria Priority Score: (Critical Path Workload * 0.4) - (Days to Due Date * 1.0) - (Step Pos * 0.1)
+      stepPriorityMap[sId] = (orderWorkload * 0.01) - (dueDays * 1.0) - (stepPosNum * 0.1);
+    });
+
+    // Helper: Check if a step is a Fremdleistung (FL / external service) step
+    const isFremdleistungStep = (s) => {
+      const desc = String(s.StepDesc || s.stepDesc || '').toLowerCase();
+      return desc.includes('härt') || desc.includes('haert') || desc.includes('beschicht') || 
+             desc.includes('verzink') || desc.includes('elox') || desc.includes('fremd') || 
+             desc.includes('verlager') || desc.includes('fl') || desc.includes('wärme') || desc.includes('waerme');
+    };
+
+    const getBufferDaysForStep = (s) => {
+      if (isFremdleistungStep(s)) return 4; // 4 working days lead time for external services
+      const desc = String(s.StepDesc || s.stepDesc || '').toLowerCase();
+      if (desc.includes('prüfung') || desc.includes('entgrat') || desc.includes('verpack') || desc.includes('waschen')) return 1;
+      return 0;
+    };
+
+    const resolveTargetMachine = (s) => {
+      // 1. Explicit Machine ID mapping
+      if (s.MachineId === 8) return 'Brother';
+      if (s.MachineId === 21) return 'Chiron';
+      if (s.MachineId === 2) return 'C400';
+      if (s.MachineId === 4) return 'C40';
+      if (s.MachineId === 25) return 'C42';
+      if (s.MachineId === 5) return 'RS2_1';
+      if (s.MachineId === 6) return 'RS2_2';
+
+      const desc = String(s.StepDesc || s.stepDesc || '').toLowerCase();
+
+      // 2. Non-CNC processing step categorization
+      if (desc.includes('montage ur5')) return 'Montage UR5';
+      if (desc.includes('montage')) return 'Montage';
+      if (desc.includes('prüf') || desc.includes('pruef') || desc.includes('kontroll')) return 'Prüfplanung';
+      if (desc.includes('entgrat') || desc.includes('waschen')) return 'Entgraten';
+      if (desc.includes('versand') || desc.includes('verpack')) return 'Versand';
+      if (desc.includes('mess')) return 'Messmaschine';
+      if (desc.includes('laser')) return 'Laser';
+      if (desc.includes('härt') || desc.includes('haert') || desc.includes('beschicht') || 
+          desc.includes('verzink') || desc.includes('elox') || desc.includes('fremd') || 
+          desc.includes('verlager') || desc.includes('fl')) {
+        return null; // External service: lead time buffer days only, no machine load
+      }
+
+      // 3. Keyword matching for CNC machines
+      if (desc.includes('brother')) return 'Brother';
+      if (desc.includes('chiron')) return 'Chiron';
+      if (desc.includes('c400')) return 'C400';
+      if (desc.includes('c40') && !desc.includes('c400')) return 'C40';
+      if (desc.includes('c42')) return 'C42';
+      if (desc.includes('rs2_1') || desc.includes('rs2 1')) return 'RS2_1';
+      if (desc.includes('rs2_2') || desc.includes('rs2 2')) return 'RS2_2';
+
+      // 4. Machine Pool mapping
+      if (s.MachinePoolId === 13) return 'C40_POOL';
+      if (s.MachinePoolId === 9 || s.MachinePoolId === 12) return 'RS2_POOL';
+
+      // 5. Default mapping for remaining unassigned CNC steps
+      return 'C40_POOL';
+    };
+
+    const stepCompletionDayMap = {};
+    const scheduledStepIds = new Set();
+
+    const isStepCausallyReady = (s, currentDayIdx) => {
+      const oId = s.OrderId;
+      if (!oId || !ordersMap[oId]) return true;
+
+      const orderSteps = ordersMap[oId];
+      const sPos = parseInt(s.StepPos || s.stepPos || 0, 10);
+
+      for (const pStep of orderSteps) {
+        const pPos = parseInt(pStep.StepPos || pStep.stepPos || 0, 10);
+        if (pPos < sPos) {
+          if (pStep.SPKO === 4 || pStep.realSPKO === 4 || pStep.isCompleted) continue; // Done upstream
+
+          const pId = String(pStep.StepId || pStep.originalStepId || '');
+          const pCompDay = stepCompletionDayMap[pId];
+
+          if (pCompDay === undefined) {
+            if (!activeStepIdSet.has(pId)) {
+              continue; // Upstream completed / not active in set
+            }
+            return false; // Active predecessor still waiting to be scheduled
+          }
+
+          const buf = getBufferDaysForStep(pStep);
+          if (currentDayIdx < pCompDay + buf) {
+            return false; // Waiting for lead time / buffer days
+          }
+        }
+      }
+      return true;
+    };
+
+    // Global Causal Scheduling Loop across all calendar days
+    planningDays.forEach((day, dayIdx) => {
+      const machineCandidates = {
+        Brother: [], Chiron: [], C400: [], C40: [], C42: [], RS2_1: [], RS2_2: [],
+        Laser: [], Messmaschine: [], Montage: [], 'Montage UR5': [], Prüfplanung: [], Versand: [], Entgraten: []
+      };
+
+      greenSteps.forEach(s => {
+        const sId = String(s.StepId || s.originalStepId || '');
+        if (scheduledStepIds.has(sId)) return;
+
+        if (!isStepCausallyReady(s, dayIdx)) return;
+
+        let targetM = resolveTargetMachine(s);
+
+        const loadC40 = (board['C40'][day] || []).reduce((a, b) => a + (b.scheduledMin || (b.setupTime || 0) + (b.prodTime || 0)), 0);
+        const loadC42 = (board['C42'][day] || []).reduce((a, b) => a + (b.scheduledMin || (b.setupTime || 0) + (b.prodTime || 0)), 0);
+        const loadRS1 = (board['RS2_1'][day] || []).reduce((a, b) => a + (b.scheduledMin || (b.setupTime || 0) + (b.prodTime || 0)), 0);
+        const loadRS2 = (board['RS2_2'][day] || []).reduce((a, b) => a + (b.scheduledMin || (b.setupTime || 0) + (b.prodTime || 0)), 0);
+
+        if (targetM === 'C40_POOL' || targetM === 'C40' || targetM === 'C42') {
+          const capC40 = getCapacityForDay('C40', day);
+          const capC42 = getCapacityForDay('C42', day);
+          if (targetM === 'C40' && loadC40 >= capC40 && loadC42 < capC42) targetM = 'C42';
+          else if (targetM === 'C42' && loadC42 >= capC42 && loadC40 < capC40) targetM = 'C40';
+          else if (targetM === 'C40_POOL') targetM = (loadC42 < loadC40) ? 'C42' : 'C40';
+        } else if (targetM === 'RS2_POOL' || targetM === 'RS2_1' || targetM === 'RS2_2') {
+          const capRS1 = getCapacityForDay('RS2_1', day);
+          const capRS2 = getCapacityForDay('RS2_2', day);
+          if (targetM === 'RS2_1' && loadRS1 >= capRS1 && loadRS2 < capRS2) targetM = 'RS2_2';
+          else if (targetM === 'RS2_2' && loadRS2 >= capRS2 && loadRS1 < capRS1) targetM = 'RS2_1';
+          else if (targetM === 'RS2_POOL') targetM = (loadRS2 < loadRS1) ? 'RS2_2' : 'RS2_1';
+        }
+
+        if (targetM) {
+          // Rule: Each pool step (AS) MUST be assigned to EXACTLY ONE machine! Never on both!
+          const sId = String(s.StepId || s.originalStepId || '');
+
+          if (targetM === 'C40_POOL' || targetM === 'C40' || targetM === 'C42') {
+            let chosenM = stepAssignedMachineMap[sId];
+            if (!chosenM) {
+              const capC40 = getCapacityForDay('C40', day);
+              const capC42 = getCapacityForDay('C42', day);
+              const loadC40 = (board['C40'][day] || []).reduce((a, b) => a + (b.scheduledMin || 0), 0);
+              const loadC42 = (board['C42'][day] || []).reduce((a, b) => a + (b.scheduledMin || 0), 0);
+
+              if (targetM === 'C40' && loadC40 < capC40) chosenM = 'C40';
+              else if (targetM === 'C42' && loadC42 < capC42) chosenM = 'C42';
+              else {
+                const ratioC40 = loadC40 / capC40;
+                const ratioC42 = loadC42 / capC42;
+                chosenM = (ratioC42 < ratioC40) ? 'C42' : 'C40';
+              }
+              stepAssignedMachineMap[sId] = chosenM;
+            }
+            if (machineCandidates[chosenM]) machineCandidates[chosenM].push(s);
+
+          } else if (targetM === 'RS2_POOL' || targetM === 'RS2_1' || targetM === 'RS2_2') {
+            let chosenM = stepAssignedMachineMap[sId];
+            if (!chosenM) {
+              const capRS1 = getCapacityForDay('RS2_1', day);
+              const capRS2 = getCapacityForDay('RS2_2', day);
+              const loadRS1 = (board['RS2_1'][day] || []).reduce((a, b) => a + (b.scheduledMin || 0), 0);
+              const loadRS2 = (board['RS2_2'][day] || []).reduce((a, b) => a + (b.scheduledMin || 0), 0);
+
+              if (targetM === 'RS2_1' && loadRS1 < capRS1) chosenM = 'RS2_1';
+              else if (targetM === 'RS2_2' && loadRS2 < capRS2) chosenM = 'RS2_2';
+              else {
+                const ratioRS1 = loadRS1 / capRS1;
+                const ratioRS2 = loadRS2 / capRS2;
+                chosenM = (ratioRS2 < ratioRS1) ? 'RS2_2' : 'RS2_1';
+              }
+              stepAssignedMachineMap[sId] = chosenM;
+            }
+            if (machineCandidates[chosenM]) machineCandidates[chosenM].push(s);
+
+          } else if (machineCandidates[targetM]) {
+            machineCandidates[targetM].push(s);
+          }
+        }
+      });
+
+      // Schedule candidates onto machines for this day
+      machinesList.forEach(mName => {
+        const candList = machineCandidates[mName] || [];
+        if (candList.length === 0) return;
+
+        candList.sort((a, b) => {
+          const idA = String(a.StepId || a.originalStepId || '');
+          const idB = String(b.StepId || b.originalStepId || '');
+          const scoreA = stepPriorityMap[idA] || 0;
+          const scoreB = stepPriorityMap[idB] || 0;
+          if (Math.abs(scoreA - scoreB) > 0.001) return scoreB - scoreA; // Highest Multi-Criteria Priority score first!
+          return parseInt(a.StepPos || a.stepPos || 0, 10) - parseInt(b.StepPos || b.stepPos || 0, 10);
+        });
+
+        let usedCap = (board[mName][day] || []).reduce((a, b) => a + (b.scheduledMin || (b.setupTime || 0) + (b.prodTime || 0)), 0);
+        const dayCapacity = getCapacityForDay(mName, day);
+        const maxCap = dayCapacity; // Strictly enforce D4 MASTA allowed daily capacity for all pool & standard machines!
+
+        candList.forEach(s => {
+          const sId = String(s.StepId || s.originalStepId || '');
+          if (scheduledStepIds.has(sId)) return;
+
+          let remDuration = remainingDurationMap[sId];
+          if (!remDuration || remDuration <= 0) {
+            scheduledStepIds.add(sId);
+            return;
+          }
+
+          const remainingCapOnDay = Math.max(0, maxCap - usedCap);
+
+          if (remainingCapOnDay > 0) {
+            const allocMin = Math.min(remDuration, remainingCapOnDay);
+            const setupT = s.SetupTime || s.setupTime || 0;
+            const allocSetup = Math.min(setupT, allocMin);
+            const allocProd = Math.max(0, allocMin - allocSetup);
+
+            board[mName][day].push({
+              ...s,
+              day,
+              setupTime: allocSetup,
+              SetupTime: allocSetup,
+              prodTime: allocProd,
+              ProdTime: allocProd,
+              scheduledMin: allocMin,
+              ScheduledMin: allocMin,
+              fullSetupTime: s.SetupTime || s.setupTime || 0,
+              fullProdTime: s.ProdTime || s.prodTime || 0,
+              contractNumber: s.ContractNumber || s.contractNumber || 'P-Auftrag',
+              ContractNumber: s.ContractNumber || s.contractNumber || 'P-Auftrag',
+              orderPos: s.OrderPos || s.orderPos || s.BP_POSITION_NUMMER || '10',
+              OrderPos: s.OrderPos || s.orderPos || s.BP_POSITION_NUMMER || '10',
+              stepPos: s.StepPos || s.stepPos || s.PSP_POSITION_NUMMER || '10',
+              StepPos: s.StepPos || s.stepPos || s.PSP_POSITION_NUMMER || '10',
+              stepDesc: s.StepDesc || s.stepDesc || '',
+              StepDesc: s.StepDesc || s.stepDesc || '',
+              isFreigegeben: s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true)
+            });
+
+            usedCap += allocMin;
+            remainingDurationMap[sId] -= allocMin;
+
+            if (remainingDurationMap[sId] <= 0) {
+              scheduledStepIds.add(sId);
+              stepCompletionDayMap[sId] = dayIdx;
+            }
+          }
+        });
+      });
+    });
+
+    // Place any remaining unscheduled steps into Überlauf with causal order preserved
+    greenSteps.forEach(s => {
+      const sId = String(s.StepId || s.originalStepId || '');
+      if (!scheduledStepIds.has(sId)) {
+        let targetM = resolveTargetMachine(s);
+        if (targetM === 'C40_POOL') targetM = 'C40';
+        if (targetM === 'RS2_POOL') targetM = 'RS2_1';
+
+        if (targetM && board[targetM]) {
+          board[targetM]['Überlauf'].push({
+            ...s,
+            day: 'Überlauf',
+            setupTime: s.SetupTime || s.setupTime || 0,
+            prodTime: s.ProdTime || s.prodTime || 0,
+            scheduledMin: (s.ScheduledMin || s.scheduledMin) || ((s.SetupTime || s.setupTime || 0) + (s.ProdTime || s.prodTime || 0)),
+            contractNumber: s.ContractNumber || s.contractNumber || 'P-Auftrag',
+            ContractNumber: s.ContractNumber || s.contractNumber || 'P-Auftrag',
+            orderPos: s.OrderPos || s.orderPos || s.BP_POSITION_NUMMER || '10',
+            OrderPos: s.OrderPos || s.orderPos || s.BP_POSITION_NUMMER || '10',
+            stepPos: s.StepPos || s.stepPos || s.PSP_POSITION_NUMMER || '10',
+            StepPos: s.StepPos || s.stepPos || s.PSP_POSITION_NUMMER || '10',
+            stepDesc: s.StepDesc || s.stepDesc || '',
+            StepDesc: s.StepDesc || s.stepDesc || '',
+            isFreigegeben: s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true)
+          });
+        }
+      }
+    });
+
+    return res.json({
+      board,
+      days: planningDays,
+      planningDays,
+      dailyCapacities,
+      capacities,
+      lookaheadCandidates: {},
+      summary: {
+        totalSteps: greenSteps.length,
+        scheduledSteps: scheduledStepIds.size,
+        useD4Plan: false
+      }
+    });
+
     machinesList.forEach(mName => {
       // Define a local helper to run the entire 5-day scheduling loop for a single algorithm
       function runMachineScheduling(algorithm) {
@@ -4007,6 +4351,7 @@ const useD4Plan = useD4PlanParam === 'true';
         let overflowQueue = [];
         let totalChanges = 0;
         const scheduledStepIds = new Set();
+        const stepScheduledDayMap = {};
 
         // Shallow clone candidate steps to prevent state contamination between runs
         const tempBoard = {};
@@ -4019,11 +4364,70 @@ const useD4Plan = useD4PlanParam === 'true';
           dailyCap[day] = dayCapacity;
           const isAutomated = mName !== 'Chiron' && mName !== 'C400' && mName !== 'Brother';
 
-          // Unscheduled candidates: Overflow from previous days + current day candidates (no duplicate future pulling into overflow!)
-          const currentDayCandidates = (tempBoard[day] || []).filter(s => !scheduledStepIds.has(s.StepId) && !scheduledStepIds.has(s.originalStepId));
-          const unassignedOverflow = overflowQueue.map(s => ({ ...s }));
+          // Helper: Check if a step is a Fremdleistung (FL / external service) step
+          const isFremdleistungStep = (s) => {
+            const desc = String(s.StepDesc || s.stepDesc || '').toLowerCase();
+            return desc.includes('härt') || desc.includes('haert') || desc.includes('beschicht') || 
+                   desc.includes('verzink') || desc.includes('elox') || desc.includes('fremd') || 
+                   desc.includes('verlager') || desc.includes('fl') || desc.includes('wärme') || desc.includes('waerme');
+          };
 
-          let dayCandidates = [...unassignedOverflow, ...currentDayCandidates];
+          // Helper: Check if step s can be scheduled on dayIdx respecting AS sequence + FL buffer days
+          const canScheduleStepOnDay = (s, currentDayIdx) => {
+            const oId = s.OrderId;
+            if (!oId || !ordersMap[oId]) return true;
+
+            const orderSteps = ordersMap[oId];
+            const sPos = parseInt(s.StepPos || s.stepPos || 0, 10);
+
+            for (const pStep of orderSteps) {
+              const pPos = parseInt(pStep.StepPos || pStep.stepPos || 0, 10);
+              if (pPos < sPos) {
+                // If predecessor is ALREADY COMPLETED in D4 (SPKO === 4), it's done!
+                if (pStep.SPKO === 4 || pStep.realSPKO === 4 || pStep.isCompleted) {
+                  continue;
+                }
+
+                const pId = String(pStep.StepId || pStep.originalStepId || '');
+                const pScheduledDay = stepScheduledDayMap[pId];
+
+                if (pScheduledDay === undefined) {
+                  // If predecessor is not in the active steps to schedule, assume done
+                  if (!greenSteps.some(x => String(x.StepId || x.originalStepId || '') === pId)) {
+                    continue;
+                  }
+                  return false; // Predecessor is active but not scheduled yet
+                }
+
+                // Fremdleistung buffer days (Abstandstage bei Verlagerung/FL)
+                if (isFremdleistungStep(pStep)) {
+                  const FL_BUFFER_DAYS = 4; // 4 working days lead time for external services
+                  if (currentDayIdx < pScheduledDay + FL_BUFFER_DAYS) {
+                    return false; // Waiting for FL lead time buffer
+                  }
+                } else {
+                  if (currentDayIdx < pScheduledDay) {
+                    return false; // Cannot run before predecessor completes
+                  }
+                }
+              }
+            }
+            return true;
+          };
+
+          // Collect overflow + current day + pull-forward future candidates respecting AS sequence & FL buffer
+          const unassignedOverflow = overflowQueue.filter(s => canScheduleStepOnDay(s, dayIdx));
+          const currentDayCandidates = (tempBoard[day] || []).filter(s => !scheduledStepIds.has(s.StepId) && !scheduledStepIds.has(s.originalStepId) && canScheduleStepOnDay(s, dayIdx));
+
+          // Pull forward future candidates from subsequent days if available
+          const pulledForwardCandidates = [];
+          for (let fIdx = dayIdx + 1; fIdx < planningDays.length; fIdx++) {
+            const fDay = planningDays[fIdx];
+            const fSteps = (tempBoard[fDay] || []).filter(s => !scheduledStepIds.has(s.StepId) && !scheduledStepIds.has(s.originalStepId) && canScheduleStepOnDay(s, dayIdx));
+            pulledForwardCandidates.push(...fSteps);
+          }
+
+          let dayCandidates = [...unassignedOverflow, ...currentDayCandidates, ...pulledForwardCandidates];
           
           if (allowLookahead && lookaheadCandidates[mName] && lookaheadCandidates[mName].length > 0) {
             const currentDayTools = new Set();
