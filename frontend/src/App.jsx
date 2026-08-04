@@ -10617,8 +10617,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   const [weeksCount, setWeeksCount] = useState(4); // 1 to 20 weeks
   const [tempWeeksCount, setTempWeeksCount] = useState(4);
   useEffect(() => { setTempWeeksCount(weeksCount); }, [weeksCount]);
-  const [includeGesperrte, setIncludeGesperrte] = useState(false);
-  const [includeVorgemerkte, setIncludeVorgemerkte] = useState(false);
+  const [includeGesperrte, setIncludeGesperrte] = useState(true);
+  const [includeVorgemerkte, setIncludeVorgemerkte] = useState(true);
   const [useOptimizedPlan, setUseOptimizedPlan] = useState(false);
   const [chartViewType, setChartViewType] = useState('ruest_lauf'); // 'ruest_lauf' | 'status'
   const [showTrendline, setShowTrendline] = useState(true);
@@ -10937,12 +10937,14 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     if (sel === 'POOL_RS2') return ['RS2_1', 'RS2_2'];
     if (sel === 'POOL_C40_C42') return ['C40', 'C42'];
     
-    // Check direct or fuzzy match
+    // Check direct match
     const matched = validMillingMachines.filter(m => {
       if (m === sel) return true;
+      if (sel === 'C400' && m === 'C40') return false;
+      if (sel === 'C40' && m === 'C400') return false;
       const selLower = sel.toLowerCase();
       const mLower = m.toLowerCase();
-      return selLower.includes(mLower) || mLower.includes(selLower);
+      return selLower === mLower;
     });
     return matched.length > 0 ? matched : validMillingMachines;
   };
@@ -11147,10 +11149,13 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         if (isFreigegeben && isGesperrt && !includeGesperrte) return;
 
         let setupMin = showRuestFilter ? (s.setupTime || s.SetupTime || 0) : 0;
-        let prodMin = showProdFilter ? (s.prodTime || s.ProdTime || (s.scheduledMin || s.ScheduledMin || 0) - (s.setupTime || s.SetupTime || 0)) : 0;
+        let prodMin = showProdFilter ? (s.prodTime || s.ProdTime || (s.scheduledMin || s.ScheduledMin || 0) - setupMin) : 0;
         if (prodMin < 0) prodMin = 0;
 
         let stepTime = setupMin + prodMin;
+        if (stepTime === 0 && (s.scheduledMin || s.ScheduledMin) > 0) {
+          stepTime = s.scheduledMin || s.ScheduledMin;
+        }
         dayRuestMin += setupMin;
         dayLaufMin += prodMin;
 

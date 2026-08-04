@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PlanningAPIContract",
+  "description": "API Contract for GET /api/planning and POST /api/planning/override",
+  "endpoints": {
+    "GET /api/planning": {
+      "queryParameters": {
+        "daysCount": { "type": "integer", "default": 5, "minimum": 5, "maximum": 21 },
+        "optimize": { "type": "boolean", "default": true },
+        "optimizeNightRun": { "type": "boolean", "default": true },
+        "algo": { "type": "string", "enum": ["greedy", "local_search", "simulated_annealing"], "default": "greedy" },
+        "optimizeFixture": { "type": "boolean", "default": true },
+        "fixtureWeight": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50 },
+        "allowLookahead": { "type": "boolean", "default": true }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["board", "summary"],
+          "properties": {
+            "board": { "type": "object" },
+            "summary": {
+              "type": "object",
+              "required": ["totalSteps", "assignedSteps", "totalSetupMin", "totalRunMin"],
+              "properties": {
+                "totalSteps": { "type": "integer" },
+                "assignedSteps": { "type": "integer" },
+                "totalSetupMin": { "type": "integer" },
+                "totalRunMin": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /api/planning/override": {
+      "requestBody": {
+        "type": "object",
+        "required": ["stepId", "overrideMachine", "startDate"],
+        "properties": {
+          "stepId": { "type": "string" },
+          "overrideMachine": { "type": "string" },
+          "startDate": { "type": "string", "format": "date" }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["success", "stepId"],
+          "properties": {
+            "success": { "type": "boolean" },
+            "stepId": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DataAuditAPIContract",
+  "description": "API Contract for GET /api/reports/data-completeness",
+  "endpoints": {
+    "GET /api/reports/data-completeness": {
+      "queryParameters": {
+        "severity": { "type": "string", "enum": ["ALL", "RED", "ORANGE", "YELLOW"] }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["auditedSteps", "totalIncomplete", "completenessScoreAvg"],
+          "properties": {
+            "auditedSteps": { "type": "array" },
+            "totalIncomplete": { "type": "integer" },
+            "completenessScoreAvg": { "type": "number" }
+          }
+        }
+      }
+    }
+  }
+}

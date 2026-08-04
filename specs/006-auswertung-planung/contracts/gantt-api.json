@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GanttAPIContract",
+  "description": "API Contract for GET /api/reports/gantt",
+  "endpoints": {
+    "GET /api/reports/gantt": {
+      "queryParameters": {
+        "weeksCount": { "type": "integer", "default": 4, "minimum": 1, "maximum": 20 }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["ganttRows", "weeklyLoad"],
+          "properties": {
+            "ganttRows": { "type": "array" },
+            "weeklyLoad": { "type": "array" }
+          }
+        }
+      }
+    }
+  }
+}

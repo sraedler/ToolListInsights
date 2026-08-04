@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ManualWorkstationAPIContract",
+  "description": "API Contract for GET /api/planning?mode=manual",
+  "endpoints": {
+    "GET /api/planning?mode=manual": {
+      "queryParameters": {
+        "mode": { "type": "string", "enum": ["manual"] }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["workstations", "totalJobs"],
+          "properties": {
+            "workstations": { "type": "array" },
+            "totalJobs": { "type": "integer" }
+          }
+        }
+      }
+    }
+  }
+}

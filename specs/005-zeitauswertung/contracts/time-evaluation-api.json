@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TimeEvaluationAPIContract",
+  "description": "API Contract for GET /api/reports/time-evaluation",
+  "endpoints": {
+    "GET /api/reports/time-evaluation": {
+      "queryParameters": {
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "machine": { "type": "string" }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["records", "summary"],
+          "properties": {
+            "records": { "type": "array" },
+            "summary": { "type": "object" }
+          }
+        }
+      }
+    }
+  }
+}

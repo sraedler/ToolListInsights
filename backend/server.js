@@ -22,6 +22,8 @@ async function fetchFastD4NativePlan(startDateStr, endDateStr) {
         ISNULL(sk.PSP_TYP_SPERRE, 0) as TypSperre,
         ISNULL(sk.PSP_TYP_SPERRE_WEITERVERARBEITUNG, 0) as SperreWeiter,
         sk.PSP_PP_STATUS_PRODUKTION as StatusProd,
+        ISNULL(sk.PSP_ZEIT_UEBERLAPPUNG_PROZENT, 0) as UeberlappungProzent,
+        ISNULL(sk.PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG, 0) as MaxProdTag,
         k.PSK_IDBEBP as IdBeBp,
         CASE WHEN ISNULL(au.BK_BKBE_AU_PP_ZUSTAND_PLANUNG, 0) > 0 
              THEN au.BK_BKBE_AU_PP_ZUSTAND_PLANUNG - 1 
@@ -174,6 +176,7 @@ async function fetchActiveStepsAndMaterials(poolD4) {
       ) as BookedMachineId,
       p.PSP_IDMP as MachinePoolId,
       p.PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG as MaxProdTag,
+      ISNULL(p.PSP_ZEIT_UEBERLAPPUNG_PROZENT, 0) as UeberlappungProzent,
       p.PSP_MENGE_SOLL as Quantity,
       p.PSP_PP_STATUS_PRODUKTION as StatusProduction,
       ISNULL(p.PSP_TYP_SPERRE, 0) as TypSperre,
@@ -678,6 +681,8 @@ async function cacheSetupData() {
       } else {
         row.prodTime = row.ProdTime || 0;
       }
+      row.setupTime = row.SetupTime || 0;
+      row.scheduledMin = (row.setupTime || 0) + (row.prodTime || 0);
 
       if (!ordersMap[row.OrderId]) {
         ordersMap[row.OrderId] = [];
@@ -3762,6 +3767,7 @@ const useD4Plan = useD4PlanParam === 'true';
     };
 
     let capacities = {};
+    let nameCapacities = {};
     try {
       const poolD4 = await getPoolD4();
       const capResult = await poolD4.request().query(`
@@ -3774,11 +3780,10 @@ const useD4Plan = useD4PlanParam === 'true';
                MS_KAPAZITAET_ZEIT_MINUTEN_SA,
                MS_KAPAZITAET_ZEIT_MINUTEN_SO
         FROM [D4].[dbo].[tPPS_MASTA]
-        WHERE ID IN (2, 4, 5, 6, 8, 15, 16, 17, 21, 25)
       `);
       capResult.recordset.forEach(row => {
         const id = parseInt(row.ID);
-        capacities[id] = {
+        const caps = {
           1: row.MS_KAPAZITAET_ZEIT_MINUTEN_MO || 0, // Monday
           2: row.MS_KAPAZITAET_ZEIT_MINUTEN_DI || 0, // Tuesday
           3: row.MS_KAPAZITAET_ZEIT_MINUTEN_MI || 0, // Wednesday
@@ -3787,6 +3792,26 @@ const useD4Plan = useD4PlanParam === 'true';
           6: row.MS_KAPAZITAET_ZEIT_MINUTEN_SA || 0, // Saturday
           0: row.MS_KAPAZITAET_ZEIT_MINUTEN_SO || 0  // Sunday
         };
+        capacities[id] = caps;
+
+        const numStr = (row.MS_NUMMER || '').trim().toUpperCase();
+        const bezStr = (row.MS_BEZEICHNUNG || '').trim().toUpperCase();
+
+        if (numStr.includes('C400') || bezStr.includes('C400')) {
+          nameCapacities['C400'] = caps;
+        } else if (numStr.includes('C42') || bezStr.includes('C42')) {
+          nameCapacities['C42'] = caps;
+        } else if (numStr.includes('C40') || bezStr.includes('C40')) {
+          nameCapacities['C40'] = caps;
+        } else if (numStr.includes('CHIRON') || bezStr.includes('CHIRON')) {
+          nameCapacities['CHIRON'] = caps;
+        } else if (numStr.includes('BROTHER') || bezStr.includes('BROTHER')) {
+          nameCapacities['BROTHER'] = caps;
+        } else if (numStr.includes('RS1') || bezStr.includes('RS1') || numStr.includes('RS2_1') || bezStr.includes('RS2_1')) {
+          nameCapacities['RS2_1'] = caps;
+        } else if (numStr.includes('RS2') || bezStr.includes('RS2') || numStr.includes('RS2_2') || bezStr.includes('RS2_2')) {
+          nameCapacities['RS2_2'] = caps;
+        }
       });
     } catch (err) {
       console.error('Error fetching capacities:', err);
@@ -3794,11 +3819,12 @@ const useD4Plan = useD4PlanParam === 'true';
 
     const getCapacityForDay = (mName, dateStr) => {
       if (dateStr === 'Überlauf') return 99999;
-      const dbId = machineIdMap[mName];
-      if (!dbId || !capacities[dbId]) return 360; // Default capacity: 6 hours
+      const key = mName.toUpperCase();
+      const capMap = nameCapacities[key] || nameCapacities[mName] || (machineIdMap[mName] && capacities[machineIdMap[mName]]);
+      if (!capMap) return 0;
       const dayOfWeek = new Date(dateStr).getDay(); // 0 = Sunday, 1 = Monday, etc.
-      const cap = capacities[dbId][dayOfWeek];
-      return cap > 0 ? cap : 360; // Returns exact DB capacity value!
+      const cap = capMap[dayOfWeek];
+      return cap !== undefined ? cap : 0;
     };
 
     const allowLookahead = req.query.allowLookahead === 'true';
@@ -3941,8 +3967,8 @@ const useD4Plan = useD4PlanParam === 'true';
 
       if (step.MachinePoolId === 13) {
         // Pool C40-C42
-        const capC40 = (capacities[4] && capacities[4][new Date(dateStr).getDay()]) || 900;
-        const capC42 = (capacities[25] && capacities[25][new Date(dateStr).getDay()]) || 900;
+        const capC40 = getCapacityForDay('C40', dateStr);
+        const capC42 = getCapacityForDay('C42', dateStr);
 
         const loadC40 = board['C40'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
         const loadC42 = board['C42'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
@@ -3958,8 +3984,8 @@ const useD4Plan = useD4PlanParam === 'true';
         }
       } else if (step.MachinePoolId === 9 || step.MachinePoolId === 12) {
         // Pool RS2
-        const capRS1 = (capacities[5] && capacities[5][new Date(dateStr).getDay()]) || 900;
-        const capRS2 = (capacities[6] && capacities[6][new Date(dateStr).getDay()]) || 900;
+        const capRS1 = getCapacityForDay('RS2_1', dateStr);
+        const capRS2 = getCapacityForDay('RS2_2', dateStr);
 
         const loadRS2_1 = board['RS2_1'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
         const loadRS2_2 = board['RS2_2'][dateStr].reduce((sum, s) => sum + (s.SetupTime || 0) + (s.prodTime || 0), 0);
@@ -3989,12 +4015,12 @@ const useD4Plan = useD4PlanParam === 'true';
       machinesList.forEach(mName => {
         finalBoard[mName] = {};
         dailyCapacities[mName] = {};
-        const mCaps = capacities[machineIdMap[mName]] || {};
+        const mCaps = nameCapacities[mName.toUpperCase()] || nameCapacities[mName] || capacities[machineIdMap[mName]] || {};
         planningDays.forEach(day => {
           finalBoard[mName][day] = [];
           const dObj = new Date(day);
           const dayOfWeek = isNaN(dObj.getTime()) ? 1 : dObj.getDay();
-          dailyCapacities[mName][day] = mCaps[dayOfWeek] || 360;
+          dailyCapacities[mName][day] = mCaps[dayOfWeek] !== undefined ? mCaps[dayOfWeek] : 0;
         });
         finalBoard[mName]['Überlauf'] = [];
       });
@@ -4016,7 +4042,10 @@ const useD4Plan = useD4PlanParam === 'true';
         if (k) greenStepMap[k] = s;
       });
 
-      // Directly populate from d4PlanEntries with strict capacity-ratio load balancing for Auswertung Planung
+      // Two-Pass Non-Overbooking Pool Allocation Algorithm for Auswertung Planung
+      // Pass 1: Fixed machine-booked jobs (p.MachineId) reserve primary daily capacity first
+      const poolEntries = [];
+
       d4PlanEntries.forEach(p => {
         let mName = null;
         if (p.MachineId === 8) mName = 'Brother';
@@ -4027,54 +4056,23 @@ const useD4Plan = useD4PlanParam === 'true';
         else if (p.MachineId === 5) mName = 'RS2_1';
         else if (p.MachineId === 6) mName = 'RS2_2';
 
-        const day = planningDays.includes(p.DateStr) ? p.DateStr : 'Überlauf';
-
         if (!mName) {
-          // Unassigned Pool step load balancing based on combined daily & window capacity utilization ratio
-          const capC40 = (capacities[4] && capacities[4][new Date(day).getDay()]) || 900;
-          const capC42 = (capacities[25] && capacities[25][new Date(day).getDay()]) || 900;
-          const capRS1 = (capacities[5] && capacities[5][new Date(day).getDay()]) || 900;
-          const capRS2 = (capacities[6] && capacities[6][new Date(day).getDay()]) || 900;
-
-          if (p.MachinePoolId === 13) {
-            // Pool C40 vs C42
-            const dayLoadC40 = (finalBoard['C40'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
-            const dayLoadC42 = (finalBoard['C42'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
-
-            const dayRatioC40 = dayLoadC40 / capC40;
-            const dayRatioC42 = dayLoadC42 / capC42;
-
-            const winLoadC40 = getBoardTotalLoadMin('C40');
-            const winLoadC42 = getBoardTotalLoadMin('C42');
-
-            const scoreC40 = (dayRatioC40 * 0.7) + ((winLoadC40 / (planningDays.length * 900)) * 0.3);
-            const scoreC42 = (dayRatioC42 * 0.7) + ((winLoadC42 / (planningDays.length * 900)) * 0.3);
-
-            mName = (scoreC40 <= scoreC42) ? 'C40' : 'C42';
-
-          } else if (p.MachinePoolId === 9 || p.MachinePoolId === 12) {
-            // Pool RS2_1 vs RS2_2
-            const dayLoadRS1 = (finalBoard['RS2_1'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
-            const dayLoadRS2 = (finalBoard['RS2_2'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
-
-            const dayRatioRS1 = dayLoadRS1 / capRS1;
-            const dayRatioRS2 = dayLoadRS2 / capRS2;
-
-            const winLoadRS1 = getBoardTotalLoadMin('RS2_1');
-            const winLoadRS2 = getBoardTotalLoadMin('RS2_2');
-
-            const scoreRS1 = (dayRatioRS1 * 0.7) + ((winLoadRS1 / (planningDays.length * 900)) * 0.3);
-            const scoreRS2 = (dayRatioRS2 * 0.7) + ((winLoadRS2 / (planningDays.length * 900)) * 0.3);
-
-            mName = (scoreRS1 <= scoreRS2) ? 'RS2_1' : 'RS2_2';
-          }
+          // Defer Pool jobs to Pass 2
+          poolEntries.push(p);
+          return;
         }
 
-        if (!mName || !finalBoard[mName]) return;
+        const day = planningDays.includes(p.DateStr) ? p.DateStr : 'Überlauf';
+        if (!finalBoard[mName] || !finalBoard[mName][day]) return;
 
         const isFreigegeben = (p.ZustandPlanung === 0);
         const isGesperrt = p.TypSperre > 0 || p.SperreWeiter > 0;
         const origStep = greenStepMap[String(p.StepId)] || {};
+
+        const schMin = p.ScheduledMin !== undefined ? p.ScheduledMin : ((origStep.SetupTime || 0) + (origStep.ProdTime || 0));
+        const totalSetup = (origStep.SetupTime !== undefined ? origStep.SetupTime : (origStep.setupTime || origStep.originalSetupTime)) || 0;
+        const sTime = Math.min(schMin, totalSetup);
+        const prTime = Math.max(0, schMin - sTime);
 
         finalBoard[mName][day].push({
           ...origStep,
@@ -4107,29 +4105,140 @@ const useD4Plan = useD4PlanParam === 'true';
           fixtureLocation: origStep.FixtureLocation || origStep.fixtureLocation,
           FixtureLocation: origStep.FixtureLocation || origStep.fixtureLocation,
           fixtureLocationFromDb: origStep.FixtureLocationFromDb || origStep.fixtureLocationFromDb,
-          PlannedDays: origStep.PlannedDays || 1,
-          OrderPlanDays: origStep.OrderPlanDays || 1,
-          UsedDays: origStep.UsedDays || 0,
-          ThroughputDays: origStep.ThroughputDays || 1,
-          stepPos: p.StepPos,
-          StepPos: p.StepPos,
-          stepDesc: p.StepDesc,
-          StepDesc: p.StepDesc,
-          setupTime: p.SetupTime || origStep.SetupTime || 0,
-          SetupTime: p.SetupTime || origStep.SetupTime || 0,
-          prodTime: Math.max(0, (p.ScheduledMin || 0) - (p.SetupTime || 0)),
-          ProdTime: Math.max(0, (p.ScheduledMin || 0) - (p.SetupTime || 0)),
-          scheduledMin: p.ScheduledMin || 0,
-          ScheduledMin: p.ScheduledMin || 0,
-          belegArt: p.BelegArt,
-          zustandPlanung: p.ZustandPlanung,
+          scheduledMin: schMin,
+          setupTime: sTime,
+          prodTime: prTime,
+          SetupTime: sTime,
+          ProdTime: prTime,
+          DateStr: p.DateStr,
           isFreigegeben,
           isGesperrt,
-          typSperre: p.TypSperre,
-          sperreWeiter: p.SperreWeiter,
-          day
+          isOverplanned: (p.UeberlappungProzent || origStep.UeberlappungProzent || 0) > 0,
+          ueberlappungProzent: p.UeberlappungProzent || origStep.UeberlappungProzent || 0,
+          maxProdTag: p.MaxProdTag || origStep.MaxProdTag || 0,
+          color: isFreigegeben ? 'Green' : isGesperrt ? 'Red' : 'Orange',
+          isFixedAssignment: true
         });
       });
+
+      // Pass 2: Pool jobs fill remaining free capacity up to 100% max daily limit without overbooking
+      // Sort pool entries descending by duration (largest job first) to optimize capacity-proportional best-fit placement
+      poolEntries.sort((a, b) => {
+        const origA = greenStepMap[String(a.StepId)] || {};
+        const origB = greenStepMap[String(b.StepId)] || {};
+        const minA = a.ScheduledMin !== undefined ? a.ScheduledMin : ((origA.SetupTime || 0) + (origA.ProdTime || 0));
+        const minB = b.ScheduledMin !== undefined ? b.ScheduledMin : ((origB.SetupTime || 0) + (origB.ProdTime || 0));
+        return minB - minA;
+      });
+
+      poolEntries.forEach(p => {
+        const day = planningDays.includes(p.DateStr) ? p.DateStr : 'Überlauf';
+        const origStep = greenStepMap[String(p.StepId)] || {};
+        const stepMin = p.ScheduledMin !== undefined ? p.ScheduledMin : ((origStep.SetupTime || 0) + (origStep.ProdTime || 0));
+        const totalSetup = (origStep.SetupTime !== undefined ? origStep.SetupTime : (origStep.setupTime || origStep.originalSetupTime)) || 0;
+        const sTime = Math.min(stepMin, totalSetup);
+        const prTime = Math.max(0, stepMin - sTime);
+
+        let targetM = null;
+
+        if (p.MachinePoolId === 13) {
+          // Pool C40 vs C42
+          const maxC40 = getCapacityForDay('C40', day);
+          const maxC42 = getCapacityForDay('C42', day);
+          const loadC40 = (finalBoard['C40'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
+          const loadC42 = (finalBoard['C42'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
+
+          const remC40 = Math.max(0, maxC40 - loadC40);
+          const remC42 = Math.max(0, maxC42 - loadC42);
+
+          if (stepMin <= remC40 && stepMin <= remC42) {
+            targetM = remC42 >= remC40 ? 'C42' : 'C40';
+          } else if (stepMin <= remC42) {
+            targetM = 'C42';
+          } else if (stepMin <= remC40) {
+            targetM = 'C40';
+          } else {
+            // Cannot fit without overbooking -> route to machine with more remaining capacity
+            targetM = remC42 >= remC40 ? 'C42' : 'C40';
+          }
+        } else if (p.MachinePoolId === 9 || p.MachinePoolId === 12) {
+          // Pool RS2_1 vs RS2_2
+          const maxRS1 = getCapacityForDay('RS2_1', day);
+          const maxRS2 = getCapacityForDay('RS2_2', day);
+          const loadRS1 = (finalBoard['RS2_1'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
+          const loadRS2 = (finalBoard['RS2_2'][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
+
+          const remRS1 = Math.max(0, maxRS1 - loadRS1);
+          const remRS2 = Math.max(0, maxRS2 - loadRS2);
+
+          if (stepMin <= remRS1 && stepMin <= remRS2) {
+            targetM = remRS2 >= remRS1 ? 'RS2_2' : 'RS2_1';
+          } else if (stepMin <= remRS2) {
+            targetM = 'RS2_2';
+          } else if (stepMin <= remRS1) {
+            targetM = 'RS2_1';
+          } else {
+            targetM = remRS2 >= remRS1 ? 'RS2_2' : 'RS2_1';
+          }
+        }
+
+        if (!targetM || !finalBoard[targetM]) return;
+
+        // If step exceeds remaining capacity on chosen day, route to Überlauf to avoid overbooking
+        const targetMax = getCapacityForDay(targetM, day);
+        const targetCurrentLoad = (finalBoard[targetM][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
+        const targetDay = (day !== 'Überlauf' && (targetCurrentLoad + stepMin > targetMax)) ? 'Überlauf' : day;
+
+        const isFreigegeben = (p.ZustandPlanung === 0);
+        const isGesperrt = p.TypSperre > 0 || p.SperreWeiter > 0;
+
+        finalBoard[targetM][targetDay].push({
+          ...origStep,
+          stepId: p.StepId,
+          StepId: p.StepId,
+          orderId: origStep.OrderId || origStep.orderId || p.OrderId,
+          OrderId: origStep.OrderId || origStep.orderId || p.OrderId,
+          contractNumber: p.ContractNumber || origStep.ContractNumber || origStep.contractNumber,
+          ContractNumber: p.ContractNumber || origStep.ContractNumber || origStep.contractNumber,
+          orderPos: p.OrderPos || origStep.OrderPos || origStep.orderPos,
+          OrderPos: p.OrderPos || origStep.OrderPos || origStep.orderPos,
+          articleDesc: p.ArticleDesc || origStep.ArticleDesc || origStep.articleDesc || origStep.OrderDesc || origStep.orderDesc,
+          ArticleDesc: p.ArticleDesc || origStep.ArticleDesc || origStep.articleDesc || origStep.OrderDesc || origStep.orderDesc,
+          orderDesc: origStep.OrderDesc || origStep.orderDesc || p.ArticleDesc,
+          OrderDesc: origStep.OrderDesc || origStep.orderDesc || p.ArticleDesc,
+          articleId: origStep.ArticleId || origStep.articleId,
+          ArticleId: origStep.ArticleId || origStep.articleId,
+          deliveryDate: origStep.DeliveryDate || origStep.deliveryDate,
+          DeliveryDate: origStep.DeliveryDate || origStep.deliveryDate,
+          ncProgram: origStep.NCProgram || origStep.ncProgram,
+          NCProgram: origStep.NCProgram || origStep.ncProgram,
+          matchedListNr: origStep.MatchedListNr || origStep.matchedListNr,
+          MatchedListNr: origStep.MatchedListNr || origStep.matchedListNr,
+          matchedListIdent: origStep.MatchedListIdent || origStep.matchedListIdent,
+          MatchedListIdent: origStep.MatchedListIdent || origStep.matchedListIdent,
+          matchedListNcp: origStep.MatchedListNcp || origStep.matchedListNcp,
+          MatchedListNcp: origStep.MatchedListNcp || origStep.matchedListNcp,
+          fixture: origStep.Fixture || origStep.fixture,
+          Fixture: origStep.Fixture || origStep.fixture,
+          fixtureLocation: origStep.FixtureLocation || origStep.fixtureLocation,
+          FixtureLocation: origStep.FixtureLocation || origStep.fixtureLocation,
+          fixtureLocationFromDb: origStep.FixtureLocationFromDb || origStep.fixtureLocationFromDb,
+          scheduledMin: stepMin,
+          setupTime: sTime,
+          prodTime: prTime,
+          SetupTime: sTime,
+          ProdTime: prTime,
+          DateStr: p.DateStr,
+          isFreigegeben,
+          isGesperrt,
+          isOverplanned: (p.UeberlappungProzent || origStep.UeberlappungProzent || 0) > 0,
+          ueberlappungProzent: p.UeberlappungProzent || origStep.UeberlappungProzent || 0,
+          maxProdTag: p.MaxProdTag || origStep.MaxProdTag || 0,
+          color: isFreigegeben ? 'Green' : isGesperrt ? 'Red' : 'Orange',
+          isPoolFilledStep: true
+        });
+      });
+
 
       // Put non-planned overflow steps into Überlauf with optimal capacity-ratio Pool load balancing
       greenSteps.forEach(s => {
@@ -4188,12 +4297,12 @@ const useD4Plan = useD4PlanParam === 'true';
         evalBoard[mName] = {};
         evalDailyCapacities[mName] = {};
         const mId = machineIdMap[mName];
-        const mCaps = capacities[mId] || {};
+        const mCaps = nameCapacities[mName.toUpperCase()] || nameCapacities[mName] || capacities[mId] || {};
         planningDays.forEach(day => {
           evalBoard[mName][day] = [];
           const dObj = new Date(day);
           const dayOfWeek = isNaN(dObj.getTime()) ? 1 : dObj.getDay();
-          evalDailyCapacities[mName][day] = mCaps[dayOfWeek] || 360;
+          evalDailyCapacities[mName][day] = mCaps[dayOfWeek] !== undefined ? mCaps[dayOfWeek] : 0;
         });
         evalBoard[mName]['Überlauf'] = [];
       });
@@ -4227,7 +4336,7 @@ const useD4Plan = useD4PlanParam === 'true';
 
       // Rank machines by capacity load ratio (Demand / Total Window Capacity)
       const machineRanks = evalMillingMachines.map(mName => {
-        const totCap = planningDays.reduce((sum, d) => sum + (evalDailyCapacities[mName][d] || 360), 0);
+        const totCap = planningDays.reduce((sum, d) => sum + (evalDailyCapacities[mName][d] || 0), 0);
         const demand = machineDemandMap[mName] || 0;
         const ratio = totCap > 0 ? (demand / totCap) : 0;
         return { machineName: mName, demand, totCap, ratio };
@@ -4297,7 +4406,7 @@ const useD4Plan = useD4PlanParam === 'true';
 
       orderedMachines.forEach(mName => {
         planningDays.forEach((day, dayIdx) => {
-          const dayCap = evalDailyCapacities[mName][day] || 360;
+          const dayCap = getCapacityForDay(mName, day);
           let usedCap = evalBoard[mName][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
 
           const candidates = greenSteps.filter(s => {
@@ -4306,17 +4415,17 @@ const useD4Plan = useD4PlanParam === 'true';
 
             let targetM = resolveTargetMachine(s);
             if (targetM === 'C40_POOL') {
-              const capC40 = evalDailyCapacities['C40'][day] || 360;
-              const capC42 = evalDailyCapacities['C42'][day] || 360;
+              const capC40 = getCapacityForDay('C40', day);
+              const capC42 = getCapacityForDay('C42', day);
               const loadC40 = evalBoard['C40'][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
               const loadC42 = evalBoard['C42'][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
-              targetM = (loadC40 / capC40 <= loadC42 / capC42) ? 'C40' : 'C42';
+              targetM = (loadC40 / (capC40 || 1) <= loadC42 / (capC42 || 1)) ? 'C40' : 'C42';
             } else if (targetM === 'RS2_POOL') {
-              const capRS1 = evalDailyCapacities['RS2_1'][day] || 360;
-              const capRS2 = evalDailyCapacities['RS2_2'][day] || 360;
+              const capRS1 = getCapacityForDay('RS2_1', day);
+              const capRS2 = getCapacityForDay('RS2_2', day);
               const loadRS1 = evalBoard['RS2_1'][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
               const loadRS2 = evalBoard['RS2_2'][day].reduce((sum, x) => sum + (x.scheduledMin || 0), 0);
-              targetM = (loadRS1 / capRS1 <= loadRS2 / capRS2) ? 'RS2_1' : 'RS2_2';
+              targetM = (loadRS1 / (capRS1 || 1) <= loadRS2 / (capRS2 || 1)) ? 'RS2_1' : 'RS2_2';
             }
 
             if (targetM !== mName) return false;
@@ -4876,13 +4985,18 @@ const useD4Plan = useD4PlanParam === 'true';
                 stepPos: planStep.StepPos,
                 stepDesc: (planStep.StepDesc || '').trim(),
                 color: planStep.color || 'Yellow',
-                setupTime: planStep.SetupTime || 0,
-                prodTime: planStep.prodTime || 0,
+                setupTime: planStep.SetupTime !== undefined ? planStep.SetupTime : (planStep.setupTime || 0),
+                prodTime: planStep.ProdTime !== undefined ? planStep.ProdTime : (planStep.prodTime || 0),
+                scheduledMin: (planStep.SetupTime || 0) + (planStep.ProdTime || 0),
                 isCompleted: planStep.SPKO === 4,
                 isExecuting: planStep.SPKO === 2,
                 machineName: machineName
               };
             });
+
+          const st = s.SetupTime !== undefined ? s.SetupTime : (s.setupTime || 0);
+          const pr = (s.ProdTime !== undefined && s.ProdTime > 0) ? s.ProdTime : (s.prodTime || 0);
+          const sch = (s.ScheduledMin !== undefined && s.ScheduledMin > 0) ? s.ScheduledMin : (s.scheduledMin || (st + pr));
 
           return {
             stepId: s.StepId,
@@ -4897,11 +5011,12 @@ const useD4Plan = useD4PlanParam === 'true';
             orderPos: s.OrderPos || null,
             articleId: s.ArticleId,
             orderDesc: s.OrderDesc,
-            stepDesc: s.StepDesc.trim(),
-            setupTime: s.SetupTime,
-            prodTime: s.prodTime || 0,
-            originalSetupTime: s.originalSetupTime !== undefined ? s.originalSetupTime : (s.SetupTime || 0),
-            originalProdTime: s.originalProdTime !== undefined ? s.originalProdTime : (s.ProdTime || 0),
+            stepDesc: (s.StepDesc || '').trim(),
+            setupTime: st,
+            prodTime: pr,
+            scheduledMin: sch,
+            originalSetupTime: s.originalSetupTime !== undefined ? s.originalSetupTime : st,
+            originalProdTime: s.originalProdTime !== undefined ? s.originalProdTime : pr,
             isNightRunCapable: s.isNightRunCapable || false,
             scheduledShift: s.scheduledShift || 'DAY',
             maxNightQty: s.MaxNightQty || 0,

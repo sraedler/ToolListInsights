@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ToolPresetAPIContract",
+  "description": "API Contract for GET /api/planning?mode=tools and GET /api/inventory/machine/:name/current-tools",
+  "endpoints": {
+    "GET /api/planning?mode=tools": {
+      "queryParameters": {
+        "mode": { "type": "string", "enum": ["tools"] },
+        "daysCount": { "type": "integer", "default": 5 }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["presetJobs", "totalTimeSavedMin"],
+          "properties": {
+            "presetJobs": { "type": "array" },
+            "totalTimeSavedMin": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "GET /api/inventory/machine/:name/current-tools": {
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["machine", "magazineTools"],
+          "properties": {
+            "machine": { "type": "string" },
+            "magazineTools": { "type": "array" }
+          }
+        }
+      }
+    }
+  }
+}

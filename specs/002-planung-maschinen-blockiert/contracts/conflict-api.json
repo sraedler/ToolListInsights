@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ConflictAPIContract",
+  "description": "API Contract for GET /api/planning?isConflictMode=true",
+  "endpoints": {
+    "GET /api/planning?isConflictMode=true": {
+      "queryParameters": {
+        "isConflictMode": { "type": "boolean", "default": true },
+        "category": { "type": "string", "enum": ["ALL", "MISSING_NC", "MISSING_FIXTURE", "MISSING_TOOL", "MATERIAL_DELAY", "PREDECESSOR"] }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["conflictSteps", "summary"],
+          "properties": {
+            "conflictSteps": { "type": "array" },
+            "summary": {
+              "type": "object",
+              "required": ["totalBlocked", "criticalRedCount", "warningYellowCount"],
+              "properties": {
+                "totalBlocked": { "type": "integer" },
+                "criticalRedCount": { "type": "integer" },
+                "warningYellowCount": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

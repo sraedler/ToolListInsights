@@ -5,6 +5,7 @@
   "main": "backend/server.js",
   "scripts": {
     "test": "node backend/test.js",
+    "test:features": "node Features/run_tests.js",
     "start:backend": "node backend/server.js",
     "start:frontend": "npm run dev --prefix frontend",
     "dev": "npx concurrently \"npm run start:backend\" \"npm run start:frontend\""
