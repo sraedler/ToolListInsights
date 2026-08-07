@@ -34,6 +34,14 @@ As a master scheduler, I want to view multi-week Gantt timelines (1 to 20 weeks)
 - **FR-005**: System MUST schedule fixed machine-assigned jobs (`MachineId`) first to occupy capacity, then sort pool jobs (`MachinePoolId`) descending by duration and assign each job to the candidate machine with the highest remaining free capacity. Pool jobs MUST NEVER overbook a machine.
 - **FR-006**: System MUST support Over-planning (Überplanung / Überlappung) when `PSP_ZEIT_UEBERLAPPUNG_PROZENT > 0`. For over-planned steps, `PSPP_DATUM_START` MUST be treated as the **End Date**, and daily allocations of `PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG` minutes per day MUST be scheduled **backwards** until total step runtime (`SetupTime + ProdTime`) is reached.
 - **FR-007**: System MUST render over-planned steps (`isOverplanned: true`) using a distinct visual color (**Purple** / `#a855f7`) in both the Gantt timeline bars and the Capacity Progression Chart (`PlanningEvaluationTab`) stacked bar segments and legend toggles.
+- **FR-008**: System MUST retrieve order header category (`BK_BKBE_AGBEWE_KATEGORIE` via `tKAGO.KG_FARBE`) and position category (`BP_AGBEWE_KATEGORIE`) directly from D4 SQL queries. The order category color MUST be displayed in the UI header near the contract/order number, and position category color MUST be used for position-level status filtering and Gantt machine board color coding.
+
+---
+
+## Clarifications
+
+### Session 2026-08-05
+- Q: How should D4 order category color (`tKAGO.KG_FARBE` / `BK_BKBE_AGBEWE_KATEGORIE` / `BP_AGBEWE_KATEGORIE`) be used? → A: Use `BK_BKBE_AGBEWE_KATEGORIE` (`tKAGO.KG_FARBE`) at the header level near contract/order number for the overall order, and use `BP_AGBEWE_KATEGORIE` at the position level for position-level status filtering and Gantt/machine board color coding.
 
 ---
 
@@ -43,3 +51,4 @@ As a master scheduler, I want to view multi-week Gantt timelines (1 to 20 weeks)
 - **SC-002**: Contract highlighting executes synchronously across all machine rows on mouseover.
 - **SC-003**: 100% consistency between D4 `tPPS_MASTA` capacity figures and ToolListInsights capacity limit lines across all machines.
 - **SC-004**: 0% machine overbooking caused by standard pool job allocations, while over-planned steps (`PSP_ZEIT_UEBERLAPPUNG_PROZENT > 0`) are correctly allocated backwards up to `PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG` per day and highlighted in distinct Purple styling.
+- **SC-005**: 100% accurate rendering of D4 category colors (`tKAGO.KG_FARBE`) at both order header and position levels.

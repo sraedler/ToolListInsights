@@ -10617,8 +10617,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   const [weeksCount, setWeeksCount] = useState(4); // 1 to 20 weeks
   const [tempWeeksCount, setTempWeeksCount] = useState(4);
   useEffect(() => { setTempWeeksCount(weeksCount); }, [weeksCount]);
-  const [includeGesperrte, setIncludeGesperrte] = useState(true);
-  const [includeVorgemerkte, setIncludeVorgemerkte] = useState(true);
+  const [includeGesperrte, setIncludeGesperrte] = useState(false);
+  const [includeVorgemerkte, setIncludeVorgemerkte] = useState(false);
   const [useOptimizedPlan, setUseOptimizedPlan] = useState(false);
   const [chartViewType, setChartViewType] = useState('ruest_lauf'); // 'ruest_lauf' | 'status'
   const [showTrendline, setShowTrendline] = useState(true);
@@ -12022,27 +12022,31 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                                       onMouseEnter={() => setHoveredContractNumber(step.contractNumber)}
                                       onMouseLeave={() => setHoveredContractNumber(null)}
                                       style={{
-                                        background: isSameContract ? orderColor.border : orderColor.bg,
-                                        borderLeft: '4px solid ' + (isGesperrt ? '#ef4444' : !isFreigegeben ? '#f59e0b' : orderColor.border),
-                                        borderTop: '1px solid ' + orderColor.border,
-                                        borderRight: '1px solid ' + orderColor.border,
-                                        borderBottom: '1px solid ' + orderColor.border,
+                                        background: isSameContract ? orderColor.border : (step.positionCategoryHex ? `${step.positionCategoryHex}20` : orderColor.bg),
+                                        borderLeft: '4px solid ' + (step.positionCategoryHex || step.orderCategoryHex || (isGesperrt ? '#ef4444' : !isFreigegeben ? '#f59e0b' : orderColor.border)),
+                                        borderTop: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
+                                        borderRight: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
+                                        borderBottom: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
                                         borderRadius: '4px',
                                         padding: '0.2rem 0.25rem',
                                         cursor: 'pointer',
                                         opacity: isOtherContract ? 0.35 : 1,
                                         transform: isSameContract ? 'scale(1.08)' : 'scale(1)',
                                         zIndex: isSameContract ? 50 : 1,
-                                        boxShadow: isSameContract ? ('0 0 14px ' + orderColor.border + ', 0 2px 8px rgba(0,0,0,0.5)') : '0 1px 3px rgba(0,0,0,0.3)',
+                                        boxShadow: isSameContract ? ('0 0 14px ' + (step.positionCategoryHex || orderColor.border) + ', 0 2px 8px rgba(0,0,0,0.5)') : '0 1px 3px rgba(0,0,0,0.3)',
                                         transition: 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s, boxShadow 0.15s, background 0.15s',
                                         overflow: 'hidden'
                                       }}
-                                      title={step.contractNumber + ' Pos ' + step.orderPos + ' - AS ' + step.stepPos + '\nArtikel: ' + articleLabel + '\nRüst: ' + setupH + 'h | Lauf: ' + prodH + 'h | Gesamt: ' + totalH + 'h'}
+                                      title={(step.orderCategoryName ? `D4 Auftrags-Kategorie: ${step.orderCategoryName}\n` : '') + (step.positionCategoryName ? `D4 Pos-Kategorie: ${step.positionCategoryName}\n` : '') + step.contractNumber + ' Pos ' + step.orderPos + ' - AS ' + step.stepPos + '\nArtikel: ' + articleLabel + '\nRüst: ' + setupH + 'h | Lauf: ' + prodH + 'h | Gesamt: ' + totalH + 'h'}
                                     >
                                       {/* Micro 1-Line: P-Nummer / Pos */}
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{statusDot}</span>
-                                        <span style={{ fontWeight: 800, color: orderColor.text, fontSize: '0.68rem', letterSpacing: '-0.2px' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {step.orderCategoryHex ? (
+                                          <span style={{ width: 7, height: 7, borderRadius: '50%', background: step.orderCategoryHex, boxShadow: `0 0 6px ${step.orderCategoryHex}`, flexShrink: 0 }} title={step.orderCategoryName ? `D4 Auftrags-Kategorie: ${step.orderCategoryName}` : 'D4 Auftrags-Kategorie'} />
+                                        ) : (
+                                          <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{statusDot}</span>
+                                        )}
+                                        <span style={{ fontWeight: 800, color: step.positionCategoryHex || orderColor.text, fontSize: '0.68rem', letterSpacing: '-0.2px' }}>
                                           {displayTitle}
                                         </span>
                                       </div>
@@ -12261,14 +12265,25 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                             transition: 'background 0.2s'
                           }}
                         >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', overflow: 'hidden' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', overflow: 'hidden' }}>
+                            {s.orderCategoryHex && (
+                              <span style={{
+                                width: 9,
+                                height: 9,
+                                borderRadius: '50%',
+                                background: s.orderCategoryHex,
+                                boxShadow: `0 0 6px ${s.orderCategoryHex}`,
+                                flexShrink: 0
+                              }} title={s.orderCategoryName ? `D4 Auftrags-Kategorie: ${s.orderCategoryName}` : 'D4 Auftrags-Kategorie'} />
+                            )}
                             <span style={{
-                              padding: '1px 5px',
+                              padding: '2px 6px',
                               borderRadius: '4px',
-                              fontSize: '0.65rem',
+                              fontSize: '0.68rem',
                               fontWeight: 700,
-                              background: s.isGesperrt ? 'rgba(239, 68, 68, 0.2)' : (s.isFreigegeben ? 'rgba(59, 130, 246, 0.2)' : 'rgba(245, 158, 11, 0.2)'),
-                              color: s.isGesperrt ? '#ef4444' : (s.isFreigegeben ? '#3b82f6' : '#f59e0b')
+                              background: s.positionCategoryHex ? `${s.positionCategoryHex}35` : (s.isGesperrt ? 'rgba(239, 68, 68, 0.2)' : (s.isFreigegeben ? 'rgba(59, 130, 246, 0.2)' : 'rgba(245, 158, 11, 0.2)')),
+                              color: s.positionCategoryHex || (s.isGesperrt ? '#ef4444' : (s.isFreigegeben ? '#3b82f6' : '#f59e0b')),
+                              border: s.positionCategoryHex ? `1.5px solid ${s.positionCategoryHex}` : 'none'
                             }}>
                               {s.isGesperrt ? '🔒 GESPERRT ' : ''}{s.contractNumber || s.ContractNumber || s.orderId || s.OrderId || 'P-Auftrag'} Pos {s.orderPos || s.OrderPos || '10'}
                             </span>
@@ -12434,8 +12449,25 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>P-Nummer (Projekt) / Position</div>
-                  <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>
-                    {activeModalStep.contractNumber || activeModalStep.ContractNumber || 'Keine P-Nummer'} {activeModalStep.orderPos || activeModalStep.OrderPos ? `/ Pos ${activeModalStep.orderPos || activeModalStep.OrderPos}` : ''}
+                  <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span>{activeModalStep.contractNumber || activeModalStep.ContractNumber || 'Keine P-Nummer'} {activeModalStep.orderPos || activeModalStep.OrderPos ? `/ Pos ${activeModalStep.orderPos || activeModalStep.OrderPos}` : ''}</span>
+                    {activeModalStep.orderCategoryHex && (
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        background: `${activeModalStep.orderCategoryHex}20`,
+                        border: `1px solid ${activeModalStep.orderCategoryHex}`,
+                        color: activeModalStep.orderCategoryHex,
+                        padding: '2px 8px',
+                        borderRadius: '12px',
+                        fontSize: '0.72rem',
+                        fontWeight: 700
+                      }} title={activeModalStep.orderCategoryName ? `D4 Auftrags-Kategorie: ${activeModalStep.orderCategoryName}` : 'D4 Auftrags-Kategorie'}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeModalStep.orderCategoryHex }} />
+                        {activeModalStep.orderCategoryName || 'D4 Kategorie'}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>

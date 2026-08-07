@@ -9,7 +9,7 @@
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story this task belongs to (e.g., US1, US2)
+- **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3)
 - Exact file paths are specified in descriptions
 
 ---
@@ -48,28 +48,38 @@
 
 ---
 
-## Phase 4: User Story 2 - Over-planning (Überplanung) Backward Scheduling & Purple Visual Styling (Priority: P2)
+## Phase 4: User Story 2 - Over-planning (Überplanung) Backward Scheduling (Priority: P2)
 
-**Goal**: Support Over-planning (`PSP_ZEIT_UEBERLAPPUNG_PROZENT > 0`) using `PSPP_DATUM_START` as End Date, allocating `PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG` minutes per day backwards, with distinct Purple (`#a855f7`) visual styling in Gantt bars and capacity progression stacked charts.
-
-**Independent Test**: Execute `node Features/run_tests.js` to verify over-planning scheduling and visual styling.
-
-### Implementation for User Story 2
+**Goal**: Support Over-planning (`PSP_ZEIT_UEBERLAPPUNG_PROZENT > 0`) using `PSPP_DATUM_START` as End Date, allocating `PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG` minutes per day backwards.
 
 - [x] T010 [US2] Support D4 over-planning fields (`PSP_ZEIT_UEBERLAPPUNG_PROZENT` & `PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG`) in SQL query and `backend/server.js`
 - [x] T011 [US2] Implement backward daily allocation (`MaxProdTag` per day backward from `PSPP_DATUM_START` as End Date) for over-planned steps in `backend/server.js`
-- [x] T012 [US2] Add `isOverplanned` flag and `color: 'Purple'` assignment to over-planned steps in `backend/server.js`
-- [x] T013 [US2] Implement Purple visual bar rendering in Gantt timeline and stacked bar segment with "Überplante Stunden" legend checkbox in `frontend/src/App.jsx`
+- [x] T012 [US2] Add `isOverplanned` flag to over-planned steps in `backend/server.js`
+- [x] T013 [US2] Verify backward daily allocation in `backend/server.js`
 
 ---
 
-## Phase 5: Polish & Cross-Cutting Concerns
+## Phase 5: User Story 3 - D4 Order & Position Category Color Mapping (`tKAGO.KG_FARBE`) (Priority: P3)
+
+**Goal**: Query `BK_BKBE_AGBEWE_KATEGORIE` and `BP_AGBEWE_KATEGORIE` via `tKAGO.KG_FARBE` and `tAG_BEWE` in D4 SQL queries, rendering order category color in the UI header near contract/order number and using position category color for position-level filtering and Gantt color coding.
+
+**Independent Test**: Execute `node Features/run_tests.js` to verify D4 category color integration.
+
+### Implementation for User Story 3
+
+- [x] T014 [US3] Join `tAG_BEWE` and `tKAGO` in `fetchFastD4NativePlan` and `fetchActiveStepsAndMaterials` to query `BK_BKBE_AGBEWE_KATEGORIE` and `BP_AGBEWE_KATEGORIE` (`KG_FARBE` & `KG_BEZEICHNUNG`) in `backend/server.js`
+- [x] T015 [US3] Map and pass header category color (`orderCategoryColor`) and position category color (`positionCategoryColor`) into board step payload in `backend/server.js`
+- [x] T016 [US3] Render D4 order header category color badge near order/contract number and apply position category color in position-level filter and Gantt timeline in `frontend/src/App.jsx`
+
+---
+
+## Phase 6: Polish & Cross-Cutting Concerns
 
 **Purpose**: Verification and documentation updates
 
-- [x] T014 Execute master test runner via `node Features/run_tests.js` to verify all feature test suites pass
-- [x] T015 Update quickstart guide in `specs/006-auswertung-planung/quickstart.md`
-- [x] T016 Update research documentation in `specs/006-auswertung-planung/research.md`
+- [x] T017 Execute master test runner via `node Features/run_tests.js` to verify all feature test suites pass
+- [x] T018 Update quickstart guide in `specs/006-auswertung-planung/quickstart.md`
+- [x] T019 Update research documentation in `specs/006-auswertung-planung/research.md`
 
 ---
 
@@ -80,5 +90,6 @@
 - **Setup (Phase 1)**: Complete.
 - **Foundational (Phase 2)**: Complete.
 - **User Story 1 (Phase 3)**: Complete.
-- **User Story 2 (Phase 4)**: Ready for execution.
-- **Polish (Phase 5)**: Depends on User Story 2 completion.
+- **User Story 2 (Phase 4)**: Complete.
+- **User Story 3 (Phase 5)**: Ready for execution.
+- **Polish (Phase 6)**: Depends on User Story 3 completion.
