@@ -120,7 +120,50 @@ const systemState = {
 };
 
 // Caches for the endpoints
-let cachedToolLists = [];
+let listToIdentMap = {};
+
+function updateListIdentMap() {
+  listToIdentMap = {};
+  (cachedToolLists || []).forEach(tl => {
+    if (tl && tl.Nr) {
+      const speaking = (tl.Ident && tl.Ident.trim()) || (tl.NCP && tl.NCP.trim()) || (tl.Descript && tl.Descript.trim()) || String(tl.Nr);
+      listToIdentMap[String(tl.Nr)] = speaking;
+      listToIdentMap[tl.Nr] = speaking;
+    }
+  });
+}
+
+function resolveSpeakingListName(listNrOrName, step = null) {
+  if (!listNrOrName && !step) return 'Werkzeugliste';
+
+  if (step) {
+    if (step.MatchedListIdent && isNaN(step.MatchedListIdent)) return step.MatchedListIdent;
+    if (step.matchedListIdent && isNaN(step.matchedListIdent)) return step.matchedListIdent;
+  }
+  
+  const key = String(listNrOrName || '').trim();
+  
+  // 1. If key is in listToIdentMap and is not a pure number
+  if (key && listToIdentMap[key] && isNaN(listToIdentMap[key])) {
+    return listToIdentMap[key];
+  }
+  
+  // 2. Check step properties for human-readable NC program, article name, or matched list
+  if (step) {
+    if (step.NCProgram && isNaN(step.NCProgram)) return step.NCProgram;
+    if (step.ncProgram && isNaN(step.ncProgram)) return step.ncProgram;
+    if (step.toolListNr && isNaN(step.toolListNr)) return step.toolListNr;
+    if (step.articleName && isNaN(step.articleName)) return step.articleName;
+    if (step.stepDesc && isNaN(step.stepDesc)) return step.stepDesc;
+    if (step.ContractNumber) return step.ContractNumber;
+    if (step.contractNumber) return step.contractNumber;
+  }
+  
+  // 3. If key itself is a speaking string (contains letters or non-digits)
+  if (key && isNaN(key)) return key;
+
+  return key ? `WinTool-Liste ${key}` : 'Werkzeugliste';
+}
 let cachedDashboard = null;
 let cachedStandardization = null;
 let cachedDemand = null;
@@ -331,6 +374,7 @@ async function loadToolListsCache() {
     'SELECT Nr, Ident, NCP, Descript, MachineNr FROM [WTDATA].[dbo].[ToolLists]'
   );
   cachedToolLists = result.recordset;
+  updateListIdentMap();
   systemState.progress = `1. WinTool: ${cachedToolLists.length} Werkzeuglisten geladen.`;
   console.log(`Successfully cached ${cachedToolLists.length} ToolLists.`);
 }
@@ -2801,11 +2845,14 @@ function sequenceStepsMIP(stepsList, initialMagazine, magazineSize, listToToolsM
   return bestSequence || stepsList;
 }
 
-function findOptimalVictim(candidates, remainingSteps, listToToolsMap, lastUsedIndex = {}) {
-  let bestVictim = candidates[0];
+function findOptimalVictim(candidates, remainingSteps, listToToolsMap, lastUsedIndex = {}, protectedTools = []) {
+  // Exclude protected tools (e.g. static park tools) from candidates
+  const eligible = candidates.filter(cand => !protectedTools.includes(cand));
+  const pool = eligible.length > 0 ? eligible : candidates;
+  let bestVictim = pool[0];
   let furthestIndex = -1;
 
-  for (let cand of candidates) {
+  for (let cand of pool) {
     let nextUseIndex = Infinity;
     // Find the first step in the future where the candidate is needed
     for (let i = 0; i < remainingSteps.length; i++) {
@@ -2830,6 +2877,30 @@ function findOptimalVictim(candidates, remainingSteps, listToToolsMap, lastUsedI
   }
 
   return bestVictim;
+}
+
+function getDeliveryUrgencyPenalty(step, now = new Date()) {
+  const dateStr = step.DeliveryDate || step.deliveryDate || step.StartDate || step.startDate;
+  if (!dateStr) return 0;
+  
+  const dDate = new Date(dateStr);
+  if (isNaN(dDate.getTime())) return 0;
+
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const stepDateStart = new Date(dDate.getFullYear(), dDate.getMonth(), dDate.getDate()).getTime();
+  
+  const diffDays = (stepDateStart - todayStart) / (1000 * 60 * 60 * 24);
+  
+  if (diffDays < 0) {
+    // Overdue job: massive negative offset so candidate selector picks it first (minScore)
+    return -100.0 + (diffDays * 10.0);
+  } else if (diffDays <= 2) {
+    // Imminent job (0-2 days remaining)
+    return -20.0 + (diffDays * 5.0);
+  } else {
+    // Future job: slight penalty
+    return Math.min(50.0, diffDays * 0.5);
+  }
 }
 
 function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMap, optimizeFixture = false, fixtureWeight = 1.5) {
@@ -2879,15 +2950,32 @@ function evaluateSequence(sequence, initialMagazine, magazineSize, listToToolsMa
   });
 
   let penalty = 0;
+  let deliveryLatenessPenalty = 0;
+  const nowTime = new Date().getTime();
   const N = sequence.length;
+
   sequence.forEach((s, idx) => {
     const t = new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime();
     const norm = (t - minTime) / timeRange;
     penalty += (N - 1 - idx) * norm;
+
+    const dDateStr = s.DeliveryDate || s.deliveryDate || s.StartDate || s.startDate;
+    if (dDateStr) {
+      const dTime = new Date(dDateStr).getTime();
+      if (!isNaN(dTime)) {
+        const diffDays = (dTime - nowTime) / (1000 * 60 * 60 * 24);
+        if (diffDays < 0) {
+          // Heavy penalty if overdue job is placed later in the sequence
+          deliveryLatenessPenalty += (idx + 1) * Math.abs(diffDays) * 50.0;
+        } else if (diffDays <= 2) {
+          deliveryLatenessPenalty += (idx + 1) * 5.0;
+        }
+      }
+    }
   });
 
   const scaledPenalty = N > 1 ? (penalty / (N * N)) * 0.45 : 0;
-  return changes + scaledPenalty + (optimizeFixture ? fixtureChanges * fixtureWeight : 0) + articleChanges * 2.0;
+  return changes + scaledPenalty + deliveryLatenessPenalty + (optimizeFixture ? fixtureChanges * fixtureWeight : 0) + articleChanges * 2.0;
 }
 
 function getFremdleistungType(desc) {
@@ -3079,7 +3167,7 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
         const tools = listToToolsMap[step.MatchedListNr] || [];
         const misses = tools.filter(tNr => !testMag.includes(tNr));
         
-        let score = misses.length;
+        let score = misses.length + getDeliveryUrgencyPenalty(step);
         if (optimizeFixture && lastFixture !== null && step.fixture !== null && step.fixture !== lastFixture) {
           score += fixtureWeight;
         }
@@ -3091,8 +3179,8 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
           minScore = score;
           bestIdx = i;
         } else if (score === minScore && bestIdx !== -1) {
-          const dateCurrent = new Date(step.StartDate || step.DeliveryDate || '9999-12-31').getTime();
-          const dateBest = new Date(remaining[bestIdx].StartDate || remaining[bestIdx].DeliveryDate || '9999-12-31').getTime();
+          const dateCurrent = new Date(step.DeliveryDate || step.StartDate || '9999-12-31').getTime();
+          const dateBest = new Date(remaining[bestIdx].DeliveryDate || remaining[bestIdx].StartDate || '9999-12-31').getTime();
           if (dateCurrent < dateBest) {
             bestIdx = i;
           }
@@ -3151,7 +3239,7 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
         const tools = listToToolsMap[step.MatchedListNr] || [];
         const misses = tools.filter(tNr => !testMag.includes(tNr));
         
-        let score = misses.length;
+        let score = misses.length + getDeliveryUrgencyPenalty(step);
         if (optimizeFixture && lastFixture !== null && step.fixture !== null && step.fixture !== lastFixture) {
           score += fixtureWeight;
         }
@@ -3163,8 +3251,8 @@ function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap,
           minScore = score;
           bestIdx = i;
         } else if (score === minScore && bestIdx !== -1) {
-          const dateCurrent = new Date(step.StartDate || step.DeliveryDate || '9999-12-31').getTime();
-          const dateBest = new Date(remaining[bestIdx].StartDate || remaining[bestIdx].DeliveryDate || '9999-12-31').getTime();
+          const dateCurrent = new Date(step.DeliveryDate || step.StartDate || '9999-12-31').getTime();
+          const dateBest = new Date(remaining[bestIdx].DeliveryDate || remaining[bestIdx].StartDate || '9999-12-31').getTime();
           if (dateCurrent < dateBest) {
             bestIdx = i;
           }
@@ -5139,6 +5227,8 @@ const useD4Plan = useD4PlanParam === 'true';
                 currentMachines: (toolMachineMap || {})[tNr] || []
               };
             }),
+            unloadLists: [s.MatchedListNr || s.toolListNr || s.NCProgram || s.ContractNumber].filter(Boolean),
+            unloadListNames: s.MatchedListNr || s.toolListNr || s.NCProgram || (s.ContractNumber ? `Liste ${s.ContractNumber}` : 'Werkzeugliste'),
             directMisses: tools.filter(tNr => !((machineMagazines[mName] && machineMagazines[mName].magazine) || []).includes(tNr)).map(tNr => {
               const details = toolsDetails[tNr];
               return {
@@ -6040,8 +6130,29 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
   const programResult = await poolTL.request()
     .input('machineId', sql.Int, machine.Id)
     .query('SELECT Id, ProgramName FROM MachineToProgram WHERE Machine = @machineId');
+
+  // Extract static park tools from programs containing 'park' in ProgramName
+  const parkProgramIds = programResult.recordset
+    .filter(p => (p.ProgramName || '').toLowerCase().includes('park'))
+    .map(p => p.Id);
+
+  let staticParkToolNrs = [];
+  if (parkProgramIds.length > 0) {
+    const parkToolsRes = await poolTL.request()
+      .query(`SELECT ToolName FROM ProgramToTool WHERE MachineToProgramId IN (${parkProgramIds.join(',')})`);
+    parkToolsRes.recordset.forEach(t => {
+      const nameStr = t.ToolName || '';
+      const idx = nameStr.lastIndexOf('-');
+      if (idx !== -1) {
+        const nr = parseInt(nameStr.substring(idx + 1), 10);
+        if (!isNaN(nr) && !staticParkToolNrs.includes(nr)) {
+          staticParkToolNrs.push(nr);
+        }
+      }
+    });
+  }
     
-  // Determine which programs are active (not unloaded)
+  // Determine which programs are active (not unloaded). Park programs can NEVER be unloaded.
   let activePrograms = programResult.recordset;
   
   // Parse unloaded program IDs
@@ -6050,9 +6161,13 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
     unloadIds = unloadPrograms.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
   }
   
-  // Filter out unloaded programs
+  // Filter out unloaded programs (EXCEPT park programs which are static)
   if (unloadIds.length > 0) {
-    activePrograms = activePrograms.filter(p => !unloadIds.includes(parseInt(p.Id, 10)));
+    activePrograms = activePrograms.filter(p => {
+      const isPark = (p.ProgramName || '').toLowerCase().includes('park');
+      if (isPark) return true;
+      return !unloadIds.includes(parseInt(p.Id, 10));
+    });
   }
   
   // Fetch tools for all active programs
@@ -6138,14 +6253,30 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
       simLastUsedIndex[tNr] = -1;
     });
 
+    const isChiron = name.toUpperCase().includes('CHIRON') || mapping.machineIds.includes(21);
+
     // Simulate loading preloaded programs before sequence optimization
     preloadedToolNrs.forEach(tNr => {
       if (!currentSimMagazine.includes(tNr)) {
         while (currentSimMagazine.length >= magazineSize) {
           const candidates = currentSimMagazine.filter(mNr => !preloadedToolNrs.includes(mNr));
           if (candidates.length === 0) break;
-          const victim = findOptimalVictim(candidates, remainingSteps, listToToolsMap, simLastUsedIndex);
-          currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== victim);
+          const victim = findOptimalVictim(candidates, remainingSteps, listToToolsMap, simLastUsedIndex, staticParkToolNrs);
+          if (isChiron) {
+            const victimListNr = Object.keys(listToToolsMap).find(lNr => (listToToolsMap[lNr] || []).includes(victim));
+            if (victimListNr) {
+              const listTools = listToToolsMap[victimListNr] || [];
+              listTools.forEach(t => {
+                if (!staticParkToolNrs.includes(t) && !preloadedToolNrs.includes(t)) {
+                  currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== t);
+                }
+              });
+            } else {
+              currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== victim);
+            }
+          } else {
+            currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== victim);
+          }
         }
         currentSimMagazine.push(tNr);
       }
@@ -6187,8 +6318,22 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
           const candidates = currentSimMagazine.filter(mNr => !stepToolNrs.includes(mNr) && !preloadedToolNrs.includes(mNr));
           if (candidates.length === 0) break;
           
-          const victim = findOptimalVictim(candidates, remainingSteps, listToToolsMap, simLastUsedIndex);
-          currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== victim);
+          const victim = findOptimalVictim(candidates, remainingSteps, listToToolsMap, simLastUsedIndex, staticParkToolNrs);
+          if (isChiron) {
+            const victimListNr = Object.keys(listToToolsMap).find(lNr => (listToToolsMap[lNr] || []).includes(victim));
+            if (victimListNr) {
+              const listTools = listToToolsMap[victimListNr] || [];
+              listTools.forEach(t => {
+                if (!staticParkToolNrs.includes(t) && !stepToolNrs.includes(t) && !preloadedToolNrs.includes(t)) {
+                  currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== t);
+                }
+              });
+            } else {
+              currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== victim);
+            }
+          } else {
+            currentSimMagazine = currentSimMagazine.filter(mNr => mNr !== victim);
+          }
         }
         currentSimMagazine.push(tNr);
       });
@@ -6210,6 +6355,8 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
     lastUsedIndex[tNr] = -1;
   });
 
+  const isChiron = name.toUpperCase().includes('CHIRON') || mapping.machineIds.includes(21);
+
   // Simulate loading of preloaded programs BEFORE the timeline starts
   const preloadedUnloads = [];
   preloadedToolNrs.forEach(tNr => {
@@ -6218,8 +6365,22 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
         const candidates = virtualMagazine.filter(mNr => !preloadedToolNrs.includes(mNr));
         if (candidates.length === 0) break;
         const remaining = machineSteps;
-        const victim = findOptimalVictim(candidates, remaining, listToToolsMap, lastUsedIndex);
-        virtualMagazine = virtualMagazine.filter(mNr => mNr !== victim);
+        const victim = findOptimalVictim(candidates, remaining, listToToolsMap, lastUsedIndex, staticParkToolNrs);
+        if (isChiron) {
+          const victimListNr = Object.keys(listToToolsMap).find(lNr => (listToToolsMap[lNr] || []).includes(victim));
+          if (victimListNr) {
+            const listTools = listToToolsMap[victimListNr] || [];
+            listTools.forEach(t => {
+              if (!staticParkToolNrs.includes(t) && !preloadedToolNrs.includes(t)) {
+                virtualMagazine = virtualMagazine.filter(mNr => mNr !== t);
+              }
+            });
+          } else {
+            virtualMagazine = virtualMagazine.filter(mNr => mNr !== victim);
+          }
+        } else {
+          virtualMagazine = virtualMagazine.filter(mNr => mNr !== victim);
+        }
         preloadedUnloads.push(victim);
       }
       virtualMagazine.push(tNr);
@@ -6272,10 +6433,23 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
           }
           
           const remaining = machineSteps.slice(idx + 1);
-          const victim = findOptimalVictim(candidates, remaining, listToToolsMap, lastUsedIndex);
+          const victim = findOptimalVictim(candidates, remaining, listToToolsMap, lastUsedIndex, staticParkToolNrs);
           
-          // Remove victim
-          virtualMagazine = virtualMagazine.filter(mNr => mNr !== victim);
+          if (isChiron) {
+            const victimListNr = Object.keys(listToToolsMap).find(lNr => (listToToolsMap[lNr] || []).includes(victim));
+            if (victimListNr) {
+              const listTools = listToToolsMap[victimListNr] || [];
+              listTools.forEach(t => {
+                if (!staticParkToolNrs.includes(t) && !stepToolNrs.includes(t) && !preloadedToolNrs.includes(t)) {
+                  virtualMagazine = virtualMagazine.filter(mNr => mNr !== t);
+                }
+              });
+            } else {
+              virtualMagazine = virtualMagazine.filter(mNr => mNr !== victim);
+            }
+          } else {
+            virtualMagazine = virtualMagazine.filter(mNr => mNr !== victim);
+          }
         }
         
         // Now add the new tool
@@ -6288,6 +6462,17 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
       });
     }
     
+    // Determine unload tools for completed step (for Chiron: completed order's entire list except park tools & future needed tools)
+    const completedListNr = resolveSpeakingListName(step.MatchedListNr, step);
+    const completedTools = listToToolsMap[completedListNr] || stepToolNrs;
+    const futureNeededSet = new Set();
+    const remainingFutureSteps = machineSteps.slice(idx + 1);
+    remainingFutureSteps.forEach(rem => (listToToolsMap[rem.MatchedListNr] || []).forEach(t => futureNeededSet.add(t)));
+    
+    const stepUnloads = isChiron 
+      ? completedTools.filter(tNr => !staticParkToolNrs.includes(tNr) && !futureNeededSet.has(tNr))
+      : (step.unloadTools || []).map(t => (typeof t === 'object' ? t.nr : t)).filter(tNr => !staticParkToolNrs.includes(tNr));
+
     simulatedTimeline.push({
       stepId: step.StepId,
       contractNumber: step.ContractNumber || 'N/A',
@@ -6301,6 +6486,8 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
       hitsCount: hits.length,
       missesCount: misses.length,
       misses: misses.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt' }),
+      unloadListNames: completedListNr || 'Werkzeugliste',
+      unloadTools: stepUnloads.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt' }),
       magazineTools: virtualMagazine.map(tNr => toolsDetails[tNr] || { nr: tNr, desc: 'Unbekannt', keyword: 'N/A' }),
       occupiedSlots: occupiedSlots,
       isFeasible: isFeasible,
@@ -6361,7 +6548,12 @@ app.get('/api/inventory/machine/:name/programs', async (req, res) => {
         ORDER BY ProgramName
       `);
       
-    res.json(programsResult.recordset);
+    const programs = programsResult.recordset.map(p => ({
+      ...p,
+      isPark: (p.ProgramName || '').toLowerCase().includes('park')
+    }));
+      
+    res.json(programs);
   } catch (err) {
     console.error('Error fetching machine programs:', err);
     res.status(500).json({ error: err.message });

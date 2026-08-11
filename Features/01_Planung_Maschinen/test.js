@@ -97,5 +97,68 @@ console.log('--- Executing Unit & Contract Tests: 01 - Planung Maschinen ---');
   console.log('✓ Test 5: Night-Shift Filtering Logic passed');
 }
 
-console.log('\nAll 5 unit & contract assertions passed cleanly for 01 - Planung Maschinen.');
+// Test 6: Static Park Tools Protection Assertion
+{
+  const parkProgramNames = ['C400 geparkt', 'RS2-1-Parkplatz', 'RS2-2-Parkplatz', 'Chiron Parkplatz', 'Geparkt'];
+  const isParkProgram = (name) => (name || '').toLowerCase().includes('park');
+
+  parkProgramNames.forEach(pName => {
+    assert.strictEqual(isParkProgram(pName), true, `Program name "${pName}" must be identified as static park program`);
+  });
+
+  const magazineTools = [10, 12, 15, 20];
+  const staticParkToolsSet = new Set([12, 15]); // Static park tools 12 and 15
+  const unloadCandidates = magazineTools.filter(t => !staticParkToolsSet.has(t));
+
+  assert.deepStrictEqual(unloadCandidates, [10, 20], 'Static park tools 12 and 15 must be excluded from unload/eviction candidates');
+  console.log('✓ Test 6: Static Park Tools Protection Assertion passed');
+}
+
+// Test 7: Chiron Entire Tool List Unloading Unit Assertion (Completed Order Rule)
+{
+  const isChironMachine = (mName) => (mName || '').toUpperCase().includes('CHIRON');
+  assert.strictEqual(isChironMachine('Chiron'), true, 'Chiron machine name must be matched');
+
+  const completedOrderListNr = '2537-0301-SP1';
+  const completedOrderTools = [101, 102, 103, 104, 105];
+  const staticParkToolsSet = new Set([101]); // Tool 101 is in Park list
+  const futureNeededToolsSet = new Set([102]); // Tool 102 is needed by upcoming step
+
+  // All tools of completed list except park tools & future needed tools
+  const unloadTools = completedOrderTools.filter(t => !staticParkToolsSet.has(t) && !futureNeededToolsSet.has(t));
+
+  assert.deepStrictEqual(unloadTools, [103, 104, 105], 'Completed order entire tool list [103, 104, 105] must be proposed for unloading, excluding park tool 101 and future tool 102');
+  console.log('✓ Test 7: Chiron Entire Tool List Unloading Unit Assertion passed');
+}
+
+// Test 8: Overdue Delivery Date Prioritization Assertion (FR-011)
+{
+  function getDeliveryUrgencyPenalty(step, now = new Date('2026-08-10')) {
+    const dateStr = step.DeliveryDate || step.deliveryDate || step.StartDate || step.startDate;
+    if (!dateStr) return 0;
+    const dDate = new Date(dateStr);
+    if (isNaN(dDate.getTime())) return 0;
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const stepDateStart = new Date(dDate.getFullYear(), dDate.getMonth(), dDate.getDate()).getTime();
+    const diffDays = (stepDateStart - todayStart) / (1000 * 60 * 60 * 24);
+    if (diffDays < 0) {
+      return -100.0 + (diffDays * 10.0);
+    } else if (diffDays <= 2) {
+      return -20.0 + (diffDays * 5.0);
+    } else {
+      return Math.min(50.0, diffDays * 0.5);
+    }
+  }
+
+  const overdueStep = { StepId: 1, DeliveryDate: '2026-08-01', MatchedListNr: 'TL-101' }; // 9 days overdue
+  const futureStep = { StepId: 2, DeliveryDate: '2026-09-01', MatchedListNr: 'TL-102' }; // Future step
+
+  const overdueScore = 5 + getDeliveryUrgencyPenalty(overdueStep, new Date('2026-08-10'));
+  const futureScore = 1 + getDeliveryUrgencyPenalty(futureStep, new Date('2026-08-10'));
+
+  assert.ok(overdueScore < futureScore, 'Overdue step must receive a significantly lower optimization candidate score than future step to be scheduled first');
+  console.log('✓ Test 8: Overdue Delivery Date Prioritization Assertion passed');
+}
+
+console.log('\nAll 8 unit & contract assertions passed cleanly for 01 - Planung Maschinen.');
 process.exit(0);

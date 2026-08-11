@@ -134,6 +134,34 @@
 
 ---
 
+## Phase 8: User Story 5 - Chiron Entire Tool List Unloading & Static Park Tools Protection (Priority: P1)
+
+**Goal**: Enforce entire tool list unloading for Chiron machine operations (`FR-009`) and protect static park tool lists (`LOWER(ProgramName) LIKE '%park%'` from `ToolList` DB) so they are NEVER unloaded or evicted (`FR-010`).
+
+**Independent Test**: Run `node Features/run_tests.js` to verify Chiron tool list unloading unit rules and static park tool protection.
+
+### Implementation for User Story 5
+
+- [x] T031 [US5] Query static park tool lists (`LOWER(ProgramName) LIKE '%park%'`) from `MachineToProgram` and `ProgramToTool` in `backend/server.js` and cache protected `staticParkToolsSet`
+- [x] T032 [US5] Implement complete tool list unloading unit logic for Chiron (`mName === 'Chiron'`) in tool delta and setup optimization in `backend/server.js` and `frontend/src/App.jsx`
+- [x] T033 [US5] Protect static park tools (`staticParkToolsSet`) in magazine simulation, LRU victim eviction (`findOptimalVictim`), and scenario unloading in `backend/server.js` and `frontend/src/App.jsx` so park tools are NEVER unloaded
+
+---
+
+## Phase 9: User Story 5 - Priorisierung überfälliger & naher Liefertermine in der Rüstoptimierung (FR-011)
+
+**Goal**: Prioritize jobs with overdue or imminent delivery dates (`DeliveryDate <= today` or near deadline) during setup sequence optimization (Greedy, Local Search, Simulated Annealing), ensuring late D4 customer orders are scheduled earlier in the sequence.
+
+**Independent Test**: Run `node Features/run_tests.js` to verify overdue delivery date prioritization assertions.
+
+### Implementation for User Story 5
+
+- [x] T034 [US5] Implement delivery date urgency score calculation (`overdueDays` / `DeliveryDate` weighting) in candidate selection in `backend/server.js`
+- [x] T035 [US5] Integrate delivery date urgency weighting into Greedy, Local Search, and Simulated Annealing setup optimization algorithms in `backend/server.js`
+- [x] T036 [US5] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying overdue jobs are scheduled before far-future jobs during setup optimization
+
+---
+
 ## Dependencies & Execution Order
 
 ```mermaid

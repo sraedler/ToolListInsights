@@ -2380,7 +2380,8 @@ function DemandTab({ startDate, endDate }) {
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                         {machinePrograms.map(prog => {
-                          const isUnloaded = unloadedProgramIds.includes(prog.Id);
+                          const isPark = prog.isPark || (prog.ProgramName || '').toLowerCase().includes('park');
+                          const isUnloaded = !isPark && unloadedProgramIds.includes(prog.Id);
                           return (
                             <label
                               key={prog.Id}
@@ -2389,31 +2390,34 @@ function DemandTab({ startDate, endDate }) {
                                 alignItems: 'center',
                                 gap: '0.5rem',
                                 fontSize: '0.8rem',
-                                color: isUnloaded ? '#f87171' : '#cbd5e1',
-                                cursor: 'pointer',
-                                background: isUnloaded ? 'rgba(239, 68, 68, 0.08)' : 'rgba(255,255,255,0.01)',
+                                color: isPark ? '#10b981' : (isUnloaded ? '#f87171' : '#cbd5e1'),
+                                cursor: isPark ? 'not-allowed' : 'pointer',
+                                background: isPark ? 'rgba(16, 185, 129, 0.08)' : (isUnloaded ? 'rgba(239, 68, 68, 0.08)' : 'rgba(255,255,255,0.01)'),
                                 padding: '0.4rem 0.6rem',
                                 borderRadius: '8px',
-                                border: isUnloaded ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid var(--border-dim)',
+                                border: isPark ? '1px solid rgba(16, 185, 129, 0.3)' : (isUnloaded ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid var(--border-dim)'),
+                                opacity: isPark ? 0.9 : 1,
                                 transition: 'background 0.2s, border-color 0.2s'
                               }}
                             >
                               <input
                                 type="checkbox"
-                                checked={isUnloaded}
+                                disabled={isPark}
+                                checked={!isPark && isUnloaded}
                                 onChange={() => {
+                                  if (isPark) return;
                                   if (isUnloaded) {
                                     setUnloadedProgramIds(prev => prev.filter(id => id !== prog.Id));
                                   } else {
                                     setUnloadedProgramIds(prev => [...prev, prog.Id]);
                                   }
                                 }}
-                                style={{ cursor: 'pointer' }}
+                                style={{ cursor: isPark ? 'not-allowed' : 'pointer' }}
                               />
                               <div style={{ display: 'flex', flexDirection: 'column' }}>
                                 <span style={{ fontWeight: 600 }}>{prog.ProgramName}</span>
-                                <span style={{ fontSize: '0.65rem', color: isUnloaded ? '#f87171' : '#64748b' }}>
-                                  Status: {isUnloaded ? 'Wird entladen (aus Ist-Bestand abgezogen)' : 'Geladen (Teil des Ist-Bestands)'}
+                                <span style={{ fontSize: '0.65rem', color: isPark ? '#10b981' : (isUnloaded ? '#f87171' : '#64748b'), fontWeight: isPark ? 600 : 400 }}>
+                                  {isPark ? '🔒 Statisch im Magazin (Park-Werkzeugliste — verbleibt dauerhaft in Maschine)' : (isUnloaded ? 'Wird entladen (aus Ist-Bestand abgezogen)' : 'Geladen (Teil des Ist-Bestands)')}
                                 </span>
                               </div>
                             </label>
@@ -8820,7 +8824,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                         Einwechseln: {step.loadTools.map(t => `T${t.nr}`).join(', ') || 'Keine'}
                                       </div>
                                       <div style={{ fontSize: '0.58rem', color: '#8b9bb4' }}>
-                                        Auswechseln: {step.unloadTools.map(t => `T${t.nr}`).join(', ') || 'Keine'}
+                                        Auswechseln: {(selectedMachine === 'Chiron' || (step.machineName || '').includes('Chiron')) ? (step.unloadListNames ? `Werkzeugliste ${step.unloadListNames} (${step.unloadTools.length} Werkzeuge)` : 'Keine') : (step.unloadTools.map(t => `T${t.nr}`).join(', ') || 'Keine')}
                                       </div>
                                     </div>
                                   )}
@@ -9694,61 +9698,170 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                     </div>
                     
                     {/* Einwechseln */}
-                    <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                      <span style={{ color: '#38bdf8' }}>Einwechseln (Rein)</span>
-                      <span style={{ fontSize: '0.7rem', background: 'rgba(56, 189, 248, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#38bdf8', fontWeight: 600 }}>
-                        +{activeModalStep.loadTools ? activeModalStep.loadTools.length : 0}
-                      </span>
-                    </div>
-                    {activeModalStep.loadTools && activeModalStep.loadTools.length > 0 ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '0.25rem', marginBottom: '1rem' }}>
-                        {activeModalStep.loadTools.map((t, tIdx) => (
-                          <div key={tIdx} style={{ 
-                            display: 'flex', 
-                            flexDirection: 'column', 
-                            gap: '0.15rem', 
-                            background: 'rgba(56, 189, 248, 0.03)', 
-                            border: '1px solid rgba(56, 189, 248, 0.12)', 
-                            padding: '0.45rem 0.75rem', 
-                            borderRadius: '6px', 
-                            fontSize: '0.8rem' 
-                          }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <span style={{ color: '#fff', fontWeight: 700 }}>T{t.nr}</span>
-                              {t.dia && t.dia !== '0' && t.dia !== 0 ? <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span> : null}
-                            </div>
-                            <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
-                              {t.desc}
-                            </div>
-                            {t.currentMachines && t.currentMachines.length > 0 && (
-                              <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.15rem' }}>
-                                <span style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: 500 }}>Aktiv in:</span>
-                                {t.currentMachines.map(m => (
-                                  <span key={m} style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '0.05rem 0.25rem', borderRadius: '4px', fontWeight: 600 }}>
-                                    {m}
-                                  </span>
+                    {(() => {
+                      const loadListName = (() => {
+                        const candidates = [
+                          activeModalStep.MatchedListIdent,
+                          activeModalStep.matchedListIdent,
+                          activeModalStep.winToolName,
+                          activeModalStep.ncProgram,
+                          activeModalStep.NCProgram,
+                          activeModalStep.programName,
+                          activeModalStep.toolListNr,
+                          activeModalStep.MatchedListNr,
+                          activeModalStep.matchedListNr,
+                          activeModalStep.contractNumber,
+                          activeModalStep.ContractNumber
+                        ];
+                        for (const cand of candidates) {
+                          if (cand && typeof cand === 'string') {
+                            const trimmed = cand.trim();
+                            if (trimmed && !trimmed.includes(',') && isNaN(trimmed)) {
+                              return trimmed;
+                            }
+                          }
+                        }
+                        if (activeModalStep.contractNumber) return `Auftrag ${activeModalStep.contractNumber}`;
+                        if (activeModalStep.ContractNumber) return `Auftrag ${activeModalStep.ContractNumber}`;
+                        return activeModalStep.MatchedListNr ? `WinTool-Liste ${activeModalStep.MatchedListNr}` : 'Werkzeugliste';
+                      })();
+                      const loadCount = activeModalStep.loadTools ? activeModalStep.loadTools.length : 0;
+                      return (
+                        <>
+                          <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ color: '#38bdf8' }}>Einwechseln (Rein)</span>
+                            <span style={{ fontSize: '0.7rem', background: 'rgba(56, 189, 248, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#38bdf8', fontWeight: 600 }}>
+                              +{loadCount}
+                            </span>
+                          </div>
+                          {loadCount > 0 ? (
+                            <>
+                              <div style={{
+                                background: 'rgba(56, 189, 248, 0.08)',
+                                border: '1px solid rgba(56, 189, 248, 0.3)',
+                                borderRadius: '6px',
+                                padding: '0.45rem 0.65rem',
+                                marginBottom: '0.5rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.15rem'
+                              }}>
+                                <div style={{ fontSize: '0.78rem', color: '#fff', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  <span>📥 WinTool-Liste:</span>
+                                  <span style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>{loadListName}</span>
+                                  <span>einwechseln (+{loadCount} Werkzeuge)</span>
+                                </div>
+                                <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
+                                  Benötigte Werkzeuge der Liste abzüglich bereits im Magazin vorhandener Werkzeuge.
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '0.25rem', marginBottom: '1rem' }}>
+                                {activeModalStep.loadTools.map((t, tIdx) => (
+                                  <div key={tIdx} style={{ 
+                                    display: 'flex', 
+                                    flexDirection: 'column', 
+                                    gap: '0.15rem', 
+                                    background: 'rgba(56, 189, 248, 0.03)', 
+                                    border: '1px solid rgba(56, 189, 248, 0.12)', 
+                                    padding: '0.45rem 0.75rem', 
+                                    borderRadius: '6px', 
+                                    fontSize: '0.8rem' 
+                                  }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                      <span style={{ color: '#fff', fontWeight: 700 }}>T{t.nr}</span>
+                                      {t.dia && t.dia !== '0' && t.dia !== 0 ? <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 600 }}>Ø {t.dia} mm</span> : null}
+                                    </div>
+                                    <div style={{ color: '#cbd5e1', fontSize: '0.75rem', fontWeight: 500 }} title={t.desc}>
+                                      {t.desc}
+                                    </div>
+                                    {t.currentMachines && t.currentMachines.length > 0 && (
+                                      <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.15rem' }}>
+                                        <span style={{ color: '#94a3b8', fontSize: '0.68rem', fontWeight: 500 }}>Aktiv in:</span>
+                                        {t.currentMachines.map(m => (
+                                          <span key={m} style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '0.05rem 0.25rem', borderRadius: '4px', fontWeight: 600 }}>
+                                            {m}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <div style={{ fontSize: '0.68rem', color: '#38bdf8', fontWeight: 600, marginTop: '0.25rem' }}>
+                                      ℹ {getToolLifetimeInfo(t, activeModalStep, 'rein')}
+                                    </div>
+                                  </div>
                                 ))}
                               </div>
-                            )}
-                            <div style={{ fontSize: '0.68rem', color: '#38bdf8', fontWeight: 600, marginTop: '0.25rem' }}>
-                              ℹ {getToolLifetimeInfo(t, activeModalStep, 'rein')}
+                            </>
+                          ) : (
+                            <div style={{ color: '#10b981', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500, marginBottom: '1rem' }}>
+                              ✓ Keine Werkzeuge einwechseln (Alle Werkzeuge der WinTool-Liste {loadListName} sind bereits im Magazin)
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ color: '#10b981', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '0.6rem', borderRadius: '8px', textAlign: 'center', fontWeight: 500, marginBottom: '1rem' }}>
-                        ✓ Keine Werkzeuge einwechseln
-                      </div>
-                    )}
+                          )}
+                        </>
+                      );
+                    })()}
 
                     {/* Auswechseln */}
-                    <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.75rem' }}>
-                      <span style={{ color: '#f87171' }}>Auswechseln (Raus)</span>
-                      <span style={{ fontSize: '0.7rem', background: 'rgba(239, 68, 68, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#f87171', fontWeight: 600 }}>
-                        -{activeModalStep.unloadTools ? activeModalStep.unloadTools.length : 0}
-                      </span>
-                    </div>
+                    {(() => {
+                      const isChironModal = (activeModalStep.machineName || activeModalStep.machine || selectedMachine || '').toUpperCase().includes('CHIRON');
+                      const cleanListName = (() => {
+                        const candidates = [
+                          activeModalStep.MatchedListIdent,
+                          activeModalStep.matchedListIdent,
+                          activeModalStep.unloadListNames,
+                          activeModalStep.ncProgram,
+                          activeModalStep.NCProgram,
+                          activeModalStep.programName,
+                          activeModalStep.toolListNr,
+                          activeModalStep.MatchedListNr,
+                          activeModalStep.matchedListNr,
+                          activeModalStep.contractNumber,
+                          activeModalStep.ContractNumber
+                        ];
+                        for (const cand of candidates) {
+                          if (cand && typeof cand === 'string') {
+                            const trimmed = cand.trim();
+                            if (trimmed && !trimmed.includes(',') && isNaN(trimmed)) {
+                              return trimmed;
+                            }
+                          }
+                        }
+                        if (activeModalStep.contractNumber) return `Auftrag ${activeModalStep.contractNumber}`;
+                        if (activeModalStep.ContractNumber) return `Auftrag ${activeModalStep.ContractNumber}`;
+                        return activeModalStep.MatchedListNr ? `WinTool-Liste ${activeModalStep.MatchedListNr}` : 'Werkzeugliste';
+                      })();
+                      const unloadCount = activeModalStep.unloadTools ? activeModalStep.unloadTools.length : 0;
+                      return (
+                        <>
+                          <div style={{ fontSize: '0.8rem', color: '#fff', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.75rem' }}>
+                            <span style={{ color: '#f87171' }}>Auswechseln (Raus)</span>
+                            <span style={{ fontSize: '0.7rem', background: 'rgba(239, 68, 68, 0.1)', padding: '0.05rem 0.35rem', borderRadius: '4px', color: '#f87171', fontWeight: 600 }}>
+                              -{unloadCount}
+                            </span>
+                          </div>
+                          {isChironModal && (
+                            <div style={{
+                              background: 'rgba(239, 68, 68, 0.08)',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              borderRadius: '6px',
+                              padding: '0.45rem 0.65rem',
+                              marginBottom: '0.5rem',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.15rem'
+                            }}>
+                              <div style={{ fontSize: '0.78rem', color: '#fff', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span>📦 Chiron WinTool-Liste:</span>
+                                <span style={{ color: '#fca5a5', fontFamily: 'monospace' }}>{cleanListName}</span>
+                                <span>entladen (-{unloadCount} Werkzeuge)</span>
+                              </div>
+                              <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
+                                Entladung nach Auftragsabschluss (exkl. Park- & Folgewerkzeuge).
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                     {activeModalStep.unloadTools && activeModalStep.unloadTools.length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '150px', overflowY: 'auto', paddingRight: '0.25rem' }}>
                         {[...activeModalStep.unloadTools]

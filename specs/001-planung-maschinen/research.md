@@ -1,39 +1,53 @@
-# Research & Technical Decisions: 01 - Planung Maschinen
+## Decision 1: Entire Tool List Unloading Unit for Completed Chiron Orders
 
-## Technical Stack & Architectural Decisions
+### Problem Statement
+On Chiron machining centers, physical tool management requires that when an order (e.g. `2537-0301-SP1`) finishes execution according to schedule, its **entire Tool List** (`Werkzeugliste` / `ZzIdent`) is proposed for unloading as a complete unit.
 
-### 1. Dual-Driver MS SQL Server Architecture (`backend/db.js`)
-- **Decision**: Hybrid connection pool builder using `msnodesqlv8` on Windows and `mssql` (`tedious`) on Linux/Docker.
-- **Rationale**: 
-  - On Windows development/on-prem environments, `msnodesqlv8` allows seamless Windows Trusted Authentication via ODBC Driver 17 for SQL Server without plain-text domain credentials.
-  - On Linux containers (Docker), standard TCP/IP authentication via `tedious` prevents C++ compilation issues.
-- **Connection Pools Configured**:
-  - `D4`: Production ERP database (`tbe_Belp`, `tbe_Arbeitsplan`) on `192.168.100.5\D4`.
-  - `WTData`: WinTool database (`WinTool_Baugruppen`) on `192.168.100.8\cim4net`.
-  - `Toollist`: Auxiliary tool list database on `192.168.100.8\CIM4NET`.
+### Decision
+For Chiron machine operations (`mName === 'Chiron'` or `MachineId === 21`):
+1. When an order finishes, identify its tool list (`MatchedListNr` / `NCProgram`).
+2. Propose unloading ALL tools belonging to that completed Tool List, EXCEPT:
+   - Tools in any static `"park"` list (which remain locked in the machine).
+   - Tools needed by future/upcoming steps in the schedule.
+3. Show the completed order's Tool List Name clearly in `Auswechseln (Raus)` in the UI.
 
----
+### Rationale
+- Aligns ToolListInsights setup simulation with Chiron physical shop-floor procedures.
+- Prevents partial list pre-setting errors on Chiron machines.
 
-### 2. Frontend Framework & Component Design
-- **Decision**: React 19 SPA built with Vite 8, Recharts 3, and Lucide React.
-- **Rationale**:
-  - **React 19**: Ultra-fast component rendering with concurrent mode and minimal render overhead.
-  - **Vite 8**: Sub-second Hot Module Replacement (HMR) and optimized production bundling.
-  - **Recharts 3**: Declarative SVG charting for machine utilization load curves.
-  - **Theme System**: Dynamic Light/Dark mode toggling via scoped CSS variables (`[data-theme='dark']` / `[data-theme='light']`).
+### Alternatives Considered
+- **Universal tool list unloading across all machines**: Rejected because automated palleted centers (e.g. RS2_1, RS2_2, C40, C42) support individual tool retention in large magazines.
 
 ---
 
-### 3. Optimization Heuristics & In-Memory Caching
-- **Decision**: Express 5 backend with in-memory caching of ERP/WinTool data and dynamic heuristic optimization (`Greedy`, `Local Search`, `Simulated Annealing`).
-- **Rationale**:
-  - In-memory indexing of 1,000+ routing steps reduces database query overhead.
-  - Heuristic algorithms re-sequence jobs by tool list ID (`ZzIdent`) and fixture number (`fixture`), placing night-capable jobs over night shifts in < 50ms.
+## Decision 2: Permanent Protection for Static Park Tools (`LOWER(ProgramName) LIKE '%park%'`)
+
+### Problem Statement
+In the `ToolList` database, machine magazines contain permanent/static park tool lists (e.g. `C400 geparkt`, `RS2-1-Parkplatz`, `RS2-2-Parkplatz`, `Chiron Parkplatz`, `Geparkt`). Tools in these lists are physically fixed in the machine magazine and must NEVER be unloaded or evicted during setup changeovers or scenario configuration.
+
+### Decision
+1. Fetch all `MachineToProgram` records where `LOWER(ProgramName) LIKE '%park%'`.
+2. Extract all tool numbers mapped via `ProgramToTool` into a protected `staticParkToolsSet`.
+3. In `findOptimalVictim`, LRU magazine simulation, sequence optimization algorithms, and scenario unloading API endpoints, exclude `staticParkToolsSet` items from candidate victim lists so they are **permanently locked** in the machine magazine.
+
+### Rationale
+- Guarantees 100% alignment with physical machine magazine configurations in CIM4NET/ToolList DB.
+- Prevents setup optimization heuristics from attempting to unload static base tools.
 
 ---
 
-### 4. Overrides & DMS Proxy Integration
-- **Decision**: Persistent JSON file `backend/planning_overrides.json` for drag-and-drop manual overrides combined with Express proxy endpoints for d.velop DMS PDF drawings.
-- **Rationale**:
-  - Keeps ERP database read-only to eliminate risk of corrupting production ERP tables.
-  - Nginx reverse proxy routes `/api` calls safely without CORS issues.
+## Decision 3: Overdue and Imminent Delivery Date Urgency Weighting in Setup Sequence Optimization
+
+### Problem Statement
+When sequence optimization algorithms (Greedy, Local Search, Simulated Annealing) evaluate candidates purely based on tool list similarity (`MatchedListNr`) or fixture matching (`fixtureWeight`), overdue jobs (`DeliveryDate < today`) or jobs with imminent delivery deadlines could be pushed to the back of the queue.
+
+### Decision
+Incorporate delivery date urgency into sequence optimization candidate scoring:
+1. Compute `overdueDays` for each candidate step.
+2. For overdue steps (`DeliveryDate < today`), apply a heavy score reduction (favoring earlier placement) proportional to days overdue.
+3. For non-overdue steps, prioritize steps with nearer `DeliveryDate` over steps with far-future delivery dates.
+4. Ensure overdue customer orders are never delayed behind far-future jobs for minor setup savings.
+
+### Rationale
+- Protects shop-floor delivery commitments (D4 delivery dates).
+- Prevents setup optimization from causing delivery overruns.

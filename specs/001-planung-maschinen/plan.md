@@ -94,6 +94,33 @@ Dockerfile               # Backend Node.js container build
 
 ---
 
+## Technical Design: Chiron Completed Order Tool List Unloading (`FR-009`) & Static Park Tools (`FR-010`)
+
+1. **Chiron Completed Order Tool List Unloading (`FR-009`)**:
+   - Target Machine: `Chiron` (`mName === 'Chiron'` / `MachineId === 21`).
+   - Unloading Logic: When a job/order (e.g. `2537-0301-SP1`) finishes execution in the schedule, the system proposes unloading its **entire Tool List** (`MatchedListNr` / `NCProgram`) as a complete unit.
+   - Exclusion Exceptions:
+     a) Tools contained in any static `"park"` list (`staticParkToolsSet`) are NEVER unloaded.
+     b) Tools still required by upcoming/subsequent steps in the remaining schedule are retained in the machine.
+   - All remaining non-park tools of that completed order's tool list are proposed for unloading (`unloadTools` / `Auswechseln (Raus)`).
+
+2. **Static Park Tools Protection (`FR-010`)**:
+   - Target Database: `ToolList` database (`MachineToProgram` & `ProgramToTool` tables).
+   - Identification: Query all `MachineToProgram` records where `LOWER(ProgramName) LIKE '%park%'` (e.g., `C400 geparkt`, `RS2-1-Parkplatz`, `RS2-2-Parkplatz`, `Chiron Parkplatz`, `Geparkt`).
+   - Protection Strategy: Extract all tools belonging to these park tool lists into a protected `staticParkToolsSet`. During magazine simulation, LRU victim selection (`findOptimalVictim`), sequence optimization, or scenario unloading, tools in `staticParkToolsSet` are **permanently locked in the machine magazine and CANNOT be evicted or unloaded**.
+
+3. **Overdue & Imminent Delivery Date Prioritization in Setup Optimization (`FR-011`)**:
+   - Target Algorithms: Greedy, Local Search, Simulated Annealing setup sequence optimization routines in `backend/server.js`.
+   - Urgency Metric: For each job step, calculate delivery date delta relative to current date (`today`):
+     - `overdueDays = max(0, (today - DeliveryDate) / (1000 * 60 * 60 * 24))`.
+     - Overdue jobs (`DeliveryDate < today`) receive an explicit urgency priority boost, placing them at the front of candidate selection pools.
+     - Imminent jobs (`DeliveryDate` within 1-2 days) are prioritized over far-future jobs.
+   - Cost Balancing: In candidate step selection, the score combines:
+     `effectiveScore = (toolMisses * 10) - (overdueDays * 50) - (fixtureMatchBonus * 5)`.
+     This ensures overdue and near-term D4 dates are scheduled earlier without sacrificing necessary fixture matching.
+
+---
+
 ## Complexity Tracking
 
 *No constitution violations present.*

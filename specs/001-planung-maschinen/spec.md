@@ -64,6 +64,20 @@ As a machine operator, I want to click any job card to view routing details, BDE
 
 ---
 
+### User Story 5 - Priorisierung überfälliger & naher Liefertermine (Priority: P2)
+
+As a production planner, I want setup optimization algorithms (Greedy, Local Search, Simulated Annealing) to prioritize jobs with overdue or imminent delivery dates (`DeliveryDate` / D4 Termin), so that urgent or delayed customer orders are scheduled earlier, even if tool setup changeover optimization would otherwise group them later.
+
+**Why this priority**: Prevents production lateness and ensures critical/overdue D4 delivery dates take precedence over tool changeover minimization.
+
+**Independent Test**: Can be tested by running setup optimization on a job list where one job has an overdue `DeliveryDate` and confirming that the overdue job is prioritized to the front of the schedule.
+
+**Acceptance Scenarios**:
+1. **Given** a set of jobs where job A has an overdue `DeliveryDate` (or D4 date in the past) and job B has a far-future delivery date with matching tools, **When** setup optimization is triggered, **Then** job A is scheduled before job B.
+2. **Given** multiple jobs with varying delivery dates, **When** setup sequence optimization evaluates candidates, **Then** delivery urgency score (`overdueDays` / earliest `DeliveryDate`) is weighted into candidate selection alongside tool list similarity and fixture matching.
+
+---
+
 ### Edge Cases
 
 - **Database Offline**: If ERP or WinTool SQL databases disconnect, cached board data is loaded with a warning banner.
@@ -84,6 +98,9 @@ As a machine operator, I want to click any job card to view routing details, BDE
 - **FR-006**: System MUST persist manual drag-and-drop machine/date overrides to `backend/planning_overrides.json`.
 - **FR-007**: System MUST provide an inline d.velop DMS PDF viewer with proxy streaming, zoom, and rotation.
 - **FR-008**: System MUST display deterministic contract colors (`getContractColor`) per order.
+- **FR-009**: System MUST propose entire tool list unloading for Chiron machine operations (`mName === 'Chiron'`). When an order (e.g. `2537-0301-SP1`) is completed according to planning, the system MUST propose to unload its entire Tool List as a complete unit (all tools belonging to that completed list), EXCEPT tools that are also in any `"park"` list (which remain static in the machine) and tools that are still required by upcoming/subsequent steps in the schedule.
+- **FR-010**: System MUST classify all tools contained in ToolLists whose name contains `"park"` (case-insensitive, retrieved from `MachineToProgram` / `ProgramToTool` in the `ToolList` database) as **Static Park Tools**. Static Park Tools MUST NEVER be unloaded or evicted from machine magazines during simulation, sequence optimization, LRU victim eviction, or manual scenario configuration.
+- **FR-011**: System MUST prioritize jobs with overdue or imminent delivery dates (`DeliveryDate <= today` or near deadline) during setup sequence optimization (Greedy, Local Search, Simulated Annealing), ensuring overdue and urgent D4 orders are scheduled earlier in the sequence rather than being deferred behind far-future jobs purely for tool changeover savings.
 
 ---
 
