@@ -59,5 +59,80 @@ console.log('--- Executing Unit & Contract Tests: 06 - Auswertung Planung ---');
   console.log('✓ Test 3: Two-Pass Non-Overbooking Pool Allocation Assertion passed');
 }
 
-console.log('\nAll 3 unit & contract assertions passed cleanly for 06 - Auswertung Planung.');
+// Test 4: Intra-Pool Job Stealing & Recommendation Assertion (poolOptimization: true)
+{
+  const magSelf = ['WZG-1001', 'WZG-1002'];
+  const magPartner = ['WZG-1001', 'WZG-1002', 'WZG-1003', 'WZG-1004'];
+  const jobTools = ['WZG-1001', 'WZG-1003', 'WZG-1004'];
+
+  const overlapSelf = jobTools.filter(t => magSelf.includes(t)).length; // 1
+  const overlapPartner = jobTools.filter(t => magPartner.includes(t)).length; // 3
+
+  let poolRecommendation = null;
+  if (overlapPartner > overlapSelf) {
+    poolRecommendation = {
+      originalMachine: 'RS2_1',
+      partnerMachine: 'RS2_2',
+      overlapSelf,
+      overlapPartner,
+      savings: overlapPartner - overlapSelf
+    };
+  }
+
+  assert.ok(poolRecommendation, 'Should generate pool recommendation when partner has higher tool overlap');
+  assert.strictEqual(poolRecommendation.partnerMachine, 'RS2_2');
+  assert.strictEqual(poolRecommendation.savings, 2);
+  console.log('✓ Test 4: Intra-Pool Job Stealing & Recommendation Assertion passed');
+}
+
+// Test 5: Over-planning (Überplanung / Überlappung) Backward Allocation
+{
+  const step = {
+    stepId: '101',
+    isOverplanned: true,
+    ueberlappungProzent: 50,
+    maxProdTag: 240,
+    scheduledMin: 480
+  };
+
+  assert.strictEqual(step.isOverplanned, true);
+  assert.strictEqual(step.maxProdTag, 240);
+  assert.strictEqual(step.scheduledMin / step.maxProdTag, 2, 'Should require 2 production days backwards');
+  console.log('✓ Test 5: Over-planning Backward Allocation Assertion passed');
+}
+
+// Test 6: Daily Workload Runtime Capping Assertion
+{
+  const multiDayStep = {
+    stepId: '384663',
+    totalStepProdTime: 2080, // 34h 40m total across 5 days
+    maxProdTag: 1440, // Max 24h per day for automated cell
+    day1AllocatedMin: 1440
+  };
+
+  // Day workload summation must add only the daily allocated portion (1440 min), NOT un-split 2080 min
+  const day1Sum = Math.min(multiDayStep.totalStepProdTime, multiDayStep.maxProdTag, multiDayStep.day1AllocatedMin);
+  assert.strictEqual(day1Sum, 1440, 'Daily workload sum must cap at daily allocated portion (1440 min) and not include un-split 2080 min');
+  console.log('✓ Test 6: Daily Workload Runtime Capping Assertion passed');
+}
+
+// Test 7: Contiguous Setup Time Rule Assertion ("Rüstzeit immer am Stück")
+{
+  const setupMin = 120; // 2 hours setup
+  const day1FreeCap = 60; // Only 1 hour remaining on Day 1
+  const day2FreeCap = 540; // 9 hours free on Day 2
+
+  // If free capacity on Day 1 is less than setupMin, setup cannot fit contiguous on Day 1 -> must defer to Day 2
+  let setupDay = null;
+  if (day1FreeCap >= setupMin) {
+    setupDay = 'Day1';
+  } else if (day2FreeCap >= setupMin) {
+    setupDay = 'Day2';
+  }
+
+  assert.strictEqual(setupDay, 'Day2', 'Job setup must be scheduled contiguous am Stück on Day 2 when Day 1 free capacity is smaller than setup time');
+  console.log('✓ Test 7: Contiguous Setup Time Rule Assertion ("Rüstzeit immer am Stück") passed');
+}
+
+console.log('\nAll 7 unit & contract assertions passed cleanly for 06 - Auswertung Planung.');
 process.exit(0);

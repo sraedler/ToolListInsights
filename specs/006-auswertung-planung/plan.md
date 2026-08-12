@@ -1,14 +1,26 @@
-# Implementation Plan: 06 - Auswertung Planung (Planungsanalyse & Gantt-Belegung)
+# Implementation Plan: 06 - Auswertung Planung (Planungsanalyse, Gantt-Belegung & Contiguous Setup Splitting)
 
-**Branch**: `006-auswertung-planung` | **Date**: 2026-08-04 | **Spec**: [`spec.md`](file:///C:/git_repos/ToolListInsights/specs/006-auswertung-planung/spec.md)
+**Branch**: `006-auswertung-planung` | **Date**: 2026-08-12 | **Spec**: [`spec.md`](file:///C:/git_repos/ToolListInsights/specs/006-auswertung-planung/spec.md)
 
-**Input**: Feature specification from [`specs/006-auswertung-planung/spec.md`](file:///C:/git_repos/ToolListInsights/specs/006-auswertung-planung/spec.md)
+**Input**: Feature specification from [`specs/006-auswertung-planung/spec.md`](file:///C:/git_repos/ToolListInsights/specs/006-auswertung-planung/spec.md) & User Directive for Uninterrupted Setup Time ("Rüstzeit immer am Stück") + Daily Milling Time Splitting ("Restliche Fräszeit splitten nach max. Gesamtzeit + D4 Limits pro Tag").
 
 ---
 
 ## Summary
 
-Implement and refine the multi-week Gantt timeline analysis view (`06_Auswertung_Planung`). The technical approach retrieves machine daily capacities 1:1 directly from D4 `tPPS_MASTA` for all machines (using dual ID & Name mapping to guarantee C400, C40, C42, Brother, Chiron, RS2 accuracy) without shift assumptions or alterations. Uses a **Two-Pass Non-Overbooking Pool Allocation Algorithm**: machine-booked jobs (`MachineId`) reserve capacity first; pool jobs (`MachinePoolId === 13`) fill ONLY remaining free capacity without ever overbooking any machine beyond its 1:1 D4 capacity limit. Renders horizontal Gantt timelines for flexible 1 to 20-week horizons and supports synchronous cross-machine contract highlighting on mouse hover (`hoveredContractNumber`). A native test suite is updated at `Features/06_Auswertung_Planung/test.js`.
+Implement and refine the multi-week Gantt timeline analysis view (`06_Auswertung_Planung`) with explicit Uninterrupted Setup Time Scheduling and Daily Milling Runtime Capping:
+1. **Uninterrupted Setup Time Rule ("Rüstzeit immer am Stück")**:
+   - The setup time (`setupTime` / `Rüstzeit`) MUST NEVER be split across calendar days.
+   - Setup time MUST be scheduled in full as a single contiguous block on Day 1 (`splitPart: 1`).
+   - If the free capacity of candidate Day $D$ is less than `setupTime`, the entire job setup moves to the next available working day where full `setupTime` can fit contiguous.
+2. **Production/Milling Time Splitting Rule ("Restliche Fräszeit splitten")**:
+   - Once full `setupTime` is allocated contiguous on Day 1, remaining production time (`prodTime`) fills Day 1 up to the daily capacity limit (D4 limit & `maxProdTag`).
+   - Overflow production time is split across subsequent working days (`splitPart: 2`, `splitPart: 3`...) with `setupTime = 0` and `prodTime = min(remainingProd, dailyCapacity, maxProdTag)`.
+3. **1:1 D4 Capacity Enforcement**: Machine daily capacities are fetched directly 1:1 from D4 `tPPS_MASTA` without artificial defaults.
+4. **Two-Pass Pool Allocation**: Fixed machine-assigned steps (`MachineId`) reserve capacity first. Pool steps (`MachinePoolId` for RS2 Pool & C40-C42 Pool) are sorted descending by duration and allocated to the pool machine with the highest remaining free capacity without overbooking.
+5. **Machine-Level & Pool-Stealing Setup Optimization**:
+   - Jobs are optimized into tool/fixture setup clusters per machine.
+   - When pool optimization (`poolOptimization: true`) is active, pool jobs can be re-allocated across partner machines (`RS2_1` <-> `RS2_2`, `C40` <-> `C42`) to match setup clusters while respecting daily capacity limits.
 
 ---
 
@@ -17,36 +29,39 @@ Implement and refine the multi-week Gantt timeline analysis view (`06_Auswertung
 **Language/Version**: Node.js (v18+, CommonJS), JavaScript (React 19, Vite 8)  
 **Primary Dependencies**: Express 5, React 19, Recharts 3, Lucide React  
 **Storage**: ERP D4 (`tPPS_MASTA`) / BDE schedules  
-**Testing**: Native Node.js `node:assert` test suite in `Features/06_Auswertung_Planung/test.js`  
+**Testing**: Native Node.js test suite in `Features/06_Auswertung_Planung/test.js` & `Features/run_tests.js`  
 **Target Platform**: Node.js Backend + React Web Frontend  
 **Project Type**: Full-Stack Web Application  
 **Performance Goals**: Gantt horizon rendering under 200ms  
-**Constraints**: Direct 1:1 D4 database capacity retrieval with dual ID/Name mapping; Two-Pass Pool allocation algorithm.  
+**Constraints**: Uninterrupted setup time ("Rüstzeit immer am Stück"); daily milling time capped by daily capacity (D4 limit & `maxProdTag`); 1:1 D4 capacity retrieval; Two-pass pool allocation.
 
 ---
 
 ## Constitution Check
 
-- [x] **Principle I: Code Quality**: 1:1 D4 capacity mapping, dual ID/Name resolution for C400, two-pass pool allocation, and synchronous contract highlighting.
-- [x] **Principle II: Testing Standards**: Covered by automated tests in `Features/06_Auswertung_Planung/test.js`.
-- [x] **Principle III: UX Consistency**: Interactive hover effects and 100% capacity limit line indicators.
-- [x] **Principle IV: Performance**: Client-side Gantt timeline rendering < 200ms.
+- [x] **Principle I: Code Quality**: Strict enforcement of uninterrupted setup time preventing partial setup fragmenting across days.
+- [x] **Principle II: Testing Standards**: Automated unit and contract tests in `Features/06_Auswertung_Planung/test.js` verifying contiguous setup placement and milling time daily capping.
+- [x] **Principle III: UX Consistency**: Accurate, realistic setup block visualization and day header totals matching true physical shopfloor behavior.
+- [x] **Principle IV: Performance**: Sub-200ms endpoint evaluation maintaining high responsiveness.
 
 ---
 
-## Project Structure
+## Technical Workflow & Implementation Details
 
-```text
-specs/006-auswertung-planung/
-├── plan.md
-├── research.md
-├── data-model.md
-├── quickstart.md
-├── contracts/
-│   └── gantt-api.json
-└── checklists/
-    └── requirements.md
-```
+### Phase 0: Contiguous Setup & Daily Milling Time Allocation Algorithm
+1. **Contiguous Setup Verification**:
+   - For a step with `setupTime > 0`, evaluate if $\text{freeCap}_D \ge \text{setupTime}$.
+   - If $\text{freeCap}_D < \text{setupTime}$, defer job start to Day $D+1$ (or next available day where $\text{freeCap} \ge \text{setupTime}$).
+2. **Day 1 Allocation (`splitPart: 1`)**:
+   - $\text{allocatedSetup} = \text{setupTime}$ (100% contiguous).
+   - $\text{allocatedProd}_1 = \min(\text{prodTime}, \text{freeCap}_D - \text{setupTime}, \text{maxProdTag}_D)$.
+3. **Subsequent Days Splitting (`splitPart: 2+`)**:
+   - For remaining production time $\text{remProd} = \text{prodTime} - \text{allocatedProd}_1$:
+   - Allocate $\text{allocatedProd}_i = \min(\text{remProd}, \text{freeCap}_{D+i}, \text{maxProdTag}_{D+i})$ with $\text{setupTime} = 0$.
+
+### Phase 1: Machine-Level & Pool-Stealing Setup Optimization
+1. Group steps into setup clusters per machine.
+2. When `poolOptimization: true`, evaluate candidate pool steps for re-allocation to pool partner machines with matching setup clusters when daily capacity permits.
 
 ---
 

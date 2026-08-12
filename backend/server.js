@@ -4175,6 +4175,79 @@ const useD4Plan = useD4PlanParam === 'true';
         if (k) greenStepMap[k] = s;
       });
 
+      const pushStepWithSplitting = (board, mName, startDayStr, stepObj) => {
+        const origSetup = stepObj.setupTime !== undefined ? stepObj.setupTime : (stepObj.SetupTime || 0);
+        const origProd = stepObj.prodTime !== undefined ? stepObj.prodTime : (stepObj.ProdTime || 0);
+        const totalStepMin = stepObj.scheduledMin !== undefined ? stepObj.scheduledMin : (origSetup + origProd);
+        const maxProdTag = stepObj.maxProdTag || 0;
+
+        let setupRem = Math.min(totalStepMin, origSetup);
+        let prodRem = Math.max(0, totalStepMin - setupRem);
+
+        let currentDayIdx = planningDays.indexOf(startDayStr);
+        if (currentDayIdx === -1) currentDayIdx = planningDays.length;
+
+        let part = 1;
+
+        while ((setupRem > 0 || prodRem > 0) && currentDayIdx <= planningDays.length) {
+          const dayStr = currentDayIdx < planningDays.length ? planningDays[currentDayIdx] : 'Überlauf';
+          if (!board[mName]) board[mName] = {};
+          if (!board[mName][dayStr]) board[mName][dayStr] = [];
+
+          const dayCap = dayStr === 'Überlauf' ? Infinity : getCapacityForDay(mName, dayStr);
+          const existingLoad = board[mName][dayStr].reduce((sum, x) => sum + (x.scheduledMin || (x.setupTime || 0) + (x.prodTime || 0)), 0);
+          const freeCap = Math.max(0, dayCap - existingLoad);
+
+          // Rule: Rüstzeit immer am Stück. If setup time cannot fit contiguous on this day, defer to next day.
+          if (setupRem > 0 && freeCap < setupRem && dayStr !== 'Überlauf') {
+            currentDayIdx++;
+            continue;
+          }
+
+          if (freeCap <= 0 && dayStr !== 'Überlauf') {
+            currentDayIdx++;
+            continue;
+          }
+
+          const sTime = Math.min(setupRem, freeCap);
+          const freeForProd = Math.max(0, freeCap - sTime);
+          let pTimeLimit = freeForProd;
+          if (maxProdTag > 0) {
+            pTimeLimit = Math.min(pTimeLimit, maxProdTag);
+          }
+          const pTime = dayStr === 'Überlauf' ? prodRem : Math.min(prodRem, pTimeLimit);
+
+          if (sTime === 0 && pTime === 0 && dayStr !== 'Überlauf') {
+            currentDayIdx++;
+            continue;
+          }
+
+          const isSplitNeeded = (setupRem > sTime || prodRem > pTime) || part > 1;
+
+          board[mName][dayStr].push({
+            ...stepObj,
+            setupTime: sTime,
+            prodTime: pTime,
+            SetupTime: sTime,
+            ProdTime: pTime,
+            scheduledMin: sTime + pTime,
+            originalSetupTime: origSetup,
+            originalProdTime: origProd,
+            isSplit: isSplitNeeded,
+            splitPart: part,
+            DateStr: dayStr,
+            day: dayStr
+          });
+
+          setupRem -= sTime;
+          prodRem -= pTime;
+          part++;
+
+          if (dayStr === 'Überlauf') break;
+          currentDayIdx++;
+        }
+      };
+
       // Two-Pass Non-Overbooking Pool Allocation Algorithm for Auswertung Planung
       // Pass 1: Fixed machine-booked jobs (p.MachineId) reserve primary daily capacity first
       const poolEntries = [];
@@ -4196,7 +4269,7 @@ const useD4Plan = useD4PlanParam === 'true';
         }
 
         const day = planningDays.includes(p.DateStr) ? p.DateStr : 'Überlauf';
-        if (!finalBoard[mName] || !finalBoard[mName][day]) return;
+        if (!finalBoard[mName]) return;
 
         const isFreigegeben = (p.ZustandPlanung === 0);
         const isGesperrt = p.TypSperre > 0 || p.SperreWeiter > 0;
@@ -4207,7 +4280,7 @@ const useD4Plan = useD4PlanParam === 'true';
         const sTime = Math.min(schMin, totalSetup);
         const prTime = Math.max(0, schMin - sTime);
 
-        finalBoard[mName][day].push({
+        pushStepWithSplitting(finalBoard, mName, day, {
           ...origStep,
           stepId: p.StepId,
           StepId: p.StepId,
@@ -4324,14 +4397,12 @@ const useD4Plan = useD4PlanParam === 'true';
         if (!targetM || !finalBoard[targetM]) return;
 
         // If step exceeds remaining capacity on chosen day, route to Überlauf to avoid overbooking
-        const targetMax = getCapacityForDay(targetM, day);
-        const targetCurrentLoad = (finalBoard[targetM][day] || []).reduce((sum, s) => sum + (s.scheduledMin || 0), 0);
-        const targetDay = (day !== 'Überlauf' && (targetCurrentLoad + stepMin > targetMax)) ? 'Überlauf' : day;
+        const targetDay = day;
 
         const isFreigegeben = (p.ZustandPlanung === 0);
         const isGesperrt = p.TypSperre > 0 || p.SperreWeiter > 0;
 
-        finalBoard[targetM][targetDay].push({
+        pushStepWithSplitting(finalBoard, targetM, targetDay, {
           ...origStep,
           stepId: p.StepId,
           StepId: p.StepId,
@@ -4729,46 +4800,29 @@ const useD4Plan = useD4PlanParam === 'true';
 
           const isNonMachining = ['Entgraten', 'Montage', 'Montage UR5', 'Laser', 'Messmaschine', 'Prüfplanung', 'Versand'].includes(mName);
 
-          if (dayCandidates.length > 0) {
-            // Force executing steps (SPKO === 2 / isExecuting) to run first, bypassing the normal/night splitting
-            const executingSteps = dayCandidates.filter(s => s.SPKO === 2 || s.isExecuting);
-            const nonExecutingCandidates = dayCandidates.filter(s => s.SPKO !== 2 && !s.isExecuting);
-
             let currentMag = [...runningMagazine];
-            if (executingSteps.length > 0) {
-              const { sequenced, finalMagazine } = sequenceSteps(executingSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+            if (isNonMachining) {
+              const { sequenced } = sequenceNonMachining(dayCandidates, orderStepsMap);
               sequencedSteps = sequencedSteps.concat(sequenced);
-              currentMag = finalMagazine;
-            }
+            } else if (shouldOptimize && optimizeNightRun && isAutomated) {
+              const nightSteps = dayCandidates.filter(s => s.isNightRunCapable);
+              const normalSteps = dayCandidates.filter(s => !s.isNightRunCapable);
 
-
-
-            if (nonExecutingCandidates.length > 0) {
-              if (isNonMachining) {
-                const { sequenced } = sequenceNonMachining(nonExecutingCandidates, orderStepsMap);
-                sequencedSteps = sequencedSteps.concat(sequenced);
-              } else if (shouldOptimize && optimizeNightRun && isAutomated) {
-                const nightSteps = nonExecutingCandidates.filter(s => s.isNightRunCapable);
-                const normalSteps = nonExecutingCandidates.filter(s => !s.isNightRunCapable);
-
-                if (nightSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                  sequencedSteps = sequencedSteps.concat(sequenced);
-                  currentMag = finalMagazine;
-                }
-                if (normalSteps.length > 0) {
-                  const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
-                  sequencedSteps = sequencedSteps.concat(sequenced);
-                  currentMag = finalMagazine;
-                }
-              } else {
-                const { sequenced, finalMagazine } = sequenceSteps(nonExecutingCandidates, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+              if (nightSteps.length > 0) {
+                const { sequenced, finalMagazine } = sequenceSteps(nightSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
                 sequencedSteps = sequencedSteps.concat(sequenced);
                 currentMag = finalMagazine;
               }
+              if (normalSteps.length > 0) {
+                const { sequenced, finalMagazine } = sequenceSteps(normalSteps, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+                sequencedSteps = sequencedSteps.concat(sequenced);
+                currentMag = finalMagazine;
+              }
+            } else {
+              const { sequenced, finalMagazine } = sequenceSteps(dayCandidates, currentMag, mSize, listToToolsMap, algorithm, shouldOptimizeFixture, parsedFixtureWeight);
+              sequencedSteps = sequencedSteps.concat(sequenced);
+              currentMag = finalMagazine;
             }
-            runningMagazine = currentMag;
-          }
 
           // Apply capacity constraint scheduling with Staggered Shift Model (Tag & Nacht Fenster)
           const isAutomatedCell = ['RS2_1', 'RS2_2', 'C40', 'C42'].includes(mName);
@@ -4841,6 +4895,9 @@ const useD4Plan = useD4PlanParam === 'true';
                 dayScheduled.push({
                   ...s,
                   prodTime: fittedProdTime,
+                  ProdTime: fittedProdTime,
+                  scheduledMin: (s.SetupTime || s.setupTime || 0) + fittedProdTime,
+                  ScheduledMin: (s.SetupTime || s.setupTime || 0) + fittedProdTime,
                   isSplit: true,
                   splitPart: s.splitPart || 1,
                   originalStepId: s.originalStepId || s.StepId,
@@ -4857,7 +4914,11 @@ const useD4Plan = useD4PlanParam === 'true';
                   nextDayOverflow.push({
                     ...s,
                     SetupTime: 0,
+                    setupTime: 0,
                     prodTime: remainingProdTime,
+                    ProdTime: remainingProdTime,
+                    scheduledMin: remainingProdTime,
+                    ScheduledMin: remainingProdTime,
                     isSplit: true,
                     splitPart: (s.splitPart || 1) + 1,
                     originalStepId: s.originalStepId || s.StepId
@@ -4884,6 +4945,9 @@ const useD4Plan = useD4PlanParam === 'true';
                   dayScheduled.push({
                     ...s,
                     prodTime: fittedProdTime,
+                    ProdTime: fittedProdTime,
+                    scheduledMin: setupTime + fittedProdTime,
+                    ScheduledMin: setupTime + fittedProdTime,
                     isSplit: true,
                     splitPart: s.splitPart || 1,
                     originalStepId: s.originalStepId || s.StepId,
@@ -4895,36 +4959,21 @@ const useD4Plan = useD4PlanParam === 'true';
                     nextDayOverflow.push({
                       ...s,
                       SetupTime: 0,
+                      setupTime: 0,
                       prodTime: remainingProdTime,
+                      ProdTime: remainingProdTime,
+                      scheduledMin: remainingProdTime,
+                      ScheduledMin: remainingProdTime,
                       isSplit: true,
                       splitPart: (s.splitPart || 1) + 1,
                       originalStepId: s.originalStepId || s.StepId
                     });
                   }
                 } else {
-                  // Partial setup fits today, remaining setup + prod overflows to next day
-                  const fittedSetupTime = Math.min(dayRemaining, totalRemainingDay);
-                  const remainingSetupTime = setupTime - fittedSetupTime;
-
-                  dayScheduled.push({
-                    ...s,
-                    SetupTime: fittedSetupTime,
-                    prodTime: 0,
-                    isSplit: true,
-                    splitPart: s.splitPart || 1,
-                    originalStepId: s.originalStepId || s.StepId,
-                    scheduledShift: 'DAY'
-                  });
-                  usedDayMinutes += fittedSetupTime;
-
-                  nextDayOverflow.push({
-                    ...s,
-                    SetupTime: remainingSetupTime,
-                    prodTime: prodTime,
-                    isSplit: true,
-                    splitPart: (s.splitPart || 1) + 1,
-                    originalStepId: s.originalStepId || s.StepId
-                  });
+                  // Rule: Rüstzeit immer am Stück. If setup cannot fit contiguous today, overflow entire step to next day.
+                  if (!nextDayOverflow.some(x => (x.originalStepId || x.StepId) === (s.originalStepId || s.StepId))) {
+                    nextDayOverflow.push(s);
+                  }
                 }
               } else {
                 if (!nextDayOverflow.some(x => (x.originalStepId || x.StepId) === (s.originalStepId || s.StepId))) { nextDayOverflow.push(s); }
@@ -5139,9 +5188,9 @@ const useD4Plan = useD4PlanParam === 'true';
               };
             });
 
-          const st = s.SetupTime !== undefined ? s.SetupTime : (s.setupTime || 0);
-          const pr = (s.ProdTime !== undefined && s.ProdTime > 0) ? s.ProdTime : (s.prodTime || 0);
-          const sch = (s.ScheduledMin !== undefined && s.ScheduledMin > 0) ? s.ScheduledMin : (s.scheduledMin || (st + pr));
+          const st = s.setupTime !== undefined ? s.setupTime : (s.SetupTime || 0);
+          const pr = s.prodTime !== undefined ? s.prodTime : (s.ProdTime || 0);
+          const sch = s.scheduledMin !== undefined ? s.scheduledMin : (st + pr);
 
           return {
             stepId: s.StepId,

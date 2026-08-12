@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "GanttAPIContract",
-  "description": "API Contract for GET /api/reports/gantt",
+  "description": "API Contract for GET /api/reports/gantt & GET /api/planning",
   "endpoints": {
     "GET /api/reports/gantt": {
       "queryParameters": {
@@ -15,6 +15,26 @@
           "properties": {
             "ganttRows": { "type": "array" },
             "weeklyLoad": { "type": "array" }
+          }
+        }
+      }
+    },
+    "GET /api/planning": {
+      "queryParameters": {
+        "startDate": { "type": "string" },
+        "daysCount": { "type": "integer", "default": 5 },
+        "optimize": { "type": "boolean", "default": true },
+        "poolOptimization": { "type": "boolean", "default": false },
+        "useD4Plan": { "type": "boolean", "default": false },
+        "includeNonGreen": { "type": "boolean", "default": true }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "type": "object",
+          "required": ["board"],
+          "properties": {
+            "board": { "type": "object" }
           }
         }
       }

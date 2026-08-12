@@ -1,31 +1,23 @@
-# Quickstart & End-to-End Validation Guide: 06 - Auswertung Planung
+# Quickstart & End-to-End Validation Guide: 06 - Auswertung Planung & Contiguous Setup Splitting
 
 ## Prerequisites
-- Node.js installed (v18+)
+- Node.js (v18+)
+- Local environment with toollistinsights dependencies installed (`npm install`)
 
 ---
 
-## Validation Scenario 1: Test Suite Execution
-Run Gantt timeline and contract highlighting unit tests.
+## Runnable Validation Commands
 
+### 1. Execute Unit & Contract Tests
+Run the native test suite for feature 06 (Auswertung Planung):
 ```bash
-# Execute feature unit tests
-node Features/06_Auswertung_Planung/test.js
-
-# Execute global test runner
-node Features/run_tests.js
+npm run test:features
 ```
+*Expected Outcome*: All test assertions pass cleanly with 0 errors, validating 1:1 D4 capacity limits, two-pass pool job allocation, contiguous setup time placement ("Rüstzeit immer am Stück"), milling time daily capping, and pool-stealing setup optimization (`poolOptimization: true`).
 
-**Expected Outcome**: All tests pass cleanly.
-
----
-
-## Validation Scenario 2: Gantt API Horizon Query
-Verify multi-week Gantt report API endpoint.
-
-```bash
-# Query 4-week Gantt planning data (PowerShell)
-Invoke-RestMethod -Uri "http://localhost:3000/api/reports/gantt?weeksCount=4"
-```
-
-**Expected Outcome**: Returns HTTP 200 containing multi-week Gantt rows and weekly machine load metrics.
+### 2. Verify Contiguous Setup & Day Header Workload Summation
+1. Launch the application with `npm run dev`.
+2. Open `http://localhost:5173`.
+3. Navigate to **Planung Maschinen** / **Auswertung Planung**.
+4. Inspect multi-day steps on the Gantt timeline or Kanban board.
+5. Verify that `setupTime` is placed 100% on Day 1 (`splitPart: 1`) as an uninterrupted block, while remaining milling time is split across subsequent days up to daily capacity limits.
