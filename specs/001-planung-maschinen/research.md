@@ -51,3 +51,22 @@ Incorporate delivery date urgency into sequence optimization candidate scoring:
 ### Rationale
 - Protects shop-floor delivery commitments (D4 delivery dates).
 - Prevents setup optimization from causing delivery overruns.
+
+---
+
+## Decision 4: Pool Machine Night Run Capacity Optimization (`MaxNightCapacity` & 24h Ceiling) in Kanban Planung Maschinen
+
+### Problem Statement
+In the Kanban Planung Maschinen view (`01_Planung_Maschinen`), pool machines (RS2 Pool `9`/`12`, C40/C42 Pool `13`) can perform unmanned night runs (Nachtlauf). Night capacity must be mathematically bounded by piece processing time and fixture limits, while total daily machine workload (Day shift + Night run) cannot exceed physical 24-hour day boundaries (1,440 minutes).
+
+### Decision
+1. Calculate average piece processing time: $\text{AvgPieceTime} = \frac{\text{TotalStepProdTime}}{\text{PosQuantity}}$.
+2. Calculate maximum night capacity limit: $\text{MaxNightCapacity} = \text{MaxPiecesPerNight} \times \text{AvgPieceTime}$.
+3. Enforce strict Day Window cap: Day shift planned time $\text{DayShiftPlannedTime}$ MUST NOT exceed standard Day Window Max Time (`DayCapacity`, e.g., 480 min / 8h).
+4. Allocate night shift runtime: $\text{ScheduledNightTime} = \min(\text{MaxNightCapacity}, 1,440\text{ min} - \text{DayShiftPlannedTime})$.
+5. Hard 24h daily maximum ceiling: Total daily machine workload ($\text{DayShiftPlannedTime} + \text{ScheduledNightTime}$) MUST NOT exceed 24 hours (1,440 minutes).
+
+### Rationale
+- Ensures consistent capacity planning rules across both the Kanban view (`01_Planung_Maschinen`) and the Auswertung view (`06_Auswertung_Planung`).
+- Maximizes unmanned overnight utilization for pool machines without overbooking day shift windows or exceeding 24 hours.
+

@@ -34,3 +34,15 @@
 ### 5. Machine-Level & Pool-Stealing Setup Optimization Engine (`poolOptimization`)
 - **Baseline Machine Optimization**: Group jobs by shared fixtures and tool lists per machine.
 - **Pool-Stealing Intra-Pool Optimization (`poolOptimization: true`)**: When pool optimization is toggled ON, the setup optimizer evaluates whether pool jobs assigned to a partner machine can be stolen to match setup clusters on the target machine when daily capacity permits.
+
+---
+
+### 6. Pool Machine Night Run Capacity Optimization (`MaxNightCapacity` & 24h Ceiling)
+- **Problem**: Pool machines can run unmanned night shifts (Nachtlauf) to increase throughput, but night overbooking must be constrained by fixture/pallet piece limits and a hard 24-hour daily limit per machine. Day window runtime must remain strictly capped.
+- **Decision**:
+  - Calculate average piece processing time: $\text{AvgPieceTime} = \frac{\text{TotalStepProdTime}}{\text{PosQuantity}}$.
+  - Calculate maximum night capacity limit: $\text{MaxNightCapacity} = \text{MaxPiecesPerNight} \times \text{AvgPieceTime}$.
+  - Enforce strict day window cap: $\text{DayShiftPlannedTime} \le \text{DayCapacity}$ (Day window max time MUST NOT be exceeded).
+  - Calculate night shift runtime allocation: $\text{ScheduledNightTime} = \min(\text{MaxNightCapacity}, 1,440\text{ min} - \text{DayShiftPlannedTime})$.
+  - Enforce daily maximum ceiling: Total daily machine load ($\text{DayShiftPlannedTime} + \text{ScheduledNightTime}$) MUST NOT exceed 24 hours (1,440 minutes).
+- **Rationale**: Maximizes unmanned night capacity utilization for pool jobs while preserving day shift boundaries and ensuring physical 24h daily reality.

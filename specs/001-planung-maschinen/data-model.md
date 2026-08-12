@@ -25,6 +25,12 @@ interface JobStep {
   fixture: string | null;         // Assigned fixture ID (e.g. "V-1029")
   toolListNr: string | null;      // Associated WinTool list ID (e.g. "TL-4491")
   isNightRunCapable: boolean;     // Can run unmanned overnight
+  posQuantity: number;            // Total pieces in P-Auftrag position
+  avgPieceTime: number;           // Calculated avg piece time (runTimeMin / posQuantity)
+  maxPiecesPerNight: number;      // Max pieces loadable for night run
+  maxNightCapacityMin: number;    // Calculated max night capacity (maxPiecesPerNight * avgPieceTime)
+  dayShiftMin: number;            // Minutes scheduled within Day Window limit (<= DayCapacity)
+  nightShiftMin: number;          // Minutes scheduled for Night Run (<= min(maxNightCapacityMin, 1440 - dayShiftMin))
   manualMachineOverride: string | null; // Manual machine assignment override if present
 }
 ```
@@ -38,12 +44,15 @@ Represents a CNC machining station column in the Kanban board.
 ```typescript
 interface MachineColumn {
   machineName: string;            // CNC machine name (e.g. "Hermle C400")
-  totalCapacityHours: number;    // Available hours based on daysCount * 16h
-  scheduledHours: number;         // Total setup + run time assigned
+  totalCapacityHours: number;     // Available hours based on daysCount * 24h limit
+  dayShiftHours: number;          // Hours allocated in day shift window (capped by DayCapacity)
+  nightShiftHours: number;        // Hours allocated in unmanned night shift
+  scheduledHours: number;         // Total setup + run time assigned (dayShiftHours + nightShiftHours <= 24h/day)
   utilizationPercent: number;     // (scheduledHours / totalCapacityHours) * 100
   days: Record<string, JobStep[]>; // Map of YYYY-MM-DD to array of JobSteps
 }
 ```
+
 
 ---
 

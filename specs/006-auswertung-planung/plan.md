@@ -21,6 +21,12 @@ Implement and refine the multi-week Gantt timeline analysis view (`06_Auswertung
 5. **Machine-Level & Pool-Stealing Setup Optimization**:
    - Jobs are optimized into tool/fixture setup clusters per machine.
    - When pool optimization (`poolOptimization: true`) is active, pool jobs can be re-allocated across partner machines (`RS2_1` <-> `RS2_2`, `C40` <-> `C42`) to match setup clusters while respecting daily capacity limits.
+6. **Pool Machine Night Run Capacity Optimization (`MaxNightCapacity` & 24h Ceiling)**:
+   - Pool machines (`MachinePoolId`) can be planned beyond standard day window limits via night run (Nachtlauf).
+   - $\text{MaxNightCapacity} = \text{MaxPiecesPerNight} \times \text{AvgPieceTime}$, where $\text{AvgPieceTime} = \frac{\text{TotalStepProdTime}}{\text{PosQuantity}}$.
+   - Day Window Max Time (`DayCapacity`, e.g. 8h = 480 min) MUST NOT be exceeded during day shift.
+   - Night shift runtime is maximized up to $\min(\text{MaxNightCapacity}, 24\text{h} - \text{DayShiftPlannedTime})$.
+   - Total daily machine load ($\text{DayShiftPlannedTime} + \text{ScheduledNightTime}$) MUST NOT exceed 24 hours (1,440 minutes).
 
 ---
 
@@ -33,15 +39,15 @@ Implement and refine the multi-week Gantt timeline analysis view (`06_Auswertung
 **Target Platform**: Node.js Backend + React Web Frontend  
 **Project Type**: Full-Stack Web Application  
 **Performance Goals**: Gantt horizon rendering under 200ms  
-**Constraints**: Uninterrupted setup time ("Rüstzeit immer am Stück"); daily milling time capped by daily capacity (D4 limit & `maxProdTag`); 1:1 D4 capacity retrieval; Two-pass pool allocation.
+**Constraints**: Uninterrupted setup time ("Rüstzeit immer am Stück"); daily milling time capped by daily capacity (D4 limit & `maxProdTag`); 1:1 D4 capacity retrieval; Two-pass pool allocation; Day window strict limit enforcement; Pool Machine Night Run capacity calculation ($\text{MaxPiecesPerNight} \times \text{AvgPieceTime}$) with strict 24h (1,440 min) daily ceiling.
 
 ---
 
 ## Constitution Check
 
-- [x] **Principle I: Code Quality**: Strict enforcement of uninterrupted setup time preventing partial setup fragmenting across days.
-- [x] **Principle II: Testing Standards**: Automated unit and contract tests in `Features/06_Auswertung_Planung/test.js` verifying contiguous setup placement and milling time daily capping.
-- [x] **Principle III: UX Consistency**: Accurate, realistic setup block visualization and day header totals matching true physical shopfloor behavior.
+- [x] **Principle I: Code Quality**: Strict enforcement of uninterrupted setup time preventing partial setup fragmenting across days, and exact mathematical capping of night run capacity.
+- [x] **Principle II: Testing Standards**: Automated unit and contract tests in `Features/06_Auswertung_Planung/test.js` verifying contiguous setup placement, milling time daily capping, and pool machine night capacity calculations.
+- [x] **Principle III: UX Consistency**: Accurate, realistic setup block visualization, clear night shift indicators, and day header totals matching true physical shopfloor behavior.
 - [x] **Principle IV: Performance**: Sub-200ms endpoint evaluation maintaining high responsiveness.
 
 ---
@@ -62,6 +68,20 @@ Implement and refine the multi-week Gantt timeline analysis view (`06_Auswertung
 ### Phase 1: Machine-Level & Pool-Stealing Setup Optimization
 1. Group steps into setup clusters per machine.
 2. When `poolOptimization: true`, evaluate candidate pool steps for re-allocation to pool partner machines with matching setup clusters when daily capacity permits.
+
+### Phase 2: Pool Machine Night Run Capacity Optimization Algorithm
+1. **Per-Position Average Piece Processing Time**:
+   $$\text{AvgPieceTime} = \frac{\text{TotalStepProdTime}}{\text{PosQuantity}}$$
+2. **Maximum Night Capacity Calculation**:
+   $$\text{MaxNightCapacity} = \text{MaxPiecesPerNight} \times \text{AvgPieceTime}$$
+3. **Day Shift Strict Cap Enforcement**:
+   - Day shift planned time $\text{DayShiftPlannedTime}$ MUST NOT exceed standard Day Window Max Time (`DayCapacity`, e.g., 480 min).
+4. **Night Shift Allocation & 24-Hour Ceiling**:
+   - Calculate remaining available night window:
+     $$\text{AvailableNightWindow} = 1,440\text{ min} (24\text{h}) - \text{DayShiftPlannedTime}$$
+   - Allocate night run time:
+     $$\text{ScheduledNightTime} = \min(\text{MaxNightCapacity}, \text{AvailableNightWindow})$$
+   - Hard constraint: $\text{DayShiftPlannedTime} + \text{ScheduledNightTime} \le 1,440\text{ minutes}$.
 
 ---
 

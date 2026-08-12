@@ -25,6 +25,7 @@
         "daysCount": { "type": "integer", "default": 5 },
         "optimize": { "type": "boolean", "default": true },
         "poolOptimization": { "type": "boolean", "default": false },
+        "nightRunOptimization": { "type": "boolean", "default": true },
         "useD4Plan": { "type": "boolean", "default": false },
         "includeNonGreen": { "type": "boolean", "default": true }
       },

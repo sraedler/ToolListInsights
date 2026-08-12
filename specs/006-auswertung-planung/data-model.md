@@ -21,6 +21,12 @@
 | `IsOverplanned` | Boolean | True if step allows over-planning (`PSP_ZEIT_UEBERLAPPUNG_PROZENT > 0`) |
 | `IsSplit` | Boolean | True if step is split across multiple days |
 | `SplitPart` | Integer | Split segment index (1, 2, 3...) |
+| `PosQuantity` | Integer | Total piece count of P-Auftrag position |
+| `AvgPieceTime` | Float/Integer | Average production time per piece ($\text{TotalStepProdTime} / \text{PosQuantity}$) |
+| `MaxPiecesPerNight` | Integer | Max pieces loadable for night run |
+| `MaxNightCapacityMin` | Integer | Calculated max night performance runtime ($\text{MaxPiecesPerNight} \times \text{AvgPieceTime}$) |
+| `DayShiftMin` | Integer | Runtime allocated within Day Window limit ($\le \text{DayCapacity}$) |
+| `NightShiftMin` | Integer | Runtime allocated for Night Run ($\le \min(\text{MaxNightCapacityMin}, 1440 - \text{DayShiftMin})$) |
 
 ### 2. Day Workload Summary (`DayWorkloadSummary`)
 | Field | Type | Description |
@@ -28,6 +34,17 @@
 | `DateStr` | String | Calendar day (YYYY-MM-DD) or `Überlauf` |
 | `TotalSetupMin` | Integer | Sum of setup minutes allocated for this specific day |
 | `TotalProdMin` | Integer | Sum of production minutes allocated for this specific day |
-| `TotalWorkloadMin` | Integer | Total allocated workload minutes ($\sum \text{DailyAllocatedMin}$) |
-| `DayCapacityMin` | Integer | Daily capacity limit directly from D4 `tPPS_MASTA` |
-| `LoadPercentage` | Integer | Capacity utilization percentage ($\min(100, \text{TotalWorkloadMin} / \text{DayCapacityMin} \times 100)$) |
+| `DayShiftWorkloadMin` | Integer | Workload allocated during standard Day Window ($\le \text{DayCapacityMin}$) |
+| `NightShiftWorkloadMin` | Integer | Workload allocated during Night Run ($\le 1,440 - \text{DayShiftWorkloadMin}$) |
+| `TotalWorkloadMin` | Integer | Total daily allocated workload ($\text{DayShiftWorkloadMin} + \text{NightShiftWorkloadMin} \le 1,440$) |
+| `DayCapacityMin` | Integer | Standard day window capacity limit from D4 `tPPS_MASTA` (e.g. 480 min / 8h) |
+| `MaxDailyLimitMin` | Integer | Fixed hard maximum daily capacity ceiling of 1,440 minutes (24 hours) |
+| `LoadPercentage` | Integer | Capacity utilization percentage relative to 24h ceiling |
+
+### 3. Pool Machine Night Run Configuration (`PoolNightRunConfig`)
+| Field | Type | Description |
+|-------|------|-------------|
+| `MachinePoolId` | Integer | Pool identifier (`9`/`12` = RS2, `13` = C40-C42) |
+| `MachineId` | Integer | Machine identifier |
+| `MaxPiecesPerNight` | Integer | Max piece capacity for night run |
+| `IsNightRunEnabled` | Boolean | True if machine is authorized for night run optimization |

@@ -119,8 +119,19 @@ Dockerfile               # Backend Node.js container build
      `effectiveScore = (toolMisses * 10) - (overdueDays * 50) - (fixtureMatchBonus * 5)`.
      This ensures overdue and near-term D4 dates are scheduled earlier without sacrificing necessary fixture matching.
 
+4. **Pool Machine Night Run Capacity Optimization (`FR-012`)**:
+   - Target Machines: Pool machines (`MachinePoolId` for RS2 Pool `9`/`12` and C40/C42 Pool `13`).
+   - Formula:
+     $$\text{AvgPieceTime} = \frac{\text{TotalStepProdTime}}{\text{PosQuantity}}$$
+     $$\text{MaxNightCapacity} = \text{MaxPiecesPerNight} \times \text{AvgPieceTime}$$
+   - Day Window Strict Capping: Day shift planned time ($\text{DayShiftPlannedTime}$) MUST NOT exceed standard Day Window limits (`DayCapacity`, e.g., 480 min).
+   - Night Shift Allocation & 24h Ceiling:
+     $$\text{ScheduledNightTime} = \min(\text{MaxNightCapacity}, 1,440\text{ min} - \text{DayShiftPlannedTime})$$
+     Total daily machine load ($\text{DayShiftPlannedTime} + \text{ScheduledNightTime}$) MUST NOT exceed 24 hours (1,440 minutes).
+
 ---
 
 ## Complexity Tracking
 
 *No constitution violations present.*
+

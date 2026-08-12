@@ -30,7 +30,7 @@ export function GanttTimeline({ rows }) {
 
             <div style={{ flex: 1, display: 'flex', height: '36px', backgroundColor: '#1e293b', borderRadius: '6px', overflow: 'hidden', padding: '4px', gap: '4px' }}>
               {(row.blocks || []).map((block, bIdx) => {
-                const contractColor = getContractColor(block.contractNumber);
+                const contractColor = block.isOverplanned ? '#a855f7' : getContractColor(block.contractNumber);
                 const isHovered = hoveredContract && block.contractNumber === hoveredContract;
 
                 return (
@@ -52,10 +52,16 @@ export function GanttTimeline({ rows }) {
                       cursor: 'pointer',
                       overflow: 'hidden',
                       whiteSpace: 'nowrap',
-                      textOverflow: 'ellipsis'
+                      textOverflow: 'ellipsis',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
                     }}
+                    title={`${block.orderId} (${block.contractNumber})${block.isOverplanned ? ' - Überplanung' : ''}${block.isNightRun ? ' - Nachtlauf' : ''}`}
                   >
-                    #{block.orderId} ({block.contractNumber})
+                    <span>#{block.orderId} ({block.contractNumber})</span>
+                    {block.isNightRun && <span style={{ fontSize: '0.65rem', backgroundColor: '#0f172a', padding: '1px 3px', borderRadius: '3px' }}>🌙</span>}
+                    {block.isOverplanned && <span style={{ fontSize: '0.65rem', backgroundColor: '#581c87', padding: '1px 3px', borderRadius: '3px' }}>⚡</span>}
                   </div>
                 );
               })}

@@ -160,5 +160,24 @@ console.log('--- Executing Unit & Contract Tests: 01 - Planung Maschinen ---');
   console.log('✓ Test 8: Overdue Delivery Date Prioritization Assertion passed');
 }
 
-console.log('\nAll 8 unit & contract assertions passed cleanly for 01 - Planung Maschinen.');
+// Test 9: Pool Machine Night Run Capacity Optimization & 24h Daily Ceiling (FR-012)
+{
+  const { calculateAveragePieceTime, calculateMaxNightCapacity, calculateNightRunAllocation } = require('../../backend/models/ganttAnalysis');
+
+  const avgPieceTime = calculateAveragePieceTime(480, 10); // 10 pcs, 480 min -> 48 min/pc
+  assert.strictEqual(avgPieceTime, 48, 'Avg piece time must be 48 min');
+
+  const maxNightCap = calculateMaxNightCapacity(5, avgPieceTime); // 5 pcs * 48 min = 240 min (4h)
+  assert.strictEqual(maxNightCap, 240, 'Max night cap must be 240 min');
+
+  const alloc = calculateNightRunAllocation(480, 480, maxNightCap); // 480 min day, 240 min night
+  assert.strictEqual(alloc.dayShiftPlannedMin, 480, 'Day shift must cap at 480 min');
+  assert.strictEqual(alloc.scheduledNightMin, 240, 'Scheduled night min must be 240 min');
+  assert.strictEqual(alloc.totalDailyWorkloadMin, 720, 'Total daily workload must be 720 min (12h)');
+
+  console.log('✓ Test 9: Pool Machine Night Run Capacity Optimization & 24h Daily Ceiling passed');
+}
+
+console.log('\nAll 9 unit & contract assertions passed cleanly for 01 - Planung Maschinen.');
 process.exit(0);
+

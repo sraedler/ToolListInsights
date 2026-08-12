@@ -7,10 +7,10 @@
 
 ---
 
-## Format: `[ID] [P?] [Story] Description`
+## Format: `- [x] [TaskID] [P?] [Story?] Description with file path`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: User story label (US1, US2, US3, US4)
+- **[Story]**: User story label (US1, US2, US3, US4, US5, US6)
 - Includes exact file paths for every task
 
 ---
@@ -29,8 +29,6 @@
 
 **Purpose**: Core database connections, persistent override storage, and re-creation of the missing test runner framework before user story implementation
 
-**⚠️ CRITICAL**: No user story implementation can begin until foundational tasks and test harnesses are in place.
-
 - [x] T004 [P] Re-implement master test runner script `Features/run_tests.js` using native `node:assert`
 - [x] T005 [P] Implement dynamic MS SQL Server database pool builder (`msnodesqlv8` / `tedious`) in `backend/db.js`
 - [x] T006 Re-implement feature unit & contract test suite harness in `Features/01_Planung_Maschinen/test.js`
@@ -47,12 +45,9 @@
 
 **Independent Test**: Run `node Features/01_Planung_Maschinen/test.js` for US1 tests and verify `GET /api/planning?daysCount=5` payload.
 
-### Tests for User Story 1
+### Tests & Implementation for User Story 1
 
 - [x] T009 [P] [US1] Write test assertions for schedule calculation and capacity metrics in `Features/01_Planung_Maschinen/test.js`
-
-### Implementation for User Story 1
-
 - [x] T010 [P] [US1] Define JobStep data structures in `backend/models/jobStep.js`
 - [x] T011 [US1] Implement schedule calculation endpoint `GET /api/planning` in `backend/server.js`
 - [x] T012 [P] [US1] Implement deterministic contract color helper `getContractColor` in `frontend/src/utils/colors.js`
@@ -70,12 +65,9 @@
 
 **Independent Test**: Run setup optimization tests in `Features/01_Planung_Maschinen/test.js` and verify setup time reduction.
 
-### Tests for User Story 2
+### Tests & Implementation for User Story 2
 
 - [x] T016 [P] [US2] Write test assertions for setup optimization and night-shift job positioning in `Features/01_Planung_Maschinen/test.js`
-
-### Implementation for User Story 2
-
 - [x] T017 [P] [US2] Implement setup optimization engine (`greedy`, `local_search`, `simulated_annealing`) in `backend/server.js`
 - [x] T018 [US2] Implement unmanned night-shift scheduling algorithm placing `isNightRunCapable` jobs at shift end in `backend/server.js`
 - [x] T019 [US2] Add optimization control toggles and algorithm selection dropdown in `frontend/src/components/ControlBar.jsx`
@@ -90,12 +82,9 @@
 
 **Independent Test**: Verify POST `/api/planning/override` persistence in `Features/01_Planung_Maschinen/test.js`.
 
-### Tests for User Story 3
+### Tests & Implementation for User Story 3
 
 - [x] T020 [P] [US3] Write test assertions for POST `/api/planning/override` persistence in `Features/01_Planung_Maschinen/test.js`
-
-### Implementation for User Story 3
-
 - [x] T021 [US3] Implement `POST /api/planning/override` endpoint writing to `backend/planning_overrides.json` in `backend/server.js`
 - [x] T022 [P] [US3] Add HTML5 Drag & Drop event handlers to job cards in `frontend/src/components/JobCard.jsx`
 - [x] T023 [US3] Implement job lot splitting modal and remaining lot size handler in `frontend/src/components/SplitModal.jsx`
@@ -110,12 +99,9 @@
 
 **Independent Test**: Test DMS drawing endpoint `GET /api/dms/drawing/:articleId` in `Features/01_Planung_Maschinen/test.js`.
 
-### Tests for User Story 4
+### Tests & Implementation for User Story 4
 
 - [x] T024 [P] [US4] Write test assertions for d.velop DMS drawing metadata proxy endpoint in `Features/01_Planung_Maschinen/test.js`
-
-### Implementation for User Story 4
-
 - [x] T025 [P] [US4] Implement d.velop DMS drawing proxy streaming endpoint `GET /api/dms/drawing/:articleId` in `backend/server.js`
 - [x] T026 [US4] Implement job detail modal with routing history and BDE booking breakdown in `frontend/src/components/DetailModal.jsx`
 - [x] T027 [US4] Implement inline PDF drawing viewer with zoom, 90-degree rotation, and sub-document switching in `frontend/src/components/DmsViewerModal.jsx`
@@ -162,35 +148,14 @@
 
 ---
 
-## Dependencies & Execution Order
+## Phase 10: User Story 6 - Pool Machine Night Run Capacity Optimization & 24h Ceiling (FR-012)
 
-```mermaid
-flowchart TD
-    Setup[Phase 1: Setup] --> Foundational[Phase 2: Foundational & Test Suite Creation]
-    Foundational --> US1[Phase 3: US1 - Kanban Board MVP]
-    Foundational --> US2[Phase 4: US2 - Setup Optimization]
-    Foundational --> US3[Phase 5: US3 - Drag & Drop Overrides]
-    Foundational --> US4[Phase 6: US4 - DMS Drawing Viewer]
-    US1 --> Polish[Phase 7: Polish & Cross-Cutting]
-    US2 --> Polish
-    US3 --> Polish
-    US4 --> Polish
-```
+**Goal**: Enable unmanned night run capacity optimization for pool machines (`MachinePoolId` for RS2 Pool `9`/`12` and C40/C42 Pool `13`) in the Kanban Planung Maschinen view. Calculate $\text{MaxNightCapacity} = \text{MaxPiecesPerNight} \times \text{AvgPieceTime}$, enforce Day Window limit (`DayCapacity`), and cap total daily workload at 24 hours (1,440 minutes).
 
----
+**Independent Test**: Run `npm run test:features` to verify pool machine night capacity calculations and 24h ceiling assertions.
 
-## Implementation Strategy
+### Implementation for User Story 6
 
-### MVP First (User Story 1 Only)
-1. Complete Phase 1: Setup
-2. Complete Phase 2: Foundational (Includes re-creating test runner `Features/run_tests.js`)
-3. Complete Phase 3: User Story 1
-4. **STOP and VALIDATE**: Execute `node Features/01_Planung_Maschinen/test.js` for US1
-
-### Incremental Delivery
-1. Foundation & Test Suite ready (Phase 1 & 2)
-2. Add US1 → Test & Deploy MVP
-3. Add US2 → Run setup optimization tests
-4. Add US3 → Run override persistence tests
-5. Add US4 → Run DMS viewer tests
-6. Polish & Final Validation (Phase 7)
+- [x] T037 [P] [US6] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying pool machine night capacity calculation ($\text{MaxPiecesPerNight} \times \text{AvgPieceTime}$), Day Window cap, and 24h ceiling
+- [x] T038 [US6] Integrate `calculateNightRunAllocation` into Kanban Machine Column daily workload calculation in `backend/server.js` and `backend/models/ganttAnalysis.js`
+- [x] T039 [P] [US6] Update `frontend/src/App.jsx` and `frontend/src/components/MachineHeader.jsx` to render Day Shift vs. Night Run hours and 24h capacity indicator for pool machines

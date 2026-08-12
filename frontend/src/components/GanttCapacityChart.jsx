@@ -17,13 +17,13 @@ export function GanttCapacityChart({ weeklyData }) {
         📈 Wochenweise Auslastungskurve vs 100% Kapazitätsgrenze
       </h4>
 
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(weeklyData.length, 8)}, 1fr)`, gap: '12px' }}>
-        {weeklyData.slice(0, 8).map((week, idx) => {
+      <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '8px' }}>
+        {weeklyData.map((week, idx) => {
           const util = week.utilizationPercent || 0;
           const isOver = util > 100;
 
           return (
-            <div key={idx} style={{ textAlign: 'center', fontSize: '0.8rem' }}>
+            <div key={idx} style={{ flex: '1 0 70px', minWidth: '70px', textAlign: 'center', fontSize: '0.8rem' }}>
               <div style={{ height: '100px', backgroundColor: '#0f172a', borderRadius: '6px', position: 'relative', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '4px' }}>
                 <div
                   style={{
@@ -52,6 +52,7 @@ export function GanttCapacityChart({ weeklyData }) {
           );
         })}
       </div>
+
     </div>
   );
 }

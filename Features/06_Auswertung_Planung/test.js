@@ -134,5 +134,33 @@ console.log('--- Executing Unit & Contract Tests: 06 - Auswertung Planung ---');
   console.log('✓ Test 7: Contiguous Setup Time Rule Assertion ("Rüstzeit immer am Stück") passed');
 }
 
-console.log('\nAll 7 unit & contract assertions passed cleanly for 06 - Auswertung Planung.');
+// Test 8: Pool Machine Night Run Capacity Optimization & 24h Daily Ceiling
+{
+  const { calculateAveragePieceTime, calculateMaxNightCapacity, calculateNightRunAllocation } = require('../../backend/models/ganttAnalysis');
+  
+  // Case A: 10 pieces position, 480 min total prod time -> 48 min avg piece time
+  const avgPieceTime = calculateAveragePieceTime(480, 10);
+  assert.strictEqual(avgPieceTime, 48, 'Avg piece time must be 48 min');
+
+  // Max 5 pieces per night -> 5 * 48 = 240 min (4h max night cap)
+  const maxNightCap = calculateMaxNightCapacity(5, avgPieceTime);
+  assert.strictEqual(maxNightCap, 240, 'Max night cap must be 240 min');
+
+  // Day shift planned 480 min (8h), Day capacity 480 min (8h)
+  const allocA = calculateNightRunAllocation(480, 480, maxNightCap);
+  assert.strictEqual(allocA.dayShiftPlannedMin, 480, 'Day shift must be capped at 480 min');
+  assert.strictEqual(allocA.scheduledNightMin, 240, 'Scheduled night min must be 240 min');
+  assert.strictEqual(allocA.totalDailyWorkloadMin, 720, 'Total daily workload must be 720 min (12h)');
+
+  // Case B: MaxNightCapacity is 1200 min (20h), but available night window is 1440 - 480 = 960 min (16h)
+  const allocB = calculateNightRunAllocation(480, 480, 1200);
+  assert.strictEqual(allocB.scheduledNightMin, 960, 'Night shift must be capped at 960 min (16h) by 24h ceiling');
+  assert.strictEqual(allocB.totalDailyWorkloadMin, 1440, 'Total daily workload must cap at 1440 min (24h)');
+  assert.strictEqual(allocB.is24hCapped, true, 'is24hCapped flag must be true');
+
+  console.log('✓ Test 8: Pool Machine Night Run Capacity Optimization & 24h Daily Ceiling passed');
+}
+
+console.log('\nAll 8 unit & contract assertions passed cleanly for 06 - Auswertung Planung.');
 process.exit(0);
+
