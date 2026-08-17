@@ -11,8 +11,10 @@
         "algo": { "type": "string", "enum": ["greedy", "local_search", "simulated_annealing"], "default": "greedy" },
         "optimizeFixture": { "type": "boolean", "default": true },
         "fixtureWeight": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50 },
-        "allowLookahead": { "type": "boolean", "default": true }
+        "allowLookahead": { "type": "boolean", "default": true },
+        "searchQuery": { "type": "string", "default": "" }
       },
+
       "response": {
         "status": 200,
         "body": {

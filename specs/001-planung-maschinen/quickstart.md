@@ -44,3 +44,16 @@ Verify that pool machines (`MachinePoolId`) calculate night capacity as $\text{M
 2. Open **Planung Maschinen** (Kanban board).
 3. Verify for pool machine columns (e.g. RS2 Pool, C40/C42 Pool) that night shift capacity is added up to $\min(\text{MaxNightCapacity}, 1440 - \text{DayShiftPlannedTime})$ without exceeding Day Window limits during the day.
 
+## Scenario 4: Order/Contract Search Filtering & Overflow Lookahead Validation
+
+### Goal
+Verify that entering a search term (e.g. `P2026`) in **Planung Maschinen** or **Planung Maschinen blockiert** hides non-matching items (e.g. `P2025`) and routes any matching future steps beyond the current visible horizon to the **Überlauf** (Overflow) column.
+
+### Execution Steps
+1. Launch app (`npm run dev`) and open `http://localhost:5173`.
+2. Open **Planung Maschinen** or **Planung Maschinen blockiert**.
+3. Type `P2026` into the Search input box in the Control Bar.
+4. Verify that all job cards containing `P2025` or non-matching orders disappear immediately.
+5. Verify that any matching step for `P2026` with a start date beyond the visible date range appears in the **Überlauf** column.
+
+

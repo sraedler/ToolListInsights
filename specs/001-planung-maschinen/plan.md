@@ -129,9 +129,15 @@ Dockerfile               # Backend Node.js container build
      $$\text{ScheduledNightTime} = \min(\text{MaxNightCapacity}, 1,440\text{ min} - \text{DayShiftPlannedTime})$$
      Total daily machine load ($\text{DayShiftPlannedTime} + \text{ScheduledNightTime}$) MUST NOT exceed 24 hours (1,440 minutes).
 
+5. **Order/Contract Search Filtering & Out-of-Range Future Step Routing to Overflow (`FR-013`)**:
+   - Search Predicate: Match `searchQuery` against `orderId`, `contractNumber`, `articleName` / `stepDesc`, `customerName`, `ncProgram`, or `toolListNr` (case-insensitive substring match).
+   - Exclusion Rule: Steps that do NOT match the `searchQuery` are strictly excluded/hidden from all columns (e.g. searching `P2026` hides `P2025`).
+   - Overflow Lookahead Routing: When `searchQuery` is active, any step matching the query whose start date falls BEYOND the current visible date range (`dateStr > planningDays[planningDays.length - 1]`) is automatically routed to the machine's `Überlauf` (Overflow) column so all matching steps across future horizons are displayed.
+
 ---
 
 ## Complexity Tracking
+
 
 *No constitution violations present.*
 

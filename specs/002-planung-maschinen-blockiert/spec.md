@@ -46,6 +46,8 @@ As a planner, I want to force-release a blocked job or reallocate it to an alter
 - **FR-003**: System MUST support category filtering: `Missing NC Program`, `Missing Fixture`, `Missing Tool List`, `Material Delay`, `Predecessor Open`.
 - **FR-004**: System MUST allow manual override release ("Force Release") stored in `planning_overrides.json`.
 - **FR-005**: System MUST maintain complete feature isolation with zero side-effects on other views.
+- **FR-006**: System MUST support Order/Contract Search Filtering and out-of-range future order routing into the `Überlauf` (Overflow) column in conflict mode (`isConflictMode === true`). Entering a search query MUST hide non-matching blocked steps and include matching future blocked steps beyond `daysCount` in `Überlauf`.
+
 
 ---
 

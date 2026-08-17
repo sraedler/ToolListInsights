@@ -178,6 +178,48 @@ console.log('--- Executing Unit & Contract Tests: 01 - Planung Maschinen ---');
   console.log('✓ Test 9: Pool Machine Night Run Capacity Optimization & 24h Daily Ceiling passed');
 }
 
-console.log('\nAll 9 unit & contract assertions passed cleanly for 01 - Planung Maschinen.');
+// Test 10: Order/Contract Search Filtering & Out-of-Range Future Step Overflow Routing (FR-013 & FR-006)
+{
+  function stepMatchesSearch(step, q) {
+    if (!q) return true;
+    const query = q.trim().toLowerCase();
+    const oId = String(step.OrderId || step.orderId || '').toLowerCase();
+    const cNum = String(step.ContractNumber || step.contractNumber || step.cNum || '').toLowerCase();
+    const desc = String(step.StepDesc || step.stepDesc || step.Description || step.ArticleName || step.articleName || '').toLowerCase();
+    const cust = String(step.CustomerName || step.customerName || '').toLowerCase();
+    const nc = String(step.NCProgram || step.ncProgram || '').toLowerCase();
+    const tl = String(step.MatchedListNr || step.matchedListNr || step.toolListNr || '').toLowerCase();
+    const pos = String(step.OrderPos || step.orderPos || '').toLowerCase();
+
+    return oId.includes(query) || cNum.includes(query) || desc.includes(query) || cust.includes(query) || nc.includes(query) || tl.includes(query) || (cNum + '_' + pos).includes(query) || (oId + '_' + pos).includes(query);
+  }
+
+  const steps = [
+    { StepId: 'S1', ContractNumber: 'P2026-001', OrderId: '101', StepDateStr: '2026-08-15' },
+    { StepId: 'S2', ContractNumber: 'P2025-099', OrderId: '102', StepDateStr: '2026-08-15' },
+    { StepId: 'S3', ContractNumber: 'P2026-002', OrderId: '103', StepDateStr: '2026-09-30' } // Out of range future step
+  ];
+
+  const filteredP2026 = steps.filter(s => stepMatchesSearch(s, 'P2026'));
+  assert.strictEqual(filteredP2026.length, 2, 'Should match exactly 2 steps with contract P2026');
+  assert.ok(!filteredP2026.some(s => s.ContractNumber.includes('P2025')), 'Steps with P2025 must be excluded when searching P2026');
+
+  // Test Overflow routing for out-of-range future steps
+  const lastPlanningDay = '2026-08-20';
+  const routedSteps = filteredP2026.map(s => {
+    let targetDay = s.StepDateStr;
+    if (!targetDay || targetDay < '2026-08-10' || targetDay > lastPlanningDay) {
+      targetDay = 'Überlauf';
+    }
+    return { ...s, targetDay };
+  });
+
+  const overflowStep = routedSteps.find(s => s.StepId === 'S3');
+  assert.strictEqual(overflowStep.targetDay, 'Überlauf', 'Future step S3 (2026-09-30) beyond visible horizon must be routed to Überlauf');
+  console.log('✓ Test 10: Order/Contract Search Filtering & Out-of-Range Future Step Overflow Routing passed');
+}
+
+console.log('\nAll 10 unit & contract assertions passed cleanly for 01 - Planung Maschinen.');
 process.exit(0);
+
 

@@ -70,3 +70,21 @@ In the Kanban Planung Maschinen view (`01_Planung_Maschinen`), pool machines (RS
 - Ensures consistent capacity planning rules across both the Kanban view (`01_Planung_Maschinen`) and the Auswertung view (`06_Auswertung_Planung`).
 - Maximizes unmanned overnight utilization for pool machines without overbooking day shift windows or exceeding 24 hours.
 
+---
+
+## Decision 5: Order/Contract Search Filtering & Out-of-Range Future Step Routing to Overflow in Kanban Views
+
+### Problem Statement
+Production schedulers need a quick way to filter the Kanban board (`Planung Maschinen` & `Planung Maschinen blockiert`) for a specific order number or contract (e.g. `P2026`). Non-matching items must be completely hidden. Furthermore, any future steps belonging to the searched order that fall beyond the currently selected date horizon (`daysCount`) must be displayed in the `Überlauf` (Overflow) column so no matching step is missed.
+
+### Decision
+1. Add an interactive search input `searchQuery` to the control bar for both `Planung Maschinen` and `Planung Maschinen blockiert`.
+2. Filter steps in real-time: match `searchQuery` against `orderId`, `contractNumber`, `articleName` / `stepDesc`, `customerName`, `ncProgram`, and `toolListNr`.
+3. Hide all steps that do NOT match the query (e.g. searching `P2026` excludes `P2025`).
+4. When `searchQuery` is non-empty, include matching steps whose scheduled start date falls beyond the visible range (`stepDateStr > planningDays[last]`) and assign them to the machine's `Überlauf` (Overflow) column.
+
+### Rationale
+- Provides immediate visual focus on searched customer contracts across both current date horizons and future backlogs.
+- Guarantees 100% visibility of all matching steps without requiring the user to expand date range sliders unnecessarily.
+
+

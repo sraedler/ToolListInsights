@@ -11,8 +11,11 @@ export function ControlBar({
   onAlgoChange,
   dbMode,
   onDbModeChange,
-  onRecalculate
+  onRecalculate,
+  searchQuery,
+  onSearchQueryChange
 }) {
+
   return (
     <div
       className="control-bar"
@@ -89,6 +92,47 @@ export function ControlBar({
           <option value="simulated_annealing">Simulated Annealing</option>
         </select>
       </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}>
+        <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>🔍 Suche:</span>
+        <input
+          type="text"
+          value={searchQuery || ''}
+          onChange={(e) => onSearchQueryChange && onSearchQueryChange(e.target.value)}
+          placeholder="Auftrag, Beleg, NC-Prog..."
+          style={{
+            padding: '4px 24px 4px 8px',
+            borderRadius: '4px',
+            backgroundColor: '#0f172a',
+            color: '#38bdf8',
+            border: '1px solid #3b82f6',
+            fontSize: '0.8rem',
+            width: '170px',
+            fontWeight: '600',
+            outline: 'none'
+          }}
+        />
+        {searchQuery && (
+          <button
+            onClick={() => onSearchQueryChange && onSearchQueryChange('')}
+            style={{
+              position: 'absolute',
+              right: '6px',
+              background: 'transparent',
+              border: 'none',
+              color: '#94a3b8',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              fontWeight: 'bold',
+              padding: 0
+            }}
+            title="Suche zurücksetzen"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+
 
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <button

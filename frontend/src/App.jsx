@@ -7030,6 +7030,8 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
   const [dbMode, setDbModeState] = useState('dev');
   const [daysCount, setDaysCount] = useState(5);
   const [poolOptimization, setPoolOptimization] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
 
   useEffect(() => {
     setTempFixtureWeight(fixtureWeight);
@@ -7365,6 +7367,9 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
       if (startDate) {
         url += `&startDate=${startDate}`;
       }
+      if (searchQuery) {
+        url += `&searchQuery=${encodeURIComponent(searchQuery)}`;
+      }
       const res = await fetch(url, { signal: abortControllerRef.current.signal });
       if (!res.ok) {
         throw new Error(`Fehler beim Laden: ${res.statusText}`);
@@ -7390,7 +7395,8 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
 
   useEffect(() => {
     fetchPlanningData();
-  }, [optimize, optimizeNightRun, algo, optimizeFixture, fixtureWeight, allowLookahead, daysCount]);
+  }, [optimize, optimizeNightRun, algo, optimizeFixture, fixtureWeight, allowLookahead, daysCount, searchQuery]);
+
 
   const handleDateChange = (e) => {
     setStartDate(e.target.value);
@@ -7479,14 +7485,11 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
     );
   }
 
-  const { days: allDays = [], machines: rawMachines = [], board = {}, capacities = {} } = data || {};
+  const { days: rawDays = [], machines: rawMachines = [], board = {}, capacities = {} } = data || {};
+  const allDays = rawDays.includes('Überlauf') ? rawDays : [...rawDays, 'Überlauf'];
   const days = allDays.filter(day => {
     if (day === 'Überlauf') {
-      if (selectedMachine === 'All') {
-        return Object.keys(board).some(mName => (board[mName]?.['Überlauf'] || []).length > 0);
-      } else {
-        return (board[selectedMachine]?.[day] || []).length > 0;
-      }
+      return true; // Im Modus "Planung Maschinen" Spalte Überlauf immer anzeigen
     }
     if (selectedMachine === 'All') {
       return Object.keys(board).some(mName => (board[mName]?.[day] || []).length > 0);
@@ -7786,9 +7789,52 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                   </select>
                 </div>
               </div>
+
+              <div className="control-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#94a3b8' }}>🔍 Auftragssuche:</label>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Auftrag / Beleg / NC..."
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.8)',
+                      border: '1px solid #3b82f6',
+                      borderRadius: '8px',
+                      color: '#38bdf8',
+                      fontSize: '0.85rem',
+                      padding: '0.4rem 2rem 0.4rem 0.75rem',
+                      outline: 'none',
+                      fontWeight: 600,
+                      width: '180px'
+                    }}
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      style={{
+                        position: 'absolute',
+                        right: '8px',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#94a3b8',
+                        cursor: 'pointer',
+                        fontSize: '0.85rem',
+                        fontWeight: 'bold'
+                      }}
+                      title="Suche zurücksetzen"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <button onClick={handleApplyDate} className="btn btn-primary btn-sm">
                 Planung laden
               </button>
+
               <button 
                 onClick={handleClearCacheAndReload} 
                 className="btn btn-secondary btn-sm"

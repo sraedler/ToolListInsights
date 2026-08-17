@@ -3710,13 +3710,28 @@ app.get('/api/planning', async (req, res) => {
       await cacheSetupData();
     }
 
-    const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount, includeNonGreen, isConflictMode, useD4Plan: useD4PlanParam } = req.query;
-const useD4Plan = useD4PlanParam === 'true';
+    const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount, includeNonGreen, isConflictMode, useD4Plan: useD4PlanParam, searchQuery: searchQueryParam } = req.query;
+    const useD4Plan = useD4PlanParam === 'true';
     const isConflict = isConflictMode === 'true';
+    const searchQuery = (searchQueryParam || '').trim().toLowerCase();
     const parsedDaysCount = daysCount !== undefined ? parseInt(daysCount, 10) : (isConflict ? 4 : 5);
     const shouldOptimizeFixture = optimizeFixture === 'true';
     const parsedFixtureWeight = fixtureWeight !== undefined ? parseFloat(fixtureWeight) : 1.5;
     let { steps, listToToolsMap, toolsDetails, listToMachineMap, fixtureLocationMap, toolMachineMap } = cachedSetupData;
+
+    function stepMatchesSearch(step, q) {
+      if (!q) return true;
+      const oId = String(step.OrderId || step.orderId || '').toLowerCase();
+      const cNum = String(step.ContractNumber || step.contractNumber || step.cNum || '').toLowerCase();
+      const desc = String(step.StepDesc || step.stepDesc || step.Description || step.ArticleName || step.articleName || '').toLowerCase();
+      const cust = String(step.CustomerName || step.customerName || '').toLowerCase();
+      const nc = String(step.NCProgram || step.ncProgram || '').toLowerCase();
+      const tl = String(step.MatchedListNr || step.matchedListNr || step.toolListNr || '').toLowerCase();
+      const pos = String(step.OrderPos || step.orderPos || '').toLowerCase();
+
+      return oId.includes(q) || cNum.includes(q) || desc.includes(q) || cust.includes(q) || nc.includes(q) || tl.includes(q) || (cNum + '_' + pos).includes(q) || (oId + '_' + pos).includes(q);
+    }
+
 
     // Load manual overrides
     const fs = require('fs');
@@ -3864,11 +3879,17 @@ const useD4Plan = useD4PlanParam === 'true';
       greenSteps = conflictCandidates;
     }
 
+    if (searchQuery) {
+      greenSteps = greenSteps.filter(s => stepMatchesSearch(s, searchQuery));
+    }
+
     // Find default start date (always today to avoid planning in the past by default!)
     const defaultStartStr = new Date().toISOString().substring(0, 10);
 
     const startStr = startDate || defaultStartStr;
     const planningDays = getNextWorkingDays(startStr, parsedDaysCount);
+    const lastPlanningDay = planningDays[planningDays.length - 1];
+
 
     const machinesList = [
       'Brother', 'Chiron', 'C400', 'C40', 'C42', 'RS2_1', 'RS2_2',
@@ -4005,10 +4026,11 @@ const useD4Plan = useD4PlanParam === 'true';
         }
       }
 
-      // If step has no D4 plan date or date is in the past, route to Überlauf backlog!
-      if (!stepDateStr || stepDateStr < planningDays[0]) {
+      // If step has no D4 plan date, date is in the past, or date is in the future beyond visible range, route to Überlauf backlog!
+      if (!stepDateStr || stepDateStr < planningDays[0] || stepDateStr > lastPlanningDay) {
         stepDateStr = 'Überlauf';
       }
+
 
       // Active steps (in execution): in interactive board mode, schedule on day 1; in useD4Plan mode, keep exact D4 date/Überlauf
       if (step.SPKO === 2 && !useD4Plan) {
@@ -5107,9 +5129,11 @@ const useD4Plan = useD4PlanParam === 'true';
           });
         });
 
+        const initialOverflow = JSON.parse(JSON.stringify(board[mName]['Überlauf'] || []));
+        const combinedOverflow = [...initialOverflow, ...overflowQueue];
         const seenOverflowIds = new Set();
         const deduplicatedOverflow = [];
-        overflowQueue.forEach(s => {
+        combinedOverflow.forEach(s => {
           const keyId = s.originalStepId || s.StepId || s.stepId || s.id;
           if (!seenOverflowIds.has(keyId)) {
             seenOverflowIds.add(keyId);

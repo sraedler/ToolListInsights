@@ -7,10 +7,10 @@
 
 ---
 
-## Format: `- [x] [TaskID] [P?] [Story?] Description with file path`
+## Format: `- [ ] [TaskID] [P?] [Story?] Description with file path`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: User story label (US1, US2, US3, US4, US5, US6)
+- **[Story]**: User story label (US1, US2, US3, US4, US5, US6, US7)
 - Includes exact file paths for every task
 
 ---
@@ -159,3 +159,18 @@
 - [x] T037 [P] [US6] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying pool machine night capacity calculation ($\text{MaxPiecesPerNight} \times \text{AvgPieceTime}$), Day Window cap, and 24h ceiling
 - [x] T038 [US6] Integrate `calculateNightRunAllocation` into Kanban Machine Column daily workload calculation in `backend/server.js` and `backend/models/ganttAnalysis.js`
 - [x] T039 [P] [US6] Update `frontend/src/App.jsx` and `frontend/src/components/MachineHeader.jsx` to render Day Shift vs. Night Run hours and 24h capacity indicator for pool machines
+
+---
+
+## Phase 11: User Story 7 - Order/Contract Search Filtering & Overflow Lookahead (FR-013 & FR-006)
+
+**Goal**: Filter job cards in `Planung Maschinen` and `Planung Maschinen blockiert` based on an interactive order/contract search input (`searchQuery`), hiding all non-matching cards (e.g. searching `P2026` hides `P2025`). Route matching future steps beyond `daysCount` into the `Überlauf` (Overflow) column.
+
+**Independent Test**: Run `npm run test:features` to verify order search filtering predicate and out-of-range future order routing into the `Überlauf` column.
+
+### Implementation for User Story 7
+
+- [x] T040 [P] [US7] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying order search filtering predicate and out-of-range future order routing into the `Überlauf` (Overflow) column
+- [x] T041 [US7] Update `GET /api/planning` endpoint in `backend/server.js` to accept `searchQuery`, filter out non-matching steps, and route matching future steps beyond `daysCount` to `board[mName]['Überlauf']`
+- [x] T042 [P] [US7] Add interactive order search input field in `frontend/src/components/ControlBar.jsx` / `frontend/src/App.jsx` for both `Planung Maschinen` and `Planung Maschinen blockiert` tabs
+
