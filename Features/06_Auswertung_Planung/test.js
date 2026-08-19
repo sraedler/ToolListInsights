@@ -116,22 +116,26 @@ console.log('--- Executing Unit & Contract Tests: 06 - Auswertung Planung ---');
   console.log('✓ Test 6: Daily Workload Runtime Capping Assertion passed');
 }
 
-// Test 7: Contiguous Setup Time Rule Assertion ("Rüstzeit immer am Stück")
+// Test 7: Setup Time Splitting Across Days & Parallel Non-Double-Counted Setup
 {
   const setupMin = 120; // 2 hours setup
   const day1FreeCap = 60; // Only 1 hour remaining on Day 1
-  const day2FreeCap = 540; // 9 hours free on Day 2
 
-  // If free capacity on Day 1 is less than setupMin, setup cannot fit contiguous on Day 1 -> must defer to Day 2
-  let setupDay = null;
-  if (day1FreeCap >= setupMin) {
-    setupDay = 'Day1';
-  } else if (day2FreeCap >= setupMin) {
-    setupDay = 'Day2';
-  }
+  // Setup time splits across days when Day 1 capacity is smaller than setupMin
+  const day1SetupAlloc = Math.min(setupMin, day1FreeCap); // 60 min on Day 1
+  const day2SetupAlloc = setupMin - day1SetupAlloc; // 60 min on Day 2
 
-  assert.strictEqual(setupDay, 'Day2', 'Job setup must be scheduled contiguous am Stück on Day 2 when Day 1 free capacity is smaller than setup time');
-  console.log('✓ Test 7: Contiguous Setup Time Rule Assertion ("Rüstzeit immer am Stück") passed');
+  assert.strictEqual(day1SetupAlloc, 60, 'Day 1 setup allocation must be 60 min');
+  assert.strictEqual(day2SetupAlloc, 60, 'Day 2 setup allocation must be 60 min');
+
+  // Parallel setup & prod time total workload check: max(daySetup, dayProd) + nightProd
+  const daySetup = 120;
+  const dayProd = 300;
+  const nightProd = 400;
+  const totalWorkload = Math.max(daySetup, dayProd) + nightProd;
+  assert.strictEqual(totalWorkload, 700, 'Total workload must not double-count parallel setup time (300 + 400 = 700 min)');
+
+  console.log('✓ Test 7: Setup Time Splitting Across Days & Parallel Non-Double-Counted Setup passed');
 }
 
 // Test 8: Pool Machine Night Run Capacity Optimization & 24h Daily Ceiling

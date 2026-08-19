@@ -3981,7 +3981,7 @@ app.get('/api/planning', async (req, res) => {
       return cap !== undefined ? cap : 0;
     };
 
-    const allowLookahead = req.query.allowLookahead === 'true';
+    const allowLookahead = req.query.allowLookahead !== 'false';
     const lastDay = new Date(planningDays[planningDays.length - 1]);
     const lookaheadLimitDate = new Date(lastDay);
     lookaheadLimitDate.setDate(lookaheadLimitDate.getDate() + 14);
@@ -4015,35 +4015,31 @@ app.get('/api/planning', async (req, res) => {
     greenSteps.forEach(step => {
       const sKey = String(step.StepId || step.originalStepId || '');
       const d4Entry = d4PlanMap[sKey];
-      let stepDateStr = d4Entry ? d4Entry.dateStr : null;
-      if (!stepDateStr) {
+      let rawStepDateStr = d4Entry ? d4Entry.dateStr : null;
+      if (!rawStepDateStr) {
         // If strict useD4Plan mode is active, steps without tPPS_SKKALP_PLAN entry go to Überlauf!
         if (useD4Plan) {
-          stepDateStr = 'Überlauf';
+          rawStepDateStr = 'Überlauf';
         } else {
           const stepDate = step.StartDate || step.DeliveryDate || planningDays[0];
-          stepDateStr = new Date(stepDate).toISOString().substring(0, 10);
+          rawStepDateStr = new Date(stepDate).toISOString().substring(0, 10);
         }
       }
 
-      // If step has no D4 plan date, date is in the past, or date is in the future beyond visible range, route to Überlauf backlog!
-      if (!stepDateStr || stepDateStr < planningDays[0] || stepDateStr > lastPlanningDay) {
-        stepDateStr = 'Überlauf';
+      // Active steps (in execution) or overdue/past steps in interactive mode start on Day 1 so they fill the 5 planning days
+      if (!useD4Plan && (step.SPKO === 2 || !rawStepDateStr || rawStepDateStr < planningDays[0])) {
+        rawStepDateStr = planningDays[0];
       }
 
-
-      // Active steps (in execution): in interactive board mode, schedule on day 1; in useD4Plan mode, keep exact D4 date/Überlauf
-      if (step.SPKO === 2 && !useD4Plan) {
-        stepDateStr = planningDays[0];
-      }
+      const isExactDayMatch = planningDays.includes(rawStepDateStr);
+      const stepDateStr = isExactDayMatch ? rawStepDateStr : 'Überlauf';
+      const isLookaheadCandidate = allowLookahead && rawStepDateStr > lastPlanningDay && new Date(rawStepDateStr) <= lookaheadLimitDate;
 
       // Check if it belongs to a deburring/assembly/laser virtual column
       const virtualM = getVirtualMachineForStep(step);
       if (virtualM) {
-        const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : 'Überlauf';
-        if (targetDay) {
-          board[virtualM][targetDay].push(step);
-        } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
+        board[virtualM][stepDateStr].push(step);
+        if (isLookaheadCandidate) {
           if (!lookaheadCandidates[virtualM].some(x => x.StepId === step.StepId)) {
             lookaheadCandidates[virtualM].push(step);
           }
@@ -4085,13 +4081,11 @@ app.get('/api/planning', async (req, res) => {
       }
 
       if (targetM) {
-        const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : 'Überlauf';
-        if (targetDay) {
-          const stepToAdd = (useD4Plan && d4Entry && d4Entry.scheduledMin)
-            ? { ...step, prodTime: Math.max(0, d4Entry.scheduledMin - (step.setupTime || 0)) }
-            : step;
-          board[targetM][targetDay].push(stepToAdd);
-        } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
+        const stepToAdd = (useD4Plan && d4Entry && d4Entry.scheduledMin)
+          ? { ...step, prodTime: Math.max(0, d4Entry.scheduledMin - (step.setupTime || 0)) }
+          : step;
+        board[targetM][stepDateStr].push(stepToAdd);
+        if (isLookaheadCandidate) {
           if (!lookaheadCandidates[targetM].some(x => x.StepId === step.StepId)) {
             lookaheadCandidates[targetM].push(step);
           }
@@ -4099,10 +4093,8 @@ app.get('/api/planning', async (req, res) => {
       } else {
         // Pool assignment step - save to list to distribute dynamically after baseline load
         if (step.MachinePoolId === 13 || step.MachinePoolId === 9 || step.MachinePoolId === 12) {
-          const targetDay = planningDays.includes(stepDateStr) ? stepDateStr : 'Überlauf';
-          if (targetDay) {
-            poolSteps.push({ step, dateStr: targetDay });
-          } else if (allowLookahead && stepDateStr > planningDays[planningDays.length - 1] && new Date(stepDateStr) <= lookaheadLimitDate) {
+          poolSteps.push({ step, dateStr: stepDateStr });
+          if (isLookaheadCandidate) {
             if (step.MachinePoolId === 13) {
               if (!lookaheadCandidates['C40'].some(x => x.StepId === step.StepId)) lookaheadCandidates['C40'].push(step);
               if (!lookaheadCandidates['C42'].some(x => x.StepId === step.StepId)) lookaheadCandidates['C42'].push(step);
@@ -4219,12 +4211,6 @@ app.get('/api/planning', async (req, res) => {
           const dayCap = dayStr === 'Überlauf' ? Infinity : getCapacityForDay(mName, dayStr);
           const existingLoad = board[mName][dayStr].reduce((sum, x) => sum + (x.scheduledMin || (x.setupTime || 0) + (x.prodTime || 0)), 0);
           const freeCap = Math.max(0, dayCap - existingLoad);
-
-          // Rule: Rüstzeit immer am Stück. If setup time cannot fit contiguous on this day, defer to next day.
-          if (setupRem > 0 && freeCap < setupRem && dayStr !== 'Überlauf') {
-            currentDayIdx++;
-            continue;
-          }
 
           if (freeCap <= 0 && dayStr !== 'Überlauf') {
             currentDayIdx++;
@@ -4897,7 +4883,7 @@ app.get('/api/planning', async (req, res) => {
               // NIGHT STEP ON ROBOT CELL: Setup happens on external station during Day Window (07:00-16:00, max 540 min)
               // Setup of next order is ALLOWED to overlap in parallel with production time of other orders!
               // ABSOLUTE HARD CAP: Total scheduled workload per calendar day MUST NEVER EXCEED D4 dayCapacity limit!
-              const currentTotalWorkload = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
+              const currentTotalWorkload = Math.max(usedDaySetupMinutes, usedDayMinutes) + usedNightMinutes;
               const totalRemainingDay = Math.max(0, maxDayCap - currentTotalWorkload);
               const daySetupRemaining = Math.min(totalRemainingDay, Math.max(0, DAY_WINDOW_LIMIT - (isAutomated ? usedDaySetupMinutes : usedDayMinutes)));
               const nightRemaining = Math.min(totalRemainingDay, Math.max(0, nightWindowLimit - usedNightMinutes));
@@ -4951,7 +4937,7 @@ app.get('/api/planning', async (req, res) => {
               }
             } else {
               // DAY STEP: Both Setup AND Prod Time fill Day Window (07:00-16:00, max 540 min or dayCapacity)
-              const currentTotalWorkload = usedDaySetupMinutes + usedDayMinutes + usedNightMinutes;
+              const currentTotalWorkload = Math.max(usedDaySetupMinutes, usedDayMinutes) + usedNightMinutes;
               const totalRemainingDay = Math.max(0, maxDayCap - currentTotalWorkload);
               const maxDayLimitForMachine = Math.min(DAY_WINDOW_LIMIT, dayCapacity, totalRemainingDay);
               const dayRemaining = Math.max(0, maxDayLimitForMachine - usedDayMinutes);
@@ -4992,9 +4978,38 @@ app.get('/api/planning', async (req, res) => {
                     });
                   }
                 } else {
-                  // Rule: Rüstzeit immer am Stück. If setup cannot fit contiguous today, overflow entire step to next day.
+                  // Setup time splits across days: schedule fitted portion of setup time today, overflow remaining setup & prod time to next day
+                  const fittedSetupTime = dayRemaining;
+                  const remainingSetupTime = setupTime - fittedSetupTime;
+
+                  dayScheduled.push({
+                    ...s,
+                    setupTime: fittedSetupTime,
+                    SetupTime: fittedSetupTime,
+                    prodTime: 0,
+                    ProdTime: 0,
+                    scheduledMin: fittedSetupTime,
+                    ScheduledMin: fittedSetupTime,
+                    isSplit: true,
+                    splitPart: s.splitPart || 1,
+                    originalStepId: s.originalStepId || s.StepId,
+                    scheduledShift: 'DAY'
+                  });
+                  usedDayMinutes += fittedSetupTime;
+
                   if (!nextDayOverflow.some(x => (x.originalStepId || x.StepId) === (s.originalStepId || s.StepId))) {
-                    nextDayOverflow.push(s);
+                    nextDayOverflow.push({
+                      ...s,
+                      setupTime: remainingSetupTime,
+                      SetupTime: remainingSetupTime,
+                      prodTime: prodTime,
+                      ProdTime: prodTime,
+                      scheduledMin: remainingSetupTime + prodTime,
+                      ScheduledMin: remainingSetupTime + prodTime,
+                      isSplit: true,
+                      splitPart: (s.splitPart || 1) + 1,
+                      originalStepId: s.originalStepId || s.StepId
+                    });
                   }
                 }
               } else {
@@ -5135,7 +5150,7 @@ app.get('/api/planning', async (req, res) => {
         const deduplicatedOverflow = [];
         combinedOverflow.forEach(s => {
           const keyId = s.originalStepId || s.StepId || s.stepId || s.id;
-          if (!seenOverflowIds.has(keyId)) {
+          if (!scheduledStepIds.has(keyId) && !seenOverflowIds.has(keyId)) {
             seenOverflowIds.add(keyId);
             deduplicatedOverflow.push(s);
           }
