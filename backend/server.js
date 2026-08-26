@@ -50,6 +50,11 @@ async function fetchFastD4NativePlan(startDateStr, endDateStr) {
         ISNULL(sk.PSP_ZEIT_UEBERLAPPUNG_PROZENT, 0) as UeberlappungProzent,
         ISNULL(sk.PSP_PP_ZEIT_MINUTEN_MAX_PROD_TAG, 0) as MaxProdTag,
         k.PSK_IDBEBP as IdBeBp,
+        bp.BP_PP_DATUM_TERMIN as ProductionDate,
+        CASE 
+          WHEN bp.BP_LI_DATUM IS NOT NULL THEN bp.BP_LI_DATUM 
+          ELSE au.BK_BKBE_AU_LI_DATUM 
+        END as OrderDeliveryDate,
         CASE WHEN ISNULL(au.BK_BKBE_AU_PP_ZUSTAND_PLANUNG, 0) > 0 
              THEN au.BK_BKBE_AU_PP_ZUSTAND_PLANUNG - 1 
              ELSE ISNULL(bp.BP_PP_ZUSTAND_PLANUNG, 0) 
@@ -259,6 +264,11 @@ async function fetchActiveStepsAndMaterials(poolD4) {
       p.PSP_PP_STATUS_PRODUKTION as StatusProduction,
       ISNULL(p.PSP_TYP_SPERRE, 0) as TypSperre,
       ISNULL(p.PSP_TYP_SPERRE_WEITERVERARBEITUNG, 0) as SperreWeiter,
+      b.BP_PP_DATUM_TERMIN as ProductionDate,
+      CASE
+        WHEN b.BP_LI_DATUM IS NOT NULL THEN b.BP_LI_DATUM
+        ELSE au.BK_BKBE_AU_LI_DATUM
+      END as OrderDeliveryDate,
       CASE
         WHEN b.BP_PP_DATUM_TERMIN IS NOT NULL THEN b.BP_PP_DATUM_TERMIN
         ELSE
@@ -740,6 +750,8 @@ async function cacheSetupData() {
       row.zustandPlanung = rawZustand;
       row.belegArt = isReleased ? 1 : 0;
       row.isFreigegeben = isReleased;
+      row.productionDate = row.ProductionDate;
+      row.orderDeliveryDate = row.OrderDeliveryDate;
       if (row.BookedMachineId) {
         row.MachineId = row.BookedMachineId;
       }
@@ -3009,79 +3021,30 @@ function getFremdleistungType(desc) {
 }
 
 function sequenceNonMachining(stepsList, orderStepsMap) {
-  if (stepsList.length === 0) {
+  if (!stepsList || stepsList.length === 0) {
     return { sequenced: [], finalMagazine: [] };
   }
-  if (stepsList.length === 1) {
-    return { sequenced: stepsList.map(s => ({ ...s, loadTools: [], unloadTools: [] })), finalMagazine: [] };
-  }
 
-  const isMachiningCenter = (mId) => {
-    return [2, 4, 5, 6, 8, 21, 25].includes(mId);
-  };
+  // Sort strictly by D4 Date (StartDate / originalStartDate / ProductionDate / productionDate / DeliveryDate), then contract/orderPos/stepPos
+  const sorted = [...stepsList].sort((a, b) => {
+    const dateA = new Date(a.StartDate || a.originalStartDate || a.ProductionDate || a.productionDate || a.DeliveryDate || a.deliveryDate || '9999-12-31').getTime();
+    const dateB = new Date(b.StartDate || b.originalStartDate || b.ProductionDate || b.productionDate || b.DeliveryDate || b.deliveryDate || '9999-12-31').getTime();
+    if (dateA !== dateB) return dateA - dateB;
 
-  const hasSubsequentMilling = (step) => {
-    const oId = step.OrderId;
-    const allOrderSteps = orderStepsMap[oId] || [];
-    return allOrderSteps.some(os => os.StepPos > step.StepPos && isMachiningCenter(os.MachineId));
-  };
+    const contractA = String(a.ContractNumber || a.contractNumber || '');
+    const contractB = String(b.ContractNumber || b.contractNumber || '');
+    if (contractA !== contractB) return contractA.localeCompare(contractB);
 
-  stepsList.forEach(s => {
-    s.hasSubsequentMilling = hasSubsequentMilling(s);
-    s.fremdType = getFremdleistungType(s.StepDesc);
+    const posA = parseInt(a.StepPos || a.stepPos || 0, 10);
+    const posB = parseInt(b.StepPos || b.stepPos || 0, 10);
+    return posA - posB;
   });
 
-  const times = stepsList.map(s => new Date(s.StartDate || s.DeliveryDate || '9999-12-31').getTime());
-  const minTime = Math.min(...times);
-  const maxTime = Math.max(...times);
-  const timeRange = maxTime - minTime || 1;
-
-  let remaining = [...stepsList];
-  let ordered = [];
-  let lastFremdType = 'None';
-
-  while (remaining.length > 0) {
-    let bestIdx = -1;
-    let minScore = Infinity;
-
-    for (let i = 0; i < remaining.length; i++) {
-      const step = remaining[i];
-      const t = new Date(step.StartDate || step.DeliveryDate || '9999-12-31').getTime();
-      const normTime = (t - minTime) / timeRange;
-
-      let score = normTime;
-      if (step.hasSubsequentMilling) {
-        score -= 0.5;
-      }
-      if (lastFremdType !== 'None' && step.fremdType === lastFremdType) {
-        score -= 0.8;
-      }
-
-      if (score < minScore) {
-        minScore = score;
-        bestIdx = i;
-      }
-    }
-
-    const chosen = remaining.splice(bestIdx, 1)[0];
-    ordered.push(chosen);
-    if (chosen.fremdType !== 'None') {
-      lastFremdType = chosen.fremdType;
-    } else {
-      lastFremdType = 'None';
-    }
-  }
-
-  const sequenced = ordered.map(chosen => {
-    return {
-      ...chosen,
-      loadTools: [],
-      unloadTools: []
-    };
-  });
-
-  return { sequenced, finalMagazine: [] };
-}
+  return {
+    sequenced: sorted.map(s => ({ ...s, loadTools: [], unloadTools: [] })),
+    finalMagazine: []
+  };
+};
 
 // Helper to sequence steps using selected algorithm and simulate magazine transition
 function sequenceSteps(stepsList, currentMagazine, magazineSize, listToToolsMap, algo = 'greedy', optimizeFixture = false, fixtureWeight = 1.5) {
@@ -3809,14 +3772,19 @@ app.get('/api/planning', async (req, res) => {
     let greenSteps = shouldIncludeNonGreen ? steps : steps.filter(step => step.color === 'Green');
 
     function getVirtualMachineForStep(step) {
-      // If the step has an explicit D4 machine or machine pool assignment, it is a machining step
-      if ((step.MachineId && step.MachineId > 0) || (step.MachinePoolId && step.MachinePoolId > 0)) {
+      if (step.MachineId === 15) return 'Montage UR5';
+      if (step.MachineId === 16) return 'Laser';
+      if (step.MachineId === 17) return 'Messmaschine';
+
+      // If the step has an explicit machining center or milling pool assignment, it is a machining step
+      if ([2, 4, 5, 6, 8, 21, 25].includes(step.MachineId) || [9, 12, 13].includes(step.MachinePoolId)) {
         return null;
       }
+
       const desc = (step.StepDesc || '').toLowerCase();
-      if (step.MachineId === 15 || desc.includes('ur5')) return 'Montage UR5';
-      if (step.MachineId === 16 || desc.includes('laser')) return 'Laser';
-      if (step.MachineId === 17 || desc.includes('messmaschine') || desc.includes('zeiss') || desc.includes('kmg')) return 'Messmaschine';
+      if (desc.includes('ur5')) return 'Montage UR5';
+      if (desc.includes('laser')) return 'Laser';
+      if (desc.includes('messmaschine') || desc.includes('zeiss') || desc.includes('kmg')) return 'Messmaschine';
       if (desc.includes('versand') || desc.includes('verpacken') || desc.includes('etikett')) return 'Versand';
       if (desc.includes('montage') || desc.includes('gewindeeinsatz') || desc.includes('zapfen brechen')) return 'Montage';
       if (desc.includes('eingangsprüfung') || desc.includes('ersteilabnahme') || desc.includes('serienprüfung') || desc.includes('stempeln')) return 'Prüfplanung';
@@ -3967,18 +3935,49 @@ app.get('/api/planning', async (req, res) => {
           nameCapacities['RS2_2'] = caps;
         }
       });
+
+      // Default standard single-shift capacity for manual non-machining workstations (Mo-Do: 360m/6h, Fr: 300m/5h)
+      const manualDefaultCaps = {
+        1: 360, // Monday
+        2: 360, // Tuesday
+        3: 360, // Wednesday
+        4: 360, // Thursday
+        5: 300, // Friday
+        6: 0,   // Saturday
+        0: 0    // Sunday
+      };
+      ['Entgraten', 'Montage', 'Prüfplanung', 'Pruefplanung', 'Versand', 'Laser', 'Messmaschine', 'Montage UR5'].forEach(name => {
+        if (!nameCapacities[name.toUpperCase()]) {
+          nameCapacities[name.toUpperCase()] = manualDefaultCaps;
+        }
+        if (!nameCapacities[name]) {
+          nameCapacities[name] = manualDefaultCaps;
+        }
+      });
     } catch (err) {
       console.error('Error fetching capacities:', err);
     }
 
+    const manualDefaultCaps = {
+      1: 360,
+      2: 360,
+      3: 360,
+      4: 360,
+      5: 300,
+      6: 0,
+      0: 0
+    };
+
     const getCapacityForDay = (mName, dateStr) => {
       if (dateStr === 'Überlauf') return 99999;
-      const key = mName.toUpperCase();
+      const key = (mName || '').toUpperCase();
       const capMap = nameCapacities[key] || nameCapacities[mName] || (machineIdMap[mName] && capacities[machineIdMap[mName]]);
-      if (!capMap) return 0;
       const dayOfWeek = new Date(dateStr).getDay(); // 0 = Sunday, 1 = Monday, etc.
-      const cap = capMap[dayOfWeek];
-      return cap !== undefined ? cap : 0;
+      if (capMap) {
+        const cap = capMap[dayOfWeek];
+        return cap !== undefined ? cap : (dayOfWeek >= 1 && dayOfWeek <= 4 ? 360 : (dayOfWeek === 5 ? 300 : 0));
+      }
+      return dayOfWeek >= 1 && dayOfWeek <= 4 ? 360 : (dayOfWeek === 5 ? 300 : 0);
     };
 
     const allowLookahead = req.query.allowLookahead !== 'false';
@@ -4306,6 +4305,8 @@ app.get('/api/planning', async (req, res) => {
           ArticleId: origStep.ArticleId || origStep.articleId,
           deliveryDate: origStep.DeliveryDate || origStep.deliveryDate,
           DeliveryDate: origStep.DeliveryDate || origStep.deliveryDate,
+          productionDate: p.ProductionDate || origStep.ProductionDate || origStep.productionDate || origStep.DeliveryDate || origStep.deliveryDate,
+          orderDeliveryDate: p.OrderDeliveryDate || origStep.OrderDeliveryDate || origStep.orderDeliveryDate || null,
           ncProgram: origStep.NCProgram || origStep.ncProgram,
           NCProgram: origStep.NCProgram || origStep.ncProgram,
           matchedListNr: origStep.MatchedListNr || origStep.matchedListNr,
@@ -4428,6 +4429,8 @@ app.get('/api/planning', async (req, res) => {
           ArticleId: origStep.ArticleId || origStep.articleId,
           deliveryDate: origStep.DeliveryDate || origStep.deliveryDate,
           DeliveryDate: origStep.DeliveryDate || origStep.deliveryDate,
+          productionDate: p.ProductionDate || origStep.ProductionDate || origStep.productionDate || origStep.DeliveryDate || origStep.deliveryDate,
+          orderDeliveryDate: p.OrderDeliveryDate || origStep.OrderDeliveryDate || origStep.orderDeliveryDate || null,
           ncProgram: origStep.NCProgram || origStep.ncProgram,
           NCProgram: origStep.NCProgram || origStep.ncProgram,
           matchedListNr: origStep.MatchedListNr || origStep.matchedListNr,
@@ -4835,9 +4838,10 @@ app.get('/api/planning', async (req, res) => {
           // Apply capacity constraint scheduling with Staggered Shift Model (Tag & Nacht Fenster)
           const isAutomatedCell = ['RS2_1', 'RS2_2', 'C40', 'C42'].includes(mName);
           // PLANUNG MASCHINEN: Robot cells & automated machines ALLOW 24h (1440 min) unmanned night run!
-          const allowNightRun = isAutomatedCell || dayCapacity > 540;
-          const DAY_WINDOW_LIMIT = 540; // 07:00 - 16:00 (9 hours / 540 min)
-          const nightWindowLimit = allowNightRun ? 900 : Math.max(0, dayCapacity - DAY_WINDOW_LIMIT);
+          const allowNightRun = isAutomatedCell;
+          const DAY_WINDOW_LIMIT = 540; // 07:00 - 16:00 (9 hours / 540 min) for automated robot cells
+          const effectiveDayLimit = isAutomatedCell ? DAY_WINDOW_LIMIT : dayCapacity;
+          const nightWindowLimit = allowNightRun ? 900 : 0;
           const maxDayCap = allowNightRun ? 1440 : dayCapacity;
 
           let usedDayMinutes = 0;
@@ -4851,7 +4855,7 @@ app.get('/api/planning', async (req, res) => {
             const prodTime = s.prodTime || 0;
             const totalDuration = setupTime + prodTime;
 
-            // Determine if step qualifies for night shift on this machine
+            // Determine if step qualifies for night shift on this machine (ONLY on robot cells!)
             const isNightCapableOnThisMachine = allowNightRun && s.isNightRunCapable;
 
             if (isConflict) {
@@ -4889,7 +4893,7 @@ app.get('/api/planning', async (req, res) => {
               const nightRemaining = Math.min(totalRemainingDay, Math.max(0, nightWindowLimit - usedNightMinutes));
 
               if ((setupTime === 0 || setupTime <= daySetupRemaining) && prodTime <= nightRemaining && (setupTime + prodTime <= totalRemainingDay)) {
-                dayScheduled.push({ ...s, scheduledShift: 'NIGHT' });
+                dayScheduled.push({ ...s, scheduledShift: 'NIGHT', scheduledMin: setupTime + prodTime, ScheduledMin: setupTime + prodTime });
                 if (isAutomated) {
                   usedDaySetupMinutes += setupTime;
                 } else {
@@ -4936,15 +4940,20 @@ app.get('/api/planning', async (req, res) => {
                 if (!nextDayOverflow.some(x => (x.originalStepId || x.StepId) === (s.originalStepId || s.StepId))) { nextDayOverflow.push(s); }
               }
             } else {
-              // DAY STEP: Both Setup AND Prod Time fill Day Window (07:00-16:00, max 540 min or dayCapacity)
+              // DAY STEP (Manual / standard machine or day-only job on cell):
               const currentTotalWorkload = Math.max(usedDaySetupMinutes, usedDayMinutes) + usedNightMinutes;
               const totalRemainingDay = Math.max(0, maxDayCap - currentTotalWorkload);
-              const maxDayLimitForMachine = Math.min(DAY_WINDOW_LIMIT, dayCapacity, totalRemainingDay);
+              const maxDayLimitForMachine = isAutomatedCell ? Math.min(DAY_WINDOW_LIMIT, totalRemainingDay) : Math.min(dayCapacity, totalRemainingDay);
               const dayRemaining = Math.max(0, maxDayLimitForMachine - usedDayMinutes);
 
               if (dayRemaining > 0) {
                 if (totalDuration <= dayRemaining) {
-                  dayScheduled.push({ ...s, scheduledShift: 'DAY' });
+                  dayScheduled.push({
+                    ...s,
+                    scheduledShift: 'DAY',
+                    scheduledMin: totalDuration,
+                    ScheduledMin: totalDuration
+                  });
                   usedDayMinutes += totalDuration;
                 } else if (setupTime <= dayRemaining) {
                   const fittedProdTime = Math.min(dayRemaining - setupTime, totalRemainingDay - setupTime);
@@ -4952,6 +4961,8 @@ app.get('/api/planning', async (req, res) => {
 
                   dayScheduled.push({
                     ...s,
+                    setupTime: setupTime,
+                    SetupTime: setupTime,
                     prodTime: fittedProdTime,
                     ProdTime: fittedProdTime,
                     scheduledMin: setupTime + fittedProdTime,
@@ -5028,14 +5039,25 @@ app.get('/api/planning', async (req, res) => {
 
             // Sort future lookahead candidates so orders sharing tools with the current day/night schedule are pulled first!
             const sortedLookahead = [...lookaheadCandidates[mName]].sort((a, b) => {
+              if (isNonMachining) {
+                const dateA = new Date(a.StartDate || a.originalStartDate || a.ProductionDate || a.productionDate || a.DeliveryDate || a.deliveryDate || '9999-12-31').getTime();
+                const dateB = new Date(b.StartDate || b.originalStartDate || b.ProductionDate || b.productionDate || b.DeliveryDate || b.deliveryDate || '9999-12-31').getTime();
+                if (dateA !== dateB) return dateA - dateB;
+                const contractA = String(a.ContractNumber || a.contractNumber || '');
+                const contractB = String(b.ContractNumber || b.contractNumber || '');
+                return contractA.localeCompare(contractB);
+              }
               const toolsA = listToToolsMap[a.MatchedListNr] || [];
               const toolsB = listToToolsMap[b.MatchedListNr] || [];
               const overlapA = toolsA.filter(t => currentDayTools.has(t)).length;
               const overlapB = toolsB.filter(t => currentDayTools.has(t)).length;
-              return overlapB - overlapA; // Highest tool overlap first!
+              if (overlapB !== overlapA) return overlapB - overlapA; // Highest tool overlap first!
+              const dateA = new Date(a.StartDate || a.originalStartDate || a.ProductionDate || a.productionDate || a.DeliveryDate || a.deliveryDate || '9999-12-31').getTime();
+              const dateB = new Date(b.StartDate || b.originalStartDate || b.ProductionDate || b.productionDate || b.DeliveryDate || b.deliveryDate || '9999-12-31').getTime();
+              return dateA - dateB;
             });
 
-            // Fill Night Window to 100% (900 min / 15h) with strict 1440 min (24.0h) hard cap
+            // Fill Night Window to 100% (900 min / 15h) with strict 1440 min (24.0h) hard cap (ONLY on automated robot cells!)
             if (allowNightRun && usedNightMinutes < nightWindowLimit) {
               for (const cand of sortedLookahead) {
                 if (usedNightMinutes >= nightWindowLimit) break;
@@ -5057,7 +5079,12 @@ app.get('/api/planning', async (req, res) => {
 
                   const scheduledCand = {
                     ...cand,
+                    setupTime: candSetup,
+                    SetupTime: candSetup,
                     prodTime: fittedProd,
+                    ProdTime: fittedProd,
+                    scheduledMin: candSetup + fittedProd,
+                    ScheduledMin: candSetup + fittedProd,
                     isSplit: remainingProd > 0 || cand.isSplit,
                     splitPart: cand.splitPart || 1,
                     originalStepId: cand.originalStepId || cand.StepId,
@@ -5079,7 +5106,11 @@ app.get('/api/planning', async (req, res) => {
                     nextDayOverflow.push({
                       ...cand,
                       SetupTime: 0,
+                      setupTime: 0,
                       prodTime: remainingProd,
+                      ProdTime: remainingProd,
+                      scheduledMin: remainingProd,
+                      ScheduledMin: remainingProd,
                       isSplit: true,
                       splitPart: (cand.splitPart || 1) + 1,
                       originalStepId: cand.originalStepId || cand.StepId,
@@ -5090,22 +5121,30 @@ app.get('/api/planning', async (req, res) => {
               }
             }
 
-            // Fill Day Window to 100% (540 min / 9h)
-            if (usedDayMinutes < DAY_WINDOW_LIMIT) {
+            // Fill Day Window to 100% (Day limit: 540 min for robot cells, dayCapacity for non-robot machines!)
+            const targetDayLimit = isAutomatedCell ? DAY_WINDOW_LIMIT : dayCapacity;
+            if (usedDayMinutes < targetDayLimit) {
               for (const cand of sortedLookahead) {
-                if (usedDayMinutes >= DAY_WINDOW_LIMIT) break;
+                if (usedDayMinutes >= targetDayLimit) break;
                 if (scheduledStepIds.has(cand.StepId) || scheduledStepIds.has(cand.originalStepId)) continue;
 
-                const candTotal = (cand.SetupTime || 0) + (cand.prodTime || 0);
-                const dayRem = Math.max(0, DAY_WINDOW_LIMIT - usedDayMinutes);
+                const candSetup = cand.SetupTime || 0;
+                const candProd = cand.prodTime || 0;
+                const candTotal = candSetup + candProd;
+                const dayRem = Math.max(0, targetDayLimit - usedDayMinutes);
 
-                if (dayRem > (cand.SetupTime || 0)) {
-                  const fittedProd = Math.min(cand.prodTime || 0, dayRem - (cand.SetupTime || 0));
-                  const remainingProd = (cand.prodTime || 0) - fittedProd;
+                if (dayRem > candSetup) {
+                  const fittedProd = Math.min(candProd, dayRem - candSetup);
+                  const remainingProd = candProd - fittedProd;
 
                   const scheduledCand = {
                     ...cand,
+                    setupTime: candSetup,
+                    SetupTime: candSetup,
                     prodTime: fittedProd,
+                    ProdTime: fittedProd,
+                    scheduledMin: candSetup + fittedProd,
+                    ScheduledMin: candSetup + fittedProd,
                     isSplit: remainingProd > 0 || cand.isSplit,
                     splitPart: cand.splitPart || 1,
                     originalStepId: cand.originalStepId || cand.StepId,
@@ -5114,7 +5153,7 @@ app.get('/api/planning', async (req, res) => {
                   };
 
                   dayScheduled.push(scheduledCand);
-                  usedDayMinutes += (cand.SetupTime || 0) + fittedProd;
+                  usedDayMinutes += (candSetup + fittedProd);
                   scheduledStepIds.add(cand.StepId);
                   if (cand.originalStepId) scheduledStepIds.add(cand.originalStepId);
 
@@ -5122,7 +5161,11 @@ app.get('/api/planning', async (req, res) => {
                     nextDayOverflow.push({
                       ...cand,
                       SetupTime: 0,
+                      setupTime: 0,
                       prodTime: remainingProd,
+                      ProdTime: remainingProd,
+                      scheduledMin: remainingProd,
+                      ScheduledMin: remainingProd,
                       isSplit: true,
                       splitPart: (cand.splitPart || 1) + 1,
                       originalStepId: cand.originalStepId || cand.StepId,
@@ -5229,7 +5272,7 @@ app.get('/api/planning', async (req, res) => {
 
           const st = s.setupTime !== undefined ? s.setupTime : (s.SetupTime || 0);
           const pr = s.prodTime !== undefined ? s.prodTime : (s.ProdTime || 0);
-          const sch = s.scheduledMin !== undefined ? s.scheduledMin : (st + pr);
+          const sch = st + pr;
 
           return {
             stepId: s.StepId,
@@ -5239,7 +5282,9 @@ app.get('/api/planning', async (req, res) => {
             isFreigegeben: s.isFreigegeben !== undefined ? s.isFreigegeben : (s.BelegArt === 1),
             isGesperrt: (s.TypSperre > 0 || s.SperreWeiter > 0) || false,
             typSperre: s.TypSperre || 0,
-            deliveryDate: s.DeliveryDate || null,
+            deliveryDate: s.DeliveryDate || s.deliveryDate || null,
+            productionDate: s.ProductionDate || s.productionDate || s.DeliveryDate || s.deliveryDate || null,
+            orderDeliveryDate: s.OrderDeliveryDate || s.orderDeliveryDate || null,
             stepPos: s.StepPos || null,
             orderPos: s.OrderPos || null,
             articleId: s.ArticleId,

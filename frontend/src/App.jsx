@@ -8557,20 +8557,26 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                 </span>
                               )}
                               {step.originalStartDate && (
-                                <span style={{ fontSize: '0.64rem', color: '#38bdf8', fontWeight: 600, whiteSpace: 'nowrap' }} title="Geplantes Bearbeitungsdatum nach D4 (AS)">
-                                  📅 D4: {formatDate(step.originalStartDate)}
-                                </span>
+                                step.isConflict ? (
+                                  <span style={{ fontSize: '0.64rem', color: '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }} title={`Überfälliger D4-Termin (Vergangenheit): ${formatDate(step.originalStartDate)}`}>
+                                    D4: ⚠ {formatDate(step.originalStartDate)}
+                                  </span>
+                                ) : (
+                                  <span style={{ fontSize: '0.64rem', color: '#38bdf8', fontWeight: 600, whiteSpace: 'nowrap' }} title="Geplantes Bearbeitungsdatum nach D4 (AS)">
+                                    📅 D4: {formatDate(step.originalStartDate)}
+                                  </span>
+                                )
                               )}
-                              {step.deliveryDate && (
-                                <span style={{ fontSize: '0.64rem', color: '#94a3b8', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                                  Lief: {formatDate(step.deliveryDate)}
+                              {(step.productionDate || step.deliveryDate) && (
+                                <span style={{ fontSize: '0.64rem', color: '#94a3b8', fontWeight: 600, whiteSpace: 'nowrap' }} title="Fertigstellungstermin der Position">
+                                  Fertig: {formatDate(step.productionDate || step.deliveryDate)}
                                 </span>
                               )}
                             </div>
                           </div>
 
                           {/* Secondary Badges Row */}
-                          {(step.isSplit || step.isConflict || step.isLookahead || step.isNightRunCapable || step.maxDayQty || step.manualMachineOverride || (isConflictMode && false) || isRobotFlowStep) && (
+                          {(step.isSplit || step.isLookahead || step.isNightRunCapable || step.maxDayQty || step.manualMachineOverride || (isConflictMode && false) || isRobotFlowStep) && (
                             <div style={{ display: 'flex', gap: '0.2rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.1rem', marginBottom: '0.15rem' }}>
                               {isRobotFlowStep && (
                                 <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.4)', color: '#d8b4fe', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px', fontWeight: 700 }}>
@@ -8585,11 +8591,6 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                               {!isConflictMode && step.isSplit && (
                                 <span className="badge" style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', color: '#38bdf8', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px' }}>
                                   ✂ T{step.splitPart}
-                                </span>
-                              )}
-                              {step.isConflict && (
-                                <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '0.55rem', padding: '0.05rem 0.2rem', borderRadius: '3px' }}>
-                                  ⚠ {formatDate(step.originalStartDate)}
                                 </span>
                               )}
                               {step.isLookahead && (
@@ -9273,8 +9274,8 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                 )}
               </div>
 
-              {/* Row 1: P-Nummer & Order ID */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              {/* Row 1: P-Nummer, Fertigstellungstermin & Lieferdatum */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '0.75rem' }}>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>P-Nummer (Projekt) / Position</div>
                   <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>
@@ -9282,9 +9283,15 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                   </div>
                 </div>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Lieferdatum</div>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Fertigstellungstermin</div>
+                  <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>
+                    {activeModalStep.productionDate || activeModalStep.deliveryDate ? formatDate(activeModalStep.productionDate || activeModalStep.deliveryDate) : 'Kein Termin'}
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Lieferdatum (Kunde / Beleg)</div>
                   <div style={{ fontSize: '1.05rem', color: '#10b981', fontWeight: 700 }}>
-                    {activeModalStep.deliveryDate ? formatDate(activeModalStep.deliveryDate) : 'Kein Lieferdatum'}
+                    {activeModalStep.orderDeliveryDate ? formatDate(activeModalStep.orderDeliveryDate) : (activeModalStep.deliveryDate ? formatDate(activeModalStep.deliveryDate) : 'Kein Lieferdatum')}
                   </div>
                 </div>
               </div>
@@ -12604,8 +12611,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
             {/* Modal Body */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
-              {/* Row 1: P-Nummer & Lieferdatum */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              {/* Row 1: P-Nummer, Tag, Fertigstellungstermin & Lieferdatum */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 1fr 1fr', gap: '0.75rem' }}>
                 <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>P-Nummer (Projekt) / Position</div>
                   <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -12633,6 +12640,18 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                   <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Eingeplanter Tag</div>
                   <div style={{ fontSize: '1.05rem', color: '#10b981', fontWeight: 700 }}>
                     {activeModalStep.day || 'Überlauf'}
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Fertigstellungstermin</div>
+                  <div style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: 700 }}>
+                    {activeModalStep.productionDate || activeModalStep.deliveryDate ? formatDate(activeModalStep.productionDate || activeModalStep.deliveryDate) : 'Kein Termin'}
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-dim)', padding: '0.75rem 1rem', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.2rem' }}>Lieferdatum</div>
+                  <div style={{ fontSize: '1.05rem', color: '#10b981', fontWeight: 700 }}>
+                    {activeModalStep.orderDeliveryDate ? formatDate(activeModalStep.orderDeliveryDate) : (activeModalStep.deliveryDate ? formatDate(activeModalStep.deliveryDate) : 'Kein Lieferdatum')}
                   </div>
                 </div>
               </div>
