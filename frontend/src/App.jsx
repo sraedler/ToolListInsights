@@ -27,7 +27,7 @@ function getISOWeekNumber(dateStr) {
   return 'KW ' + String(kw).padStart(2, '0');
 }
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, useDeferredValue } from 'react';
 import { 
   LayoutDashboard, 
   Database, 
@@ -91,6 +91,16 @@ function formatMinutes(mins) {
   const hrs = Math.floor(roundedMins / 60);
   const remainingMins = roundedMins % 60;
   return remainingMins > 0 ? `${hrs}h ${remainingMins}m` : `${hrs}h`;
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return String(dateStr);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}.${month}.${year}`;
 }
 
 export default function App() {
@@ -10784,6 +10794,267 @@ function PDFCanvasViewer({ url, dmsSliderFullscreen }) {
 
 
 /* ==========================================
+   TIMELINE MINI-MAP (Custom robust dual-handle slider)
+   ========================================== */
+function TimelineMiniMap({
+  data,
+  totalPoints,
+  startIndex,
+  endIndex,
+  onRangeCommit
+}) {
+  const containerRef = useRef(null);
+  const [dragMode, setDragMode] = useState(null); // 'left' | 'right' | 'window' | null
+  const [localRange, setLocalRange] = useState({ start: startIndex, end: endIndex });
+  const dragStartRef = useRef({ x: 0, start: startIndex, end: endIndex, containerWidth: 1 });
+
+  useEffect(() => {
+    if (!dragMode) {
+      setLocalRange({ start: startIndex, end: endIndex });
+    }
+  }, [startIndex, endIndex, dragMode]);
+
+  const maxVal = useMemo(() => {
+    let m = 1;
+    if (data && data.length > 0) {
+      data.forEach(d => {
+        if ((d.GesamtGeplant || 0) > m) m = d.GesamtGeplant;
+        if ((d.Kapazität || 0) > m) m = d.Kapazität;
+      });
+    }
+    return m;
+  }, [data]);
+
+  const handlePointerDown = (mode, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragMode(mode);
+    const rect = containerRef.current ? containerRef.current.getBoundingClientRect() : { width: 100 };
+    dragStartRef.current = {
+      x: e.clientX,
+      start: localRange.start,
+      end: localRange.end,
+      containerWidth: rect.width || 1
+    };
+    if (e.currentTarget.setPointerCapture) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+  };
+
+  const handlePointerMove = (e) => {
+    if (!dragMode || !containerRef.current) return;
+    const width = dragStartRef.current.containerWidth || containerRef.current.clientWidth || 1;
+    const deltaX = e.clientX - dragStartRef.current.x;
+    const deltaPoints = Math.round((deltaX / width) * totalPoints);
+
+    if (dragMode === 'left') {
+      const newStart = Math.max(0, Math.min(dragStartRef.current.end - 1, dragStartRef.current.start + deltaPoints));
+      setLocalRange(prev => ({ ...prev, start: newStart }));
+    } else if (dragMode === 'right') {
+      const newEnd = Math.min(totalPoints - 1, Math.max(dragStartRef.current.start + 1, dragStartRef.current.end + deltaPoints));
+      setLocalRange(prev => ({ ...prev, end: newEnd }));
+    } else if (dragMode === 'window') {
+      const span = dragStartRef.current.end - dragStartRef.current.start;
+      let newStart = dragStartRef.current.start + deltaPoints;
+      let newEnd = dragStartRef.current.end + deltaPoints;
+      if (newStart < 0) {
+        newStart = 0;
+        newEnd = Math.min(totalPoints - 1, span);
+      }
+      if (newEnd >= totalPoints) {
+        newEnd = totalPoints - 1;
+        newStart = Math.max(0, newEnd - span);
+      }
+      setLocalRange({ start: newStart, end: newEnd });
+    }
+  };
+
+  const handlePointerUp = (e) => {
+    if (dragMode) {
+      const finalRange = { ...localRange };
+      setDragMode(null);
+      if (e.currentTarget.releasePointerCapture) {
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+      if (onRangeCommit) {
+        onRangeCommit(finalRange.start, finalRange.end);
+      }
+    }
+  };
+
+  const safeTotal = Math.max(1, totalPoints);
+  const leftPct = (localRange.start / safeTotal) * 100;
+  const widthPct = Math.max(2, ((localRange.end - localRange.start + 1) / safeTotal) * 100);
+
+  const startDay = data?.[localRange.start]?.day;
+  const endDay = data?.[localRange.end]?.day;
+  const startKW = startDay ? getISOWeekNumber(startDay) : '';
+  const endKW = endDay ? getISOWeekNumber(endDay) : '';
+  const startDObj = startDay ? new Date(startDay) : null;
+  const endDObj = endDay ? new Date(endDay) : null;
+  const startFormatted = startDObj && !isNaN(startDObj.getTime()) ? (String(startDObj.getDate()).padStart(2, '0') + '.' + String(startDObj.getMonth() + 1).padStart(2, '0') + '.') : startDay;
+  const endFormatted = endDObj && !isNaN(endDObj.getTime()) ? (String(endDObj.getDate()).padStart(2, '0') + '.' + String(endDObj.getMonth() + 1).padStart(2, '0') + '.') : endDay;
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        width: '100%',
+        height: '44px',
+        background: 'rgba(15, 23, 42, 0.85)',
+        border: '1px solid var(--border-dim)',
+        borderRadius: '8px',
+        position: 'relative',
+        userSelect: 'none',
+        overflow: 'hidden',
+        boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.5)',
+        cursor: 'default',
+        touchAction: 'none'
+      }}
+    >
+      {/* Background SVG Bars */}
+      <svg
+        style={{ width: '100%', height: '100%', display: 'block', position: 'absolute', top: 0, left: 0 }}
+        preserveAspectRatio="none"
+        viewBox={`0 0 ${safeTotal} 44`}
+      >
+        {data && data.map((d, idx) => {
+          const val = d.GesamtGeplant || 0;
+          const cap = d.Kapazität || 0;
+          const barH = Math.min(32, Math.max(2, (val / (maxVal || 1)) * 32));
+          const isOver = val > cap && cap > 0;
+          return (
+            <rect
+              key={'mini_bar_' + idx}
+              x={idx}
+              y={42 - barH}
+              width={0.8}
+              height={barH}
+              fill={isOver ? 'rgba(239, 68, 68, 0.5)' : 'rgba(56, 189, 248, 0.4)'}
+            />
+          );
+        })}
+      </svg>
+
+      {/* Dim overlay on non-selected left region */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          bottom: 0,
+          left: 0,
+          width: `${leftPct}%`,
+          background: 'rgba(0, 0, 0, 0.65)',
+          pointerEvents: 'none',
+          transition: dragMode ? 'none' : 'width 0.1s ease-out'
+        }}
+      />
+
+      {/* Dim overlay on non-selected right region */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          bottom: 0,
+          left: `${Math.min(100, leftPct + widthPct)}%`,
+          right: 0,
+          background: 'rgba(0, 0, 0, 0.65)',
+          pointerEvents: 'none',
+          transition: dragMode ? 'none' : 'left 0.1s ease-out'
+        }}
+      />
+
+      {/* Draggable Active Window Box */}
+      <div
+        onPointerDown={(e) => handlePointerDown('window', e)}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        style={{
+          position: 'absolute',
+          top: 0,
+          bottom: 0,
+          left: `${leftPct}%`,
+          width: `${widthPct}%`,
+          minWidth: '24px',
+          background: 'rgba(56, 189, 248, 0.15)',
+          borderTop: '2px solid #38bdf8',
+          borderBottom: '2px solid #38bdf8',
+          cursor: dragMode === 'window' ? 'grabbing' : 'grab',
+          boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          transition: dragMode ? 'none' : 'all 0.1s ease-out',
+          zIndex: 5
+        }}
+      >
+        {/* Left Slider Handle */}
+        <div
+          onPointerDown={(e) => handlePointerDown('left', e)}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          title={`Start: ${startFormatted} (${startKW})`}
+          style={{
+            width: '14px',
+            height: '100%',
+            background: 'linear-gradient(90deg, #38bdf8, #0284c7)',
+            cursor: 'ew-resize',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 0 6px rgba(56, 189, 248, 0.8)',
+            zIndex: 10,
+            touchAction: 'none'
+          }}
+        >
+          <div style={{ width: '2px', height: '14px', background: '#ffffff', borderRadius: '1px' }} />
+        </div>
+
+        {/* Center Label inside active window */}
+        <div style={{
+          fontSize: '0.72rem',
+          fontWeight: 800,
+          color: '#ffffff',
+          textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+          pointerEvents: 'none',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          padding: '0 4px',
+          textAlign: 'center',
+          flex: 1
+        }}>
+          {startKW} ({startFormatted}) – {endKW} ({endFormatted})
+        </div>
+
+        {/* Right Slider Handle */}
+        <div
+          onPointerDown={(e) => handlePointerDown('right', e)}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          title={`Ende: ${endFormatted} (${endKW})`}
+          style={{
+            width: '14px',
+            height: '100%',
+            background: 'linear-gradient(90deg, #0284c7, #38bdf8)',
+            cursor: 'ew-resize',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 0 6px rgba(56, 189, 248, 0.8)',
+            zIndex: 10,
+            touchAction: 'none'
+          }}
+        >
+          <div style={{ width: '2px', height: '14px', background: '#ffffff', borderRadius: '1px' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ==========================================
    PLANNING EVALUATION TAB (Auswertung Planung)
    ========================================== */
 function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
@@ -10899,26 +11170,34 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         requestAnimationFrame(step);
       };
 
-      const timer = setTimeout(() => {
+      const doScroll = () => {
         const contentBody = document.querySelector('.content-body');
         const ganttSec = document.getElementById('gantt-section');
         const el = document.getElementById('gantt-col-idx-' + highlightedDayIndex);
         const container = ganttContainerRef.current;
 
-        if (contentBody && ganttSec) {
-          const topPos = ganttSec.offsetTop - contentBody.offsetTop;
-          animateScroll(contentBody, Math.max(0, topPos - 15), false, 450);
-        } else if (ganttSec) {
-          ganttSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (ganttSec) {
+          if (contentBody) {
+            const topPos = ganttSec.offsetTop - contentBody.offsetTop;
+            animateScroll(contentBody, Math.max(0, topPos - 15), false, 450);
+          } else {
+            ganttSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
         }
 
         if (container && el) {
           const targetLeft = el.offsetLeft - (container.clientWidth / 2) + (el.clientWidth / 2);
           animateScroll(container, Math.max(0, targetLeft), true, 500);
         }
-      }, 80);
+      };
 
-      return () => clearTimeout(timer);
+      const timer1 = setTimeout(doScroll, 80);
+      const timer2 = setTimeout(doScroll, 250);
+
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+      };
     }
   }, [highlightedDayIndex, activeViewMode]);
 
@@ -11473,6 +11752,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     return list;
   }, [planningDays]);
 
+  const deferredZoomRange = useDeferredValue(zoomRange);
+
   const actualEndIndex = useMemo(() => {
     return (zoomRange.end !== null && zoomRange.end !== undefined && zoomRange.end < totalChartPoints)
       ? zoomRange.end
@@ -11487,6 +11768,34 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   const visibleChartData = useMemo(() => {
     return chartDataWithTrend.slice(actualStartIndex, actualEndIndex + 1);
   }, [chartDataWithTrend, actualStartIndex, actualEndIndex]);
+
+  const deferredEndIndex = useMemo(() => {
+    return (deferredZoomRange.end !== null && deferredZoomRange.end !== undefined && deferredZoomRange.end < totalChartPoints)
+      ? deferredZoomRange.end
+      : Math.max(0, totalChartPoints - 1);
+  }, [deferredZoomRange.end, totalChartPoints]);
+
+  const deferredStartIndex = useMemo(() => {
+    return Math.min(Math.max(0, deferredZoomRange.start || 0), deferredEndIndex);
+  }, [deferredZoomRange.start, deferredEndIndex]);
+
+  const deferredVisibleChartData = useMemo(() => {
+    return chartDataWithTrend.slice(deferredStartIndex, deferredEndIndex + 1);
+  }, [chartDataWithTrend, deferredStartIndex, deferredEndIndex]);
+
+  const kwFirstDayMap = useMemo(() => {
+    const map = new Map();
+    const seenKWs = new Set();
+    visibleChartData.forEach(item => {
+      if (!item || !item.day) return;
+      const kw = getISOWeekNumber(item.day);
+      if (kw && !seenKWs.has(kw)) {
+        seenKWs.add(kw);
+        map.set(item.day, kw);
+      }
+    });
+    return map;
+  }, [visibleChartData]);
 
   const currentStartKW = useMemo(() => {
     const startDay = planningDays[actualStartIndex];
@@ -11576,87 +11885,45 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     }
   }, [allKWList, totalChartPoints]);
 
-  const handleChartMouseDown = useCallback((e) => {
-    if (e && e.activeLabel) {
-      setRefAreaLeft(e.activeLabel);
-      setRefAreaRight(e.activeLabel);
-      setIsSelectingZoom(true);
-    }
-  }, []);
 
-  const handleChartMouseMove = useCallback((e) => {
-    if (isSelectingZoom && e && e.activeLabel) {
-      setRefAreaRight(e.activeLabel);
-    }
-  }, [isSelectingZoom]);
 
-  const handleChartMouseUp = useCallback(() => {
-    if (!isSelectingZoom) return;
-    setIsSelectingZoom(false);
-
-    if (refAreaLeft && refAreaRight && refAreaLeft !== refAreaRight) {
-      const idx1 = planningDays.indexOf(refAreaLeft);
-      const idx2 = planningDays.indexOf(refAreaRight);
-      if (idx1 >= 0 && idx2 >= 0) {
-        const start = Math.min(idx1, idx2);
-        const end = Math.max(idx1, idx2);
-        if (end > start) {
-          setZoomRange({
-            start,
-            end: end === totalChartPoints - 1 ? null : end
-          });
-        }
-      }
-    } else if (refAreaLeft) {
-      const idx = planningDays.indexOf(refAreaLeft);
-      if (idx >= 0) {
-        handleChartDayClick(idx);
+  const handleChartClick = useCallback((e) => {
+    let clickedDay = null;
+    if (e) {
+      if (typeof e === 'string') {
+        clickedDay = e;
+      } else if (e.activeLabel && typeof e.activeLabel === 'string') {
+        clickedDay = e.activeLabel;
+      } else if (e.day && typeof e.day === 'string') {
+        clickedDay = e.day;
+      } else if (e.payload && e.payload.day) {
+        clickedDay = e.payload.day;
+      } else if (e.activePayload && e.activePayload.length > 0 && e.activePayload[0].payload?.day) {
+        clickedDay = e.activePayload[0].payload.day;
       }
     }
-
-    setRefAreaLeft(null);
-    setRefAreaRight(null);
-  }, [isSelectingZoom, refAreaLeft, refAreaRight, planningDays, totalChartPoints]);
-
-  const brushRangeRef = useRef(null);
-  const isDraggingBrushRef = useRef(false);
+    if (clickedDay) {
+      const originalIdx = planningDays.indexOf(clickedDay);
+      if (originalIdx >= 0) {
+        handleChartDayClick(originalIdx);
+      }
+    }
+  }, [planningDays]);
 
   const handleBrushChange = useCallback((range) => {
     if (range && typeof range.startIndex === 'number' && typeof range.endIndex === 'number') {
-      isDraggingBrushRef.current = true;
-      brushRangeRef.current = range;
+      const start = Math.max(0, range.startIndex);
+      const end = Math.min(totalChartPoints - 1, range.endIndex);
+      setZoomRange(prev => {
+        const curEnd = prev.end === null ? totalChartPoints - 1 : prev.end;
+        if (prev.start === start && curEnd === end) return prev;
+        return {
+          start,
+          end: end === totalChartPoints - 1 ? null : end
+        };
+      });
     }
-  }, []);
-
-  useEffect(() => {
-    const handleRelease = () => {
-      if (isDraggingBrushRef.current && brushRangeRef.current) {
-        const { startIndex, endIndex } = brushRangeRef.current;
-        isDraggingBrushRef.current = false;
-        brushRangeRef.current = null;
-        if (typeof startIndex === 'number' && typeof endIndex === 'number') {
-          const newStart = Math.max(0, startIndex);
-          const newEnd = Math.min(totalChartPoints - 1, endIndex);
-          if (newStart !== actualStartIndex || newEnd !== actualEndIndex) {
-            setZoomRange({
-              start: newStart,
-              end: newEnd === totalChartPoints - 1 ? null : newEnd
-            });
-          }
-        }
-      }
-    };
-
-    window.addEventListener('mouseup', handleRelease);
-    window.addEventListener('pointerup', handleRelease);
-    window.addEventListener('touchend', handleRelease);
-
-    return () => {
-      window.removeEventListener('mouseup', handleRelease);
-      window.removeEventListener('pointerup', handleRelease);
-      window.removeEventListener('touchend', handleRelease);
-    };
-  }, [actualStartIndex, actualEndIndex, totalChartPoints]);
+  }, [totalChartPoints]);
 
   if (loading) {
     return (
@@ -12138,7 +12405,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                 </div>
 
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0.25rem 0 0 0' }}>
-                  💡 <span style={{ color: '#38bdf8', fontWeight: 600 }}>Tipp:</span> Kalenderwochen-Pills oben anklicken zum direkten Fokussieren | Mausrad über Diagramm zum Zoomen | Schieberegler unten nutzen.
+                  💡 <span style={{ color: '#38bdf8', fontWeight: 600 }}>Tipp:</span> Mini-Map-Zeitleiste unten zum Zoomen / Verschieben nutzen | Klick auf einen Balken springt direkt zum Tag im Gantt-Kalender.
                 </p>
               </div>
 
@@ -12223,32 +12490,72 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               </div>
             </div>
 
-            {/* Capacity BarChart Container with Wheel Zoom */}
+            {/* Capacity BarChart Container */}
             <div
               id="capacity-chart-container"
               ref={chartContainerRef}
-              onWheel={(e) => {
-                e.preventDefault();
-                if (e.deltaY < 0) {
-                  handleZoomIn();
-                } else if (e.deltaY > 0) {
-                  handleZoomOut();
-                }
-              }}
-              style={{ width: '100%', height: showBrush ? 365 : 320, position: 'relative', userSelect: 'none' }}
+              style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.35rem', userSelect: 'none' }}
             >
-              <ResponsiveContainer width="100%" height={showBrush ? 365 : 320} minWidth={0} minHeight={0}>
+              <ResponsiveContainer width="100%" height={325} minWidth={0} minHeight={0}>
                 <BarChart
-                  data={showBrush ? chartDataWithTrend : visibleChartData}
-                  margin={{ top: 15, right: 30, left: 0, bottom: showBrush ? 5 : 25 }}
-                  onMouseDown={handleChartMouseDown}
-                  onMouseMove={handleChartMouseMove}
-                  onMouseUp={handleChartMouseUp}
-                  onMouseLeave={() => {
-                    if (isSelectingZoom) handleChartMouseUp();
-                  }}
+                  data={visibleChartData}
+                  margin={{ top: 28, right: 30, left: 0, bottom: 25 }}
+                  onClick={handleChartClick}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+
+                  {/* Top X-Axis: Calendar Week (KW) labels displayed directly above the bars (strictly 1x per KW) */}
+                  <XAxis
+                    xAxisId="topKW"
+                    dataKey="day"
+                    orientation="top"
+                    axisLine={{ stroke: 'rgba(255, 255, 255, 0.12)' }}
+                    tickLine={false}
+                    interval={0}
+                    height={26}
+                    tick={(props) => {
+                      const { x, y, payload } = props;
+                      const dayVal = payload?.value;
+                      if (!dayVal) return null;
+
+                      const kwLabel = kwFirstDayMap.get(dayVal);
+                      if (!kwLabel) return null; // Render strictly on the first day of each KW
+
+                      const totalVisible = visibleChartData.length;
+                      if (totalVisible > 160) {
+                        const kwNum = parseInt(kwLabel.replace(/\D/g, ''), 10);
+                        if (!isNaN(kwNum) && kwNum % 2 !== 0) return null;
+                      }
+
+                      return (
+                        <g transform={`translate(${x},${y})`}>
+                          <rect
+                            x="-2"
+                            y="-20"
+                            width="46"
+                            height="19"
+                            rx="4"
+                            fill="rgba(2, 132, 199, 0.2)"
+                            stroke="rgba(56, 189, 248, 0.5)"
+                            strokeWidth="1"
+                          />
+                          <text
+                            x="21"
+                            y="-6"
+                            fill="#38bdf8"
+                            fontSize={10.5}
+                            fontWeight={800}
+                            textAnchor="middle"
+                            fontFamily="system-ui, -apple-system, sans-serif"
+                          >
+                            {kwLabel}
+                          </text>
+                        </g>
+                      );
+                    }}
+                  />
+
+                  {/* Bottom X-Axis: Daily date stamps */}
                   <XAxis
                     dataKey="day"
                     stroke="var(--text-muted)"
@@ -12277,10 +12584,23 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                   />
                   <Legend wrapperStyle={{ paddingTop: '10px', fontSize: '0.8rem' }} />
 
+                  {/* Vertical dividers for each calendar week */}
+                  {allKWList.map((kwItem, i) => {
+                    if (i === 0) return null;
+                    return (
+                      <ReferenceLine
+                        key={'ref_kw_' + kwItem.kw + '_' + i}
+                        x={kwItem.startDate}
+                        stroke="rgba(255, 255, 255, 0.08)"
+                        strokeDasharray="3 3"
+                      />
+                    );
+                  })}
+
                   {chartViewType === 'ruest_lauf' ? (
                     <>
-                      <Bar dataKey="Rüstzeit" stackId="rl" fill="#0284c7" name="Rüstzeit (h)" />
-                      <Bar dataKey="Laufzeit" stackId="rl" fill="#10b981" name="Laufzeit (h)" />
+                      <Bar dataKey="Rüstzeit" stackId="rl" fill="#0284c7" name="Rüstzeit (h)" onClick={handleChartClick} cursor="pointer" />
+                      <Bar dataKey="Laufzeit" stackId="rl" fill="#10b981" name="Laufzeit (h)" onClick={handleChartClick} cursor="pointer" />
                       <Line type="monotone" dataKey="Kapazität" stroke="#f59e0b" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
                       {showTrendline && (
                         <Line type="monotone" dataKey="Trend" stroke="#ec4899" strokeWidth={3} strokeDasharray="4 4" dot={false} name="📈 Trend (Gleitender Mittelwert h)" />
@@ -12288,12 +12608,12 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                     </>
                   ) : (
                     <>
-                      <Bar dataKey="Freigegeben" stackId="st" fill="#3b82f6" name="Freigegeben (h)" />
+                      <Bar dataKey="Freigegeben" stackId="st" fill="#3b82f6" name="Freigegeben (h)" onClick={handleChartClick} cursor="pointer" />
                       {includeGesperrte && (
-                        <Bar dataKey="Gesperrt" stackId="st" fill="#ef4444" name="Gesperrt (h)" />
+                        <Bar dataKey="Gesperrt" stackId="st" fill="#ef4444" name="Gesperrt (h)" onClick={handleChartClick} cursor="pointer" />
                       )}
                       {includeVorgemerkte && (
-                        <Bar dataKey="Vorgemerkt" stackId="st" fill="#f59e0b" name="Vorgemerkt (h)" />
+                        <Bar dataKey="Vorgemerkt" stackId="st" fill="#f59e0b" name="Vorgemerkt (h)" onClick={handleChartClick} cursor="pointer" />
                       )}
                       <Line type="monotone" dataKey="Kapazität" stroke="#10b981" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
                       {showTrendline && (
@@ -12301,37 +12621,24 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                       )}
                     </>
                   )}
-
-                  {/* Drag-to-zoom selection highlight box */}
-                  {refAreaLeft && refAreaRight && refAreaLeft !== refAreaRight && (
-                    <ReferenceArea
-                      x1={refAreaLeft}
-                      x2={refAreaRight}
-                      stroke="#38bdf8"
-                      strokeOpacity={0.8}
-                      fill="#38bdf8"
-                      fillOpacity={0.25}
-                      ifOverflow="visible"
-                    />
-                  )}
-
-                  {showBrush && totalChartPoints > 10 && (
-                    <Brush
-                      dataKey="day"
-                      height={28}
-                      stroke="#38bdf8"
-                      fill="#0f172a"
-                      startIndex={actualStartIndex}
-                      endIndex={actualEndIndex}
-                      onChange={handleBrushChange}
-                      tickFormatter={(val) => {
-                        const d = new Date(val);
-                        return !isNaN(d.getTime()) ? (String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.') : val;
-                      }}
-                    />
-                  )}
                 </BarChart>
               </ResponsiveContainer>
+
+              {/* Dedicated Timeline Mini-Map Horizon Overview */}
+              {showBrush && totalChartPoints > 5 && (
+                <TimelineMiniMap
+                  data={chartDataWithTrend}
+                  totalPoints={totalChartPoints}
+                  startIndex={actualStartIndex}
+                  endIndex={actualEndIndex}
+                  onRangeCommit={(start, end) => {
+                    setZoomRange({
+                      start,
+                      end: end === totalChartPoints - 1 ? null : end
+                    });
+                  }}
+                />
+              )}
             </div>
           </div>
         );
@@ -12339,8 +12646,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
       {/* GANTT TAGESFÜLLUNGS-ANSICHT (WER / WO / WIE LANGE GEPLANT IST) */}
       {activeViewMode === 'gantt' && (() => {
-        const displayedGanttDays = (syncGanttWithZoom && isZoomed && visibleChartData.length > 0)
-          ? visibleChartData.map(x => x.day)
+        const displayedGanttDays = (syncGanttWithZoom && isZoomed && deferredVisibleChartData.length > 0)
+          ? deferredVisibleChartData.map(x => x.day)
           : planningDays;
 
         const ganttStartDay = displayedGanttDays[0];
@@ -12396,17 +12703,20 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                 {/* Status Legend */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#3b82f6' }}></span> Freigegeben
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <span style={{ width: 12, height: 10, borderRadius: '2px', background: '#3b82f6', border: '1px solid rgba(56, 189, 248, 0.5)' }}></span>
+                    <strong style={{ color: '#38bdf8' }}>Freigegeben</strong>
                   </span>
                   {includeGesperrte && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#ef4444' }}></span> Gesperrt
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <span style={{ width: 12, height: 10, borderRadius: '2px', background: '#ef4444', border: '1px solid #f87171' }}></span>
+                      <strong style={{ color: '#ef4444' }}>Gesperrt</strong>
                     </span>
                   )}
                   {includeVorgemerkte && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#f59e0b' }}></span> Vorgemerkt
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <span style={{ width: 14, height: 10, borderRadius: '2px', background: 'repeating-linear-gradient(135deg, rgba(245, 158, 11, 0.5), rgba(245, 158, 11, 0.5) 3px, rgba(15, 23, 42, 0.9) 3px, rgba(15, 23, 42, 0.9) 6px)', border: '1.5px dashed #f59e0b' }}></span>
+                      <strong style={{ color: '#f59e0b' }}>Vorgemerkt (Gestreift / Gestrichelt)</strong>
                     </span>
                   )}
                 </div>
@@ -12435,7 +12745,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                 {isZoomed && syncGanttWithZoom && (
                   <button
                     onClick={handleResetZoom}
-                    title="Zoom aufheben und volles Jahr im Gantt anzeigen"
+                    title="Gantt & Diagramm auf 1 Jahr zurücksetzen"
                     style={{
                       background: 'rgba(239, 68, 68, 0.15)',
                       color: '#ef4444',
@@ -12447,32 +12757,55 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                       cursor: 'pointer'
                     }}
                   >
-                    🔄 1 Jahr
+                    🔄 Reset Zoom
                   </button>
                 )}
               </div>
             </div>
 
-            {/* Matrix Table Timeline Container with Sticky Header & Sticky Machine Column */}
-            <div ref={ganttContainerRef} style={{ maxHeight: '78vh', overflow: 'auto', borderRadius: '8px', border: '1px solid var(--border-glow)', position: 'relative' }}>
-              <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.74rem', minWidth: (displayedGanttDays.length * 85 + 140) + 'px' }}>
+            {/* Scrollable Gantt Table */}
+            <div
+              id="gantt-scroll-viewport"
+              ref={ganttContainerRef}
+              style={{
+                overflowX: 'auto',
+                overflowY: 'auto',
+                maxHeight: '620px',
+                borderRadius: '8px',
+                border: '1px solid var(--border-glow)',
+                background: 'rgba(15, 23, 42, 0.6)'
+              }}
+            >
+              <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.8rem' }}>
                 {(() => {
                   const weekGroups = [];
-                  displayedGanttDays.forEach(day => {
+                  let currentKW = null;
+                  let currentYear = null;
+                  let groupSpan = 0;
+
+                  displayedGanttDays.forEach((day) => {
                     const kw = getISOWeekNumber(day);
-                    const dObj = new Date(day);
-                    const yearShort = !isNaN(dObj.getTime()) ? "'" + String(dObj.getFullYear()).slice(-2) : '';
-                    const groupKey = `${kw} ${yearShort}`;
-                    const lastGroup = weekGroups[weekGroups.length - 1];
-                    if (lastGroup && lastGroup.groupKey === groupKey) {
-                      lastGroup.span += 1;
+                    const d = new Date(day);
+                    const y = !isNaN(d.getTime()) ? "'" + String(d.getFullYear()).slice(-2) : '';
+
+                    if (kw !== currentKW || y !== currentYear) {
+                      if (currentKW) {
+                        weekGroups.push({ kw: currentKW, yearShort: currentYear, span: groupSpan });
+                      }
+                      currentKW = kw;
+                      currentYear = y;
+                      groupSpan = 1;
                     } else {
-                      weekGroups.push({ groupKey, kw, yearShort, span: 1 });
+                      groupSpan++;
                     }
                   });
 
+                  if (currentKW) {
+                    weekGroups.push({ kw: currentKW, yearShort: currentYear, span: groupSpan });
+                  }
+
                   return (
-                    <thead style={{ position: 'sticky', top: 0, zIndex: 30, background: '#0f172a' }}>
+                    <thead>
                       <tr style={{ background: '#1e293b', borderBottom: '1px solid var(--border-glow)' }}>
                         <th style={{ padding: '0.4rem 1rem', textAlign: 'left', position: 'sticky', top: 0, left: 0, background: '#1e293b', zIndex: 40, borderRight: '2px solid var(--border-glow)', fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8' }}>
                           📅 Kalenderwochen (KW)
@@ -12543,7 +12876,6 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                         {/* Calendar Day Cells */}
                         {displayedGanttDays.map(day => {
                           const dayCapMin = dailyCapacities[mName]?.[day] || 360;
-                          const dayCapHrs = dayCapMin / 60;
                           const daySteps = (mBoard[day] || []).filter(s => {
                             const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
                             const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
@@ -12561,13 +12893,30 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                             return true;
                           });
 
-                          let totalDayMin = 0;
+                          let dayFreigegebenMin = 0;
+                          let dayVorgemerktMin = 0;
+                          let dayGesperrtMin = 0;
                           daySteps.forEach(s => {
-                            if (showRuestFilter) totalDayMin += (s.setupTime || 0);
-                            if (showProdFilter) totalDayMin += (s.prodTime || 0);
+                            const sIsFrei = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : (s.belegArt === 1));
+                            const sIsGesp = !!(s.isGesperrt || s.typSperre > 0);
+                            const time = (showRuestFilter ? (s.setupTime || 0) : 0) + (showProdFilter ? (s.prodTime || 0) : 0);
+                            if (!sIsFrei) {
+                              dayVorgemerktMin += time;
+                            } else if (sIsGesp) {
+                              dayGesperrtMin += time;
+                            } else {
+                              dayFreigegebenMin += time;
+                            }
                           });
+                          const totalDayMin = dayFreigegebenMin + dayVorgemerktMin + dayGesperrtMin;
                           const totalDayHrs = totalDayMin / 60;
-                          const fillPct = dayCapMin > 0 ? Math.min(100, (totalDayMin / dayCapMin) * 100) : 0;
+                          const freiHrs = dayFreigegebenMin / 60;
+                          const vorgHrs = dayVorgemerktMin / 60;
+                          const gespHrs = dayGesperrtMin / 60;
+
+                          const freiPct = dayCapMin > 0 ? (dayFreigegebenMin / dayCapMin) * 100 : 0;
+                          const vorgPct = dayCapMin > 0 ? (dayVorgemerktMin / dayCapMin) * 100 : 0;
+                          const gespPct = dayCapMin > 0 ? (dayGesperrtMin / dayCapMin) * 100 : 0;
                           const isOverCapacity = totalDayMin > dayCapMin;
 
                           return (
@@ -12582,22 +12931,30 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                             >
                               {/* Ultra-compact Day Capacity Bar inside cell */}
                               <div style={{ marginBottom: '0.25rem', background: 'rgba(0,0,0,0.35)', padding: '0.15rem 0.25rem', borderRadius: '3px', border: '1px solid var(--border-dim)', textAlign: 'center' }}>
-                                <div style={{ fontSize: '0.62rem', fontWeight: 700, color: isOverCapacity ? '#ef4444' : fillPct > 80 ? '#f59e0b' : '#38bdf8' }}>
-                                  {totalDayHrs.toFixed(1)}h
+                                <div style={{ fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
+                                  {vorgHrs > 0 ? (
+                                    <>
+                                      <span style={{ color: isOverCapacity ? '#ef4444' : freiPct > 80 ? '#f59e0b' : '#38bdf8' }}>{freiHrs.toFixed(1)}h</span>
+                                      <span style={{ color: '#f59e0b', fontSize: '0.58rem', fontWeight: 800 }} title={`Vorgemerkt: ${vorgHrs.toFixed(1)}h`}>+{vorgHrs.toFixed(1)}h (V)</span>
+                                    </>
+                                  ) : (
+                                    <span style={{ color: isOverCapacity ? '#ef4444' : freiPct > 80 ? '#f59e0b' : '#38bdf8' }}>{totalDayHrs.toFixed(1)}h</span>
+                                  )}
                                 </div>
-                                <div style={{ height: '3px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '1px', overflow: 'hidden' }}>
-                                  <div
-                                    style={{
-                                      height: '100%',
-                                      width: fillPct + '%',
-                                      background: isOverCapacity ? '#ef4444' : fillPct > 80 ? '#f59e0b' : '#3b82f6',
-                                      transition: 'width 0.3s'
-                                    }}
-                                  />
+                                <div style={{ height: '4px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', marginTop: '1px', overflow: 'hidden', display: 'flex' }}>
+                                  {freiPct > 0 && (
+                                    <div style={{ height: '100%', width: Math.min(100, freiPct) + '%', background: isOverCapacity ? '#ef4444' : '#3b82f6', transition: 'width 0.3s' }} title={`Freigegeben: ${freiHrs.toFixed(1)}h`} />
+                                  )}
+                                  {gespPct > 0 && (
+                                    <div style={{ height: '100%', width: Math.min(100, gespPct) + '%', background: '#ef4444', transition: 'width 0.3s' }} title={`Gesperrt: ${gespHrs.toFixed(1)}h`} />
+                                  )}
+                                  {vorgPct > 0 && (
+                                    <div style={{ height: '100%', width: Math.min(100, vorgPct) + '%', background: 'repeating-linear-gradient(45deg, #f59e0b, #f59e0b 2px, #b45309 2px, #b45309 4px)', transition: 'width 0.3s' }} title={`Vorgemerkt: ${vorgHrs.toFixed(1)}h`} />
+                                  )}
                                 </div>
                               </div>
 
-                              {/* Stacked Compact Order Step Cards with Distinct Order Colors */}
+                              {/* Stacked Compact Order Step Cards with Distinct Order Colors & Vorgemerkt Differentiation */}
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                                 {daySteps.length === 0 ? (
                                   <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.15)', textAlign: 'center', padding: '0.35rem 0' }}>
@@ -12605,8 +12962,9 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                                   </div>
                                 ) : (
                                   daySteps.map((step, sIdx) => {
-                                    const isFreigegeben = step.isFreigegeben !== undefined ? step.isFreigegeben : (step.belegArt === 1);
+                                    const isFreigegeben = step.isFreigegeben !== undefined ? step.isFreigegeben : (step.zustandPlanung !== undefined ? step.zustandPlanung === 0 : (step.belegArt === 1));
                                     const isGesperrt = !!(step.isGesperrt || step.typSperre > 0);
+                                    const isVorgemerkt = !isFreigegeben;
 
                                     const setupH = ((step.setupTime || 0) / 60).toFixed(1);
                                     const prodH = ((step.prodTime || 0) / 60).toFixed(1);
@@ -12615,13 +12973,25 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                                     // Get unique vibrant color palette per contract number
                                     const orderColor = getContractColor(step.contractNumber);
 
-                                    const statusDot = !isFreigegeben ? '🟡' : isGesperrt ? '🔴' : '🟢';
-
                                     const displayTitle = (step.contractNumber || 'Auftrag') + ' / Pos ' + (step.orderPos || '10');
                                     const articleLabel = step.orderDesc || step.stepDesc || 'Artikel';
 
                                     const isSameContract = hoveredContractNumber && step.contractNumber === hoveredContractNumber;
                                     const isOtherContract = hoveredContractNumber && step.contractNumber !== hoveredContractNumber;
+
+                                    let cardBackground = isSameContract ? orderColor.border : (step.positionCategoryHex ? `${step.positionCategoryHex}20` : orderColor.bg);
+                                    let cardBorder = '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border);
+                                    let cardBorderLeft = '4px solid ' + (step.positionCategoryHex || step.orderCategoryHex || orderColor.border);
+
+                                    if (isVorgemerkt) {
+                                      cardBackground = isSameContract ? '#d97706' : 'repeating-linear-gradient(135deg, rgba(245, 158, 11, 0.18), rgba(245, 158, 11, 0.18) 6px, rgba(15, 23, 42, 0.95) 6px, rgba(15, 23, 42, 0.95) 12px)';
+                                      cardBorder = '1.5px dashed #f59e0b';
+                                      cardBorderLeft = '4px solid #f59e0b';
+                                    } else if (isGesperrt) {
+                                      cardBackground = isSameContract ? '#dc2626' : 'rgba(239, 68, 68, 0.15)';
+                                      cardBorder = '1px solid rgba(239, 68, 68, 0.7)';
+                                      cardBorderLeft = '4px solid #ef4444';
+                                    }
 
                                     return (
                                       <div
@@ -12630,31 +13000,37 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                                         onMouseEnter={() => setHoveredContractNumber(step.contractNumber)}
                                         onMouseLeave={() => setHoveredContractNumber(null)}
                                         style={{
-                                          background: isSameContract ? orderColor.border : (step.positionCategoryHex ? `${step.positionCategoryHex}20` : orderColor.bg),
-                                          borderLeft: '4px solid ' + (step.positionCategoryHex || step.orderCategoryHex || (isGesperrt ? '#ef4444' : !isFreigegeben ? '#f59e0b' : orderColor.border)),
-                                          borderTop: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
-                                          borderRight: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
-                                          borderBottom: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
+                                          background: cardBackground,
+                                          border: cardBorder,
+                                          borderLeft: cardBorderLeft,
                                           borderRadius: '4px',
                                           padding: '0.2rem 0.25rem',
                                           cursor: 'pointer',
                                           opacity: isOtherContract ? 0.35 : 1,
                                           transform: isSameContract ? 'scale(1.08)' : 'scale(1)',
                                           zIndex: isSameContract ? 50 : 1,
-                                          boxShadow: isSameContract ? ('0 0 14px ' + (step.positionCategoryHex || orderColor.border) + ', 0 2px 8px rgba(0,0,0,0.5)') : '0 1px 3px rgba(0,0,0,0.3)',
+                                          boxShadow: isSameContract ? ('0 0 14px ' + (isVorgemerkt ? '#f59e0b' : (step.positionCategoryHex || orderColor.border)) + ', 0 2px 8px rgba(0,0,0,0.5)') : (isVorgemerkt ? 'inset 0 0 8px rgba(245, 158, 11, 0.15)' : '0 1px 3px rgba(0,0,0,0.3)'),
                                           transition: 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s, boxShadow 0.15s, background 0.15s',
                                           overflow: 'hidden'
                                         }}
-                                        title={(step.orderCategoryName ? `D4 Auftrags-Kategorie: ${step.orderCategoryName}\n` : '') + (step.positionCategoryName ? `D4 Pos-Kategorie: ${step.positionCategoryName}\n` : '') + step.contractNumber + ' Pos ' + step.orderPos + ' - AS ' + step.stepPos + '\nArtikel: ' + articleLabel + '\nRüst: ' + setupH + 'h | Lauf: ' + prodH + 'h | Gesamt: ' + totalH + 'h'}
+                                        title={(isVorgemerkt ? '⏳ VORGEMERKTER AUFTRAG (BelegArt 0)\n' : (isGesperrt ? '🔒 GESPERRTER AUFTRAG\n' : '✓ FREIGEGEBEN\n')) + (step.orderCategoryName ? `D4 Auftrags-Kategorie: ${step.orderCategoryName}\n` : '') + (step.positionCategoryName ? `D4 Pos-Kategorie: ${step.positionCategoryName}\n` : '') + step.contractNumber + ' Pos ' + step.orderPos + ' - AS ' + step.stepPos + '\nArtikel: ' + articleLabel + '\nRüst: ' + setupH + 'h | Lauf: ' + prodH + 'h | Gesamt: ' + totalH + 'h'}
                                       >
-                                        {/* Micro 1-Line: P-Nummer / Pos */}
+                                        {/* Micro 1-Line: Status Badge & P-Nummer / Pos */}
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                          {step.orderCategoryHex ? (
+                                          {isVorgemerkt ? (
+                                            <span style={{ background: '#f59e0b', color: '#0f172a', fontSize: '0.55rem', fontWeight: 900, padding: '0px 3px', borderRadius: '2px', lineHeight: 1.1, flexShrink: 0, letterSpacing: '0.3px' }}>
+                                              V
+                                            </span>
+                                          ) : isGesperrt ? (
+                                            <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.55rem', fontWeight: 900, padding: '0px 3px', borderRadius: '2px', lineHeight: 1.1, flexShrink: 0 }}>
+                                              G
+                                            </span>
+                                          ) : step.orderCategoryHex ? (
                                             <span style={{ width: 7, height: 7, borderRadius: '50%', background: step.orderCategoryHex, boxShadow: `0 0 6px ${step.orderCategoryHex}`, flexShrink: 0 }} title={step.orderCategoryName ? `D4 Auftrags-Kategorie: ${step.orderCategoryName}` : 'D4 Auftrags-Kategorie'} />
                                           ) : (
-                                            <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{statusDot}</span>
+                                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3b82f6', flexShrink: 0 }} />
                                           )}
-                                          <span style={{ fontWeight: 800, color: step.positionCategoryHex || orderColor.text, fontSize: '0.68rem', letterSpacing: '-0.2px' }}>
+                                          <span style={{ fontWeight: 800, color: isVorgemerkt ? '#fbbf24' : (step.positionCategoryHex || orderColor.text), fontSize: '0.68rem', letterSpacing: '-0.2px' }}>
                                             {displayTitle}
                                           </span>
                                         </div>
@@ -12664,7 +13040,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                                           <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '45px' }} title={articleLabel}>
                                             {articleLabel}
                                           </span>
-                                          <span style={{ fontWeight: 700, color: '#38bdf8', background: 'rgba(0,0,0,0.4)', padding: '0px 3px', borderRadius: '2px' }}>
+                                          <span style={{ fontWeight: 700, color: isVorgemerkt ? '#f59e0b' : (isGesperrt ? '#ef4444' : '#38bdf8'), background: 'rgba(0,0,0,0.5)', border: isVorgemerkt ? '1px solid rgba(245, 158, 11, 0.4)' : 'none', padding: '0px 3px', borderRadius: '2px' }}>
                                             {totalH}h
                                           </span>
                                         </div>
