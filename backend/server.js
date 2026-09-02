@@ -27,7 +27,9 @@ function mapD4ColorToHex(kgFarbe) {
 async function fetchFastD4NativePlan(startDateStr, endDateStr) {
   try {
     const poolD4 = await getPoolD4();
-    const res = await poolD4.request().query(`
+    const req = poolD4.request();
+    req.timeout = 180000;
+    const res = await req.query(`
       SELECT 
         p.ID as PlanId,
         sk.ID as StepId,
@@ -70,10 +72,10 @@ async function fetchFastD4NativePlan(startDateStr, endDateStr) {
       INNER JOIN [D4].[dbo].[tbe_Belp] bp WITH (NOLOCK) ON bp.ID = k.PSK_IDBEBP
       INNER JOIN [D4].[dbo].[tBE_BELK_BKBE] bk WITH (NOLOCK) ON bk.BK_BKBE_IDBEBK = bp.BP_IDBEBK
       LEFT JOIN [D4].[dbo].[tBE_BELK_BKBE_AU] au WITH (NOLOCK) ON au.BK_BKBE_AU_IDBKBE = bk.ID
-      LEFT JOIN (SELECT AGBW_IDEKBK, MIN(ID) AS AGBW_MIN_ID FROM [D4].[dbo].[tAG_BEWE] WHERE AGBW_IDEKBK IS NOT NULL GROUP BY AGBW_IDEKBK) AS tAG_BEWE_BK_MIN ON tAG_BEWE_BK_MIN.AGBW_IDEKBK = bk.BK_BKBE_IDBEBK
+      LEFT JOIN (SELECT AGBW_IDEKBK, MIN(ID) AS AGBW_MIN_ID FROM [D4].[dbo].[tAG_BEWE] WITH (NOLOCK) WHERE AGBW_IDEKBK IS NOT NULL GROUP BY AGBW_IDEKBK) AS tAG_BEWE_BK_MIN ON tAG_BEWE_BK_MIN.AGBW_IDEKBK = bk.BK_BKBE_IDBEBK
       LEFT JOIN [D4].[dbo].[tAG_BEWE] agbw_bk WITH (NOLOCK) ON agbw_bk.ID = tAG_BEWE_BK_MIN.AGBW_MIN_ID
       LEFT JOIN [D4].[dbo].[tKAGO] kago_bk WITH (NOLOCK) ON kago_bk.ID = agbw_bk.AGBW_IDKAGO
-      LEFT JOIN (SELECT AGBW_IDEKBP, MIN(ID) AS AGBW_MIN_ID FROM [D4].[dbo].[tAG_BEWE] WHERE AGBW_IDEKBP IS NOT NULL GROUP BY AGBW_IDEKBP) AS tAG_BEWE_POS_MIN ON tAG_BEWE_POS_MIN.AGBW_IDEKBP = bp.ID
+      LEFT JOIN (SELECT AGBW_IDEKBP, MIN(ID) AS AGBW_MIN_ID FROM [D4].[dbo].[tAG_BEWE] WITH (NOLOCK) WHERE AGBW_IDEKBP IS NOT NULL GROUP BY AGBW_IDEKBP) AS tAG_BEWE_POS_MIN ON tAG_BEWE_POS_MIN.AGBW_IDEKBP = bp.ID
       LEFT JOIN [D4].[dbo].[tAG_BEWE] agbw_pos WITH (NOLOCK) ON agbw_pos.ID = tAG_BEWE_POS_MIN.AGBW_MIN_ID
       LEFT JOIN [D4].[dbo].[tKAGO] kago_pos WITH (NOLOCK) ON kago_pos.ID = agbw_pos.AGBW_IDKAGO
       WHERE sk.PSP_PP_STATUS_PRODUKTION <> 4
@@ -590,11 +592,16 @@ async function cacheSetupData() {
     const poolTL = await getPoolTL();
 
     console.log('Caching steps, tools, and night-run bookings in parallel...');
+    const reqNight = poolD4.request();
+    reqNight.timeout = 180000;
+    const reqHist = poolD4.request();
+    reqHist.timeout = 180000;
+
     const [rows, mappingResult, toolsDetailResult, nightBookingsResult, activeProgsResult, toolLocationsResult, histAvgDaysResult] = await Promise.all([
       fetchActiveStepsAndMaterials(poolD4),
       poolWT.request().query('SELECT ToolListNr, ToolNr FROM [WTDATA].[dbo].[ToolList] WHERE ToolNr IS NOT NULL'),
       poolWT.request().query('SELECT Nr, Design, Descript, KeyWord, Ds, CLength FROM [WTDATA].[dbo].[Tools]'),
-      poolD4.request().query(`
+      reqNight.query(`
         WITH MovementNightBookings AS (
           SELECT 
             b.BP_IDAR as ArticleId, 
@@ -605,10 +612,10 @@ async function cacheSetupData() {
             CAST(CASE WHEN DATEPART(hour, zbb.ZBUBW_DATUM_ZEIT_START) < 6 
                       THEN DATEADD(day, -1, zbb.ZBUBW_DATUM_ZEIT_START) 
                       ELSE zbb.ZBUBW_DATUM_ZEIT_START END AS DATE) as ShiftDate
-          FROM [D4].[dbo].[tZE_BUCH] zb 
-          INNER JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbb ON zbb.ZBUBW_IDZBU = zb.ID 
-          INNER JOIN [D4].[dbo].[tbe_Belp] b ON b.ID = zb.ZBU_IDBEBP 
-          INNER JOIN [D4].[dbo].[tPPS_SKKALP] p ON p.ID = zb.ZBU_IDPSKP 
+          FROM [D4].[dbo].[tZE_BUCH] zb WITH (NOLOCK)
+          INNER JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbb WITH (NOLOCK) ON zbb.ZBUBW_IDZBU = zb.ID 
+          INNER JOIN [D4].[dbo].[tbe_Belp] b WITH (NOLOCK) ON b.ID = zb.ZBU_IDBEBP 
+          INNER JOIN [D4].[dbo].[tPPS_SKKALP] p WITH (NOLOCK) ON p.ID = zb.ZBU_IDPSKP 
           WHERE zbb.ZBUBW_DATUM_ZEIT_START >= '2020-01-01' 
         ),
         ShiftDateSummary AS (
@@ -632,18 +639,18 @@ async function cacheSetupData() {
       `),
       poolTL.request().query('SELECT Machine, ProgramName FROM MachineToProgram WHERE ProgramName IS NOT NULL'),
       poolTL.request().query('SELECT mtp.Machine, ptt.ToolName FROM ProgramToTool ptt INNER JOIN MachineToProgram mtp ON ptt.MachineToProgramId = mtp.Id WHERE ptt.ToolName IS NOT NULL'),
-      poolD4.request().query(`
+      reqHist.query(`
         SELECT 
           b.BP_IDAR as ArticleId,
           p.PSP_POSITION_NUMMER as StepPos,
           AVG(CAST(StepDays.UsedDays AS FLOAT)) as AvgHistoricalDays
-        FROM [D4].[dbo].[tPPS_SKKALP] p
-        JOIN [D4].[dbo].[tPPS_SKKALK] k ON p.PSP_IDPSKKK = k.ID
-        JOIN [D4].[dbo].[tbe_Belp] b ON k.PSK_IDBEBP = b.ID
+        FROM [D4].[dbo].[tPPS_SKKALP] p WITH (NOLOCK)
+        JOIN [D4].[dbo].[tPPS_SKKALK] k WITH (NOLOCK) ON p.PSP_IDPSKKK = k.ID
+        JOIN [D4].[dbo].[tbe_Belp] b WITH (NOLOCK) ON k.PSK_IDBEBP = b.ID
         CROSS APPLY (
           SELECT COUNT(DISTINCT CAST(zbw.ZBUBW_DATUM_ZEIT_START AS DATE)) as UsedDays
-          FROM [D4].[dbo].[tZE_BUCH] zb
-          JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbw ON zbw.ZBUBW_IDZBU = zb.ID
+          FROM [D4].[dbo].[tZE_BUCH] zb WITH (NOLOCK)
+          JOIN [D4].[dbo].[tZE_BUCH_BEWE] zbw WITH (NOLOCK) ON zbw.ZBUBW_IDZBU = zb.ID
           WHERE zb.ZBU_IDPSKP = p.ID AND zbw.ZBUBW_DATUM_ZEIT_START >= DATEADD(year, -2, GETDATE())
         ) StepDays
         WHERE StepDays.UsedDays > 0
@@ -3271,7 +3278,8 @@ function getNextWorkingDays(startDateStr, daysCount = 5) {
   const days = [];
   let curr = new Date(startDateStr);
   let limit = 0;
-  while (days.length < daysCount && limit < 100) {
+  const maxLimit = Math.max(10000, daysCount * 10);
+  while (days.length < daysCount && limit < maxLimit) {
     const dayOfWeek = curr.getDay();
     if (dayOfWeek !== 0 && dayOfWeek !== 6) {
       days.push(curr.toISOString().substring(0, 10));
@@ -3673,11 +3681,18 @@ app.get('/api/planning', async (req, res) => {
       await cacheSetupData();
     }
 
-    const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount, includeNonGreen, isConflictMode, useD4Plan: useD4PlanParam, searchQuery: searchQueryParam } = req.query;
+    const { startDate, optimize, algo, optimizeFixture, fixtureWeight, daysCount, weeksCount, includeNonGreen, isConflictMode, useD4Plan: useD4PlanParam, searchQuery: searchQueryParam } = req.query;
     const useD4Plan = useD4PlanParam === 'true';
     const isConflict = isConflictMode === 'true';
     const searchQuery = (searchQueryParam || '').trim().toLowerCase();
-    const parsedDaysCount = daysCount !== undefined ? parseInt(daysCount, 10) : (isConflict ? 4 : 5);
+    let parsedDaysCount;
+    if (weeksCount !== undefined) {
+      parsedDaysCount = parseInt(weeksCount, 10) * 5;
+    } else if (daysCount !== undefined) {
+      parsedDaysCount = parseInt(daysCount, 10);
+    } else {
+      parsedDaysCount = isConflict ? 4 : 5;
+    }
     const shouldOptimizeFixture = optimizeFixture === 'true';
     const parsedFixtureWeight = fixtureWeight !== undefined ? parseFloat(fixtureWeight) : 1.5;
     let { steps, listToToolsMap, toolsDetails, listToMachineMap, fixtureLocationMap, toolMachineMap } = cachedSetupData;
@@ -4275,7 +4290,23 @@ app.get('/api/planning', async (req, res) => {
           return;
         }
 
-        const day = planningDays.includes(p.DateStr) ? p.DateStr : 'Überlauf';
+        let targetDay = p.DateStr;
+        if (!planningDays.includes(targetDay)) {
+          const pDateObj = new Date(targetDay);
+          if (!isNaN(pDateObj.getTime())) {
+            const dow = pDateObj.getDay();
+            if (dow === 0) { // Sunday -> Monday
+              pDateObj.setDate(pDateObj.getDate() + 1);
+              const rolledStr = pDateObj.toISOString().substring(0, 10);
+              if (planningDays.includes(rolledStr)) targetDay = rolledStr;
+            } else if (dow === 6) { // Saturday -> Monday
+              pDateObj.setDate(pDateObj.getDate() + 2);
+              const rolledStr = pDateObj.toISOString().substring(0, 10);
+              if (planningDays.includes(rolledStr)) targetDay = rolledStr;
+            }
+          }
+        }
+        const day = planningDays.includes(targetDay) ? targetDay : 'Überlauf';
         if (!finalBoard[mName]) return;
 
         const isFreigegeben = (p.ZustandPlanung === 0);

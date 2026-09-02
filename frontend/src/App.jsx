@@ -27,7 +27,7 @@ function getISOWeekNumber(dateStr) {
   return 'KW ' + String(kw).padStart(2, '0');
 }
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   LayoutDashboard, 
   Database, 
@@ -71,6 +71,7 @@ import {
   Cell,
   LineChart,
   Line,
+  Brush,
   XAxis, 
   YAxis, 
   CartesianGrid, 
@@ -3845,6 +3846,15 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   };
 
   const getWeekendReferenceAreas = () => {
+    if (!timelineData || timelineData.length === 0 || !dates || dates.length === 0) {
+      return [];
+    }
+    const minTimestamp = timelineData[0]?.timestamp;
+    const maxTimestamp = timelineData[timelineData.length - 1]?.timestamp;
+    if (typeof minTimestamp !== 'number' || typeof maxTimestamp !== 'number' || isNaN(minTimestamp) || isNaN(maxTimestamp)) {
+      return [];
+    }
+
     const areas = [];
     let startMs = null;
     
@@ -3852,6 +3862,7 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
       const d = new Date(dateStr + 'T00:00:00');
       const day = d.getDay(); // 0 = Sun, 5 = Fri, 6 = Sat
       const timeMs = d.getTime();
+      if (isNaN(timeMs)) return;
       
       if (day === 5) {
         // Start block at Friday 12:00:00
@@ -3863,28 +3874,25 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         }
       } else if (day === 0) {
         const endMs = timeMs + 24 * 60 * 60 * 1000 - 1000;
-        if (startMs !== null) {
+        const validStart = startMs !== null ? startMs : timeMs;
+        if (validStart >= minTimestamp && endMs <= maxTimestamp + 86400000 && validStart < endMs) {
           areas.push({
-            x1: startMs,
-            x2: endMs,
-            label: 'Wochenende'
-          });
-          startMs = null;
-        } else {
-          areas.push({
-            x1: timeMs,
-            x2: endMs,
+            x1: Math.max(minTimestamp, validStart),
+            x2: Math.min(maxTimestamp, endMs),
             label: 'Wochenende'
           });
         }
+        startMs = null;
       } else {
         if (startMs !== null) {
           const prevDayEnd = timeMs - 1000;
-          areas.push({
-            x1: startMs,
-            x2: prevDayEnd,
-            label: 'Wochenende'
-          });
+          if (startMs >= minTimestamp && prevDayEnd <= maxTimestamp + 86400000 && startMs < prevDayEnd) {
+            areas.push({
+              x1: Math.max(minTimestamp, startMs),
+              x2: Math.min(maxTimestamp, prevDayEnd),
+              label: 'Wochenende'
+            });
+          }
           startMs = null;
         }
       }
@@ -3893,11 +3901,13 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     if (startMs !== null) {
       const lastDate = dates[dates.length - 1];
       const lastDayEnd = new Date(lastDate + 'T23:59:59').getTime();
-      areas.push({
-        x1: startMs,
-        x2: lastDayEnd,
-        label: 'Wochenende'
-      });
+      if (!isNaN(lastDayEnd) && startMs >= minTimestamp && startMs < lastDayEnd) {
+        areas.push({
+          x1: Math.max(minTimestamp, startMs),
+          x2: Math.min(maxTimestamp, lastDayEnd),
+          label: 'Wochenende'
+        });
+      }
     }
     
     return areas;
@@ -4499,7 +4509,7 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={theme === 'light' ? "rgba(15,23,42,0.06)" : "rgba(255,255,255,0.04)"} />
-                    {getWeekendReferenceAreas().map((area, idx) => (
+                    {timelineData.length > 0 && getWeekendReferenceAreas().map((area, idx) => (
                       <ReferenceArea 
                         key={`weekend-${idx}`}
                         x1={area.x1} 
@@ -4507,6 +4517,7 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                         fill="rgba(239, 68, 68, 0.16)" 
                         stroke="rgba(239, 68, 68, 0.35)" 
                         strokeDasharray="3 3"
+                        ifOverflow="hidden"
                         label={{ value: area.label, angle: -90, position: 'center', fill: 'rgba(248, 113, 113, 0.75)', fontSize: 10, fontWeight: 700 }}
                       />
                     ))}
@@ -10778,11 +10789,23 @@ function PDFCanvasViewer({ url, dmsSliderFullscreen }) {
 function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
   const ganttContainerRef = useRef(null);
   const chartContainerRef = useRef(null);
+  const brushPendingRangeRef = useRef(null);
 
   const [highlightedDayIndex, setHighlightedDayIndex] = useState(null);
-  const [weeksCount, setWeeksCount] = useState(4); // 1 to 20 weeks
+  const [weeksCount, setWeeksCount] = useState(4); // 1 to 52 weeks (1 Jahr)
   const [tempWeeksCount, setTempWeeksCount] = useState(4);
   useEffect(() => { setTempWeeksCount(weeksCount); }, [weeksCount]);
+
+  // Chart Zoom & Horizon Range State
+  const [zoomRange, setZoomRange] = useState({ start: 0, end: null });
+  const [sliderRange, setSliderRange] = useState({ start: 0, end: null });
+  const [isDraggingSlider, setIsDraggingSlider] = useState(false);
+  const [refAreaLeft, setRefAreaLeft] = useState(null);
+  const [refAreaRight, setRefAreaRight] = useState(null);
+  const [isSelectingZoom, setIsSelectingZoom] = useState(false);
+  const [showBrush, setShowBrush] = useState(true);
+  const [syncGanttWithZoom, setSyncGanttWithZoom] = useState(true);
+
   const [includeGesperrte, setIncludeGesperrte] = useState(false);
   const [includeVorgemerkte, setIncludeVorgemerkte] = useState(false);
   const [useOptimizedPlan, setUseOptimizedPlan] = useState(false);
@@ -11006,9 +11029,9 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     setLoadingStageText('D4-Auftrags- und Kapazitätsdaten werden abgerufen...');
     setCurrentDayLoaded(0);
 
-    const totalDaysToLoad = weeksCount * 7;
+    const totalDaysToLoad = weeksCount * 5;
     let simulatedDay = 0;
-    const stepInterval = Math.max(180, Math.round(6000 / totalDaysToLoad));
+    const stepInterval = Math.max(25, Math.round(2500 / totalDaysToLoad));
 
     const interval = setInterval(() => {
       if (isCancelled) return;
@@ -11026,8 +11049,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
     const runFetch = async () => {
       try {
-        const days = weeksCount * 7;
-        const res = await fetch(API_BASE + '/planning?daysCount=' + days + '&includeNonGreen=true&useD4Plan=' + (!useOptimizedPlan), {
+        const days = weeksCount * 5;
+        const res = await fetch(API_BASE + '/planning?weeksCount=' + weeksCount + '&daysCount=' + days + '&includeNonGreen=true&useD4Plan=' + (!useOptimizedPlan) + '&isEvaluationMode=true', {
           signal: controller.signal
         });
         if (!res.ok) {
@@ -11115,282 +11138,499 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     return matched.length > 0 ? matched : validMillingMachines;
   };
 
-  const filteredMachines = getSelectedMachineNames();
+  const filteredMachines = useMemo(() => {
+    return getSelectedMachineNames();
+  }, [selectedMachine, validMillingMachines]);
 
-  // Compute machine utilization summaries
-  const machineSummaries = filteredMachines.map(mName => {
-    const machineBoard = boardData[mName] || {};
-    const machineCaps = dailyCapacities[mName] || {};
+  // Compute machine utilization summaries with useMemo
+  const machineSummaries = useMemo(() => {
+    return filteredMachines.map(mName => {
+      const machineBoard = boardData[mName] || {};
+      const machineCaps = dailyCapacities[mName] || {};
 
-    let totalCapMin = 0;
-    let freigegebenMin = 0;
-    let gesperrtMin = 0;
-    let vorgemerktMin = 0;
-    let stepsList = [];
+      let totalCapMin = 0;
+      let freigegebenMin = 0;
+      let gesperrtMin = 0;
+      let vorgemerktMin = 0;
+      let stepsList = [];
 
-    // Separate 4-week window metrics from overflow backlog to match D4 native evaluation!
-    let windowFreigegebenMin = 0;
-    let windowGesperrtMin = 0;
-    let windowVorgemerktMin = 0;
+      let windowFreigegebenMin = 0;
+      let windowGesperrtMin = 0;
+      let windowVorgemerktMin = 0;
 
-    let overflowFreigegebenMin = 0;
-    let overflowGesperrtMin = 0;
-    let overflowVorgemerktMin = 0;
+      let overflowFreigegebenMin = 0;
+      let overflowGesperrtMin = 0;
+      let overflowVorgemerktMin = 0;
 
-    let explicitMin = 0;
-    let poolShareMin = 0;
+      let explicitMin = 0;
+      let poolShareMin = 0;
 
-    const allBoardDays = Array.from(new Set([...planningDays, ...Object.keys(machineBoard)]));
+      const allBoardDays = Array.from(new Set([...planningDays, ...Object.keys(machineBoard)]));
 
-    allBoardDays.forEach(day => {
-      const isWindowDay = planningDays.includes(day);
-      if (isWindowDay) {
-        totalCapMin += (machineCaps[day] || 0);
-      }
-
-      const daySteps = machineBoard[day] || [];
-      daySteps.forEach(s => {
-        const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
-        const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
-
-        // Filter by user selection
-        if (!isFreigegeben && !includeVorgemerkte) {
-          return;
-        }
-        if (isFreigegeben && isGesperrt && !includeGesperrte) {
-          return;
-        }
-
-        const contractNumber = s.contractNumber || s.ContractNumber || s.orderId || s.OrderId || s.BK_BKBE_NUMMER || 'P-Auftrag';
-        const orderPos = s.orderPos || s.OrderPos || s.BP_POSITION_NUMMER || '10';
-        const stepPos = s.stepPos || s.StepPos || s.PSP_POSITION_NUMMER || '10';
-        const stepDesc = s.stepDesc || s.StepDesc || s.articleDesc || s.ArticleDesc || s.orderDesc || s.OrderDesc || '';
-
-        // Apply text search query filter
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase();
-          const match = String(contractNumber).toLowerCase().includes(q) ||
-                        String(orderPos).toLowerCase().includes(q) ||
-                        String(stepDesc).toLowerCase().includes(q);
-          if (!match) return;
-        }
-
-        const setupVal = s.setupTime !== undefined ? s.setupTime : (s.SetupTime || 0);
-        const prodVal = s.prodTime !== undefined ? s.prodTime : (s.ProdTime || 0);
-        const schedVal = s.scheduledMin !== undefined ? s.scheduledMin : (s.ScheduledMin || 0);
-
-        let stepTime = 0;
-        if (showRuestFilter && showProdFilter) {
-          stepTime = (setupVal + prodVal) > 0 ? (setupVal + prodVal) : schedVal;
-        } else if (showRuestFilter) {
-          stepTime = setupVal;
-        } else if (showProdFilter) {
-          stepTime = prodVal > 0 ? prodVal : schedVal;
-        }
-
-        if (stepTime === 0 && schedVal > 0) {
-          stepTime = schedVal;
-        }
-
-        const isPoolStep = !!(s.machinePoolId === 13 || s.machinePoolId === 9 || s.machinePoolId === 12);
-        if (isPoolStep) {
-          poolShareMin += stepTime;
-        } else {
-          explicitMin += stepTime;
-        }
-
+      allBoardDays.forEach(day => {
+        const isWindowDay = planningDays.includes(day);
         if (isWindowDay) {
-          if (!isFreigegeben) windowVorgemerktMin += stepTime;
-          else if (isGesperrt) windowGesperrtMin += stepTime;
-          else windowFreigegebenMin += stepTime;
-        } else {
-          if (!isFreigegeben) overflowVorgemerktMin += stepTime;
-          else if (isGesperrt) overflowGesperrtMin += stepTime;
-          else overflowFreigegebenMin += stepTime;
+          totalCapMin += (machineCaps[day] || 0);
         }
 
-        if (!isFreigegeben) vorgemerktMin += stepTime;
-        else if (isGesperrt) gesperrtMin += stepTime;
-        else freigegebenMin += stepTime;
+        const daySteps = machineBoard[day] || [];
+        daySteps.forEach(s => {
+          const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
+          const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
 
-        stepsList.push({
-          ...s,
-          contractNumber,
-          ContractNumber: contractNumber,
-          orderPos,
-          OrderPos: orderPos,
-          stepPos,
-          StepPos: stepPos,
-          stepDesc,
-          StepDesc: stepDesc,
-          day,
-          isFreigegeben,
-          isGesperrt,
-          stepTime,
-          isPoolStep
+          if (!isFreigegeben && !includeVorgemerkte) return;
+          if (isFreigegeben && isGesperrt && !includeGesperrte) return;
+
+          const contractNumber = s.contractNumber || s.ContractNumber || s.orderId || s.OrderId || s.BK_BKBE_NUMMER || 'P-Auftrag';
+          const orderPos = s.orderPos || s.OrderPos || s.BP_POSITION_NUMMER || '10';
+          const stepPos = s.stepPos || s.StepPos || s.PSP_POSITION_NUMMER || '10';
+          const stepDesc = s.stepDesc || s.StepDesc || s.articleDesc || s.ArticleDesc || s.orderDesc || s.OrderDesc || '';
+
+          if (searchQuery.trim()) {
+            const q = searchQuery.toLowerCase();
+            const match = String(contractNumber).toLowerCase().includes(q) ||
+                          String(orderPos).toLowerCase().includes(q) ||
+                          String(stepDesc).toLowerCase().includes(q);
+            if (!match) return;
+          }
+
+          const setupVal = s.setupTime !== undefined ? s.setupTime : (s.SetupTime || 0);
+          const prodVal = s.prodTime !== undefined ? s.prodTime : (s.ProdTime || 0);
+          const schedVal = s.scheduledMin !== undefined ? s.scheduledMin : (s.ScheduledMin || 0);
+
+          let stepTime = 0;
+          if (showRuestFilter && showProdFilter) {
+            stepTime = (setupVal + prodVal) > 0 ? (setupVal + prodVal) : schedVal;
+          } else if (showRuestFilter) {
+            stepTime = setupVal;
+          } else if (showProdFilter) {
+            stepTime = prodVal > 0 ? prodVal : schedVal;
+          }
+
+          if (stepTime === 0 && schedVal > 0) {
+            stepTime = schedVal;
+          }
+
+          const isPoolStep = !!(s.machinePoolId === 13 || s.machinePoolId === 9 || s.machinePoolId === 12);
+          if (isPoolStep) {
+            poolShareMin += stepTime;
+          } else {
+            explicitMin += stepTime;
+          }
+
+          if (isWindowDay) {
+            if (!isFreigegeben) windowVorgemerktMin += stepTime;
+            else if (isGesperrt) windowGesperrtMin += stepTime;
+            else windowFreigegebenMin += stepTime;
+          } else {
+            if (!isFreigegeben) overflowVorgemerktMin += stepTime;
+            else if (isGesperrt) overflowGesperrtMin += stepTime;
+            else overflowFreigegebenMin += stepTime;
+          }
+
+          if (!isFreigegeben) vorgemerktMin += stepTime;
+          else if (isGesperrt) gesperrtMin += stepTime;
+          else freigegebenMin += stepTime;
+
+          stepsList.push({
+            ...s,
+            contractNumber,
+            ContractNumber: contractNumber,
+            orderPos,
+            OrderPos: orderPos,
+            stepPos,
+            StepPos: stepPos,
+            stepDesc,
+            StepDesc: stepDesc,
+            day,
+            isFreigegeben,
+            isGesperrt,
+            stepTime,
+            isPoolStep
+          });
         });
       });
+
+      const windowPlannedMin = windowFreigegebenMin + windowGesperrtMin + windowVorgemerktMin;
+      const overflowPlannedMin = overflowFreigegebenMin + overflowGesperrtMin + overflowVorgemerktMin;
+
+      const windowFreigegebenHrs = windowFreigegebenMin / 60;
+      const windowGesperrtHrs = windowGesperrtMin / 60;
+      const windowVorgemerktHrs = windowVorgemerktMin / 60;
+      const windowPlannedHrs = windowPlannedMin / 60;
+      const overflowPlannedHrs = overflowPlannedMin / 60;
+
+      const totalCapHrs = totalCapMin / 60;
+      const totalPlannedMin = freigegebenMin + gesperrtMin + vorgemerktMin;
+      const totalPlannedHrs = totalPlannedMin / 60;
+
+      const windowUtilizationPct = totalCapHrs > 0 ? (windowPlannedHrs / totalCapHrs) * 100 : 0;
+      const freigegebenPct = totalCapHrs > 0 ? (windowFreigegebenHrs / totalCapHrs) * 100 : 0;
+      const gesperrtPct = totalCapHrs > 0 ? (windowGesperrtHrs / totalCapHrs) * 100 : 0;
+      const vorgemerktPct = totalCapHrs > 0 ? (windowVorgemerktHrs / totalCapHrs) * 100 : 0;
+
+      return {
+        machineName: mName,
+        totalCapMin,
+        totalCapHrs,
+        windowFreigegebenMin,
+        windowFreigegebenHrs,
+        windowGesperrtMin,
+        windowGesperrtHrs,
+        windowVorgemerktMin,
+        windowVorgemerktHrs,
+        windowPlannedMin,
+        windowPlannedHrs,
+        overflowPlannedMin,
+        overflowPlannedHrs,
+        freigegebenHrs: windowFreigegebenHrs,
+        gesperrtHrs: windowGesperrtHrs,
+        vorgemerktHrs: windowVorgemerktHrs,
+        totalPlannedHrs: windowPlannedHrs,
+        allTimeFreigegebenHrs: freigegebenMin / 60,
+        allTimeGesperrtHrs: gesperrtMin / 60,
+        allTimeVorgemerktHrs: vorgemerktMin / 60,
+        explicitMin,
+        explicitHrs: explicitMin / 60,
+        poolShareMin,
+        poolShareHrs: poolShareMin / 60,
+        windowUtilizationPct,
+        utilizationPct: windowUtilizationPct,
+        freigegebenPct,
+        gesperrtPct,
+        vorgemerktPct,
+        stepsCount: stepsList.length,
+        stepsList
+      };
     });
-
-    const windowPlannedMin = windowFreigegebenMin + windowGesperrtMin + windowVorgemerktMin;
-    const overflowPlannedMin = overflowFreigegebenMin + overflowGesperrtMin + overflowVorgemerktMin;
-
-    const windowFreigegebenHrs = windowFreigegebenMin / 60;
-    const windowGesperrtHrs = windowGesperrtMin / 60;
-    const windowVorgemerktHrs = windowVorgemerktMin / 60;
-    const windowPlannedHrs = windowPlannedMin / 60;
-    const overflowPlannedHrs = overflowPlannedMin / 60;
-
-    const totalCapHrs = totalCapMin / 60;
-    const totalPlannedMin = freigegebenMin + gesperrtMin + vorgemerktMin;
-    const totalPlannedHrs = totalPlannedMin / 60;
-
-    // Window utilization matches strictly the selected time window (1, 2, 4, 6 weeks)
-    const windowUtilizationPct = totalCapHrs > 0 ? (windowPlannedHrs / totalCapHrs) * 100 : 0;
-    const freigegebenPct = totalCapHrs > 0 ? (windowFreigegebenHrs / totalCapHrs) * 100 : 0;
-    const gesperrtPct = totalCapHrs > 0 ? (windowGesperrtHrs / totalCapHrs) * 100 : 0;
-    const vorgemerktPct = totalCapHrs > 0 ? (windowVorgemerktHrs / totalCapHrs) * 100 : 0;
-
-    return {
-      machineName: mName,
-      totalCapMin,
-      totalCapHrs,
-      windowFreigegebenMin,
-      windowFreigegebenHrs,
-      windowGesperrtMin,
-      windowGesperrtHrs,
-      windowVorgemerktMin,
-      windowVorgemerktHrs,
-      windowPlannedMin,
-      windowPlannedHrs,
-      overflowPlannedMin,
-      overflowPlannedHrs,
-      freigegebenHrs: windowFreigegebenHrs, // UI default reflects window
-      gesperrtHrs: windowGesperrtHrs,       // UI default reflects window
-      vorgemerktHrs: windowVorgemerktHrs,   // UI default reflects window
-      totalPlannedHrs: windowPlannedHrs,
-      allTimeFreigegebenHrs: freigegebenMin / 60,
-      allTimeGesperrtHrs: gesperrtMin / 60,
-      allTimeVorgemerktHrs: vorgemerktMin / 60,
-      explicitMin,
-      explicitHrs: explicitMin / 60,
-      poolShareMin,
-      poolShareHrs: poolShareMin / 60,
-      windowUtilizationPct,
-      utilizationPct: windowUtilizationPct,
-      freigegebenPct,
-      gesperrtPct,
-      vorgemerktPct,
-      stepsCount: stepsList.length,
-      stepsList
-    };
-  });
+  }, [filteredMachines, boardData, dailyCapacities, planningDays, includeVorgemerkte, includeGesperrte, showRuestFilter, showProdFilter, searchQuery]);
 
   // Global total metrics for selected filter STRICTLY BASED ON SELECTED TIME WINDOW
-  const globalTotalCapHrs = machineSummaries.reduce((sum, m) => sum + m.totalCapHrs, 0);
-  const globalFreigegebenHrs = machineSummaries.reduce((sum, m) => sum + m.windowFreigegebenHrs, 0);
-  const globalGesperrtHrs = machineSummaries.reduce((sum, m) => sum + m.windowGesperrtHrs, 0);
-  const globalVorgemerktHrs = machineSummaries.reduce((sum, m) => sum + m.windowVorgemerktHrs, 0);
-  const globalTotalPlannedHrs = globalFreigegebenHrs + globalGesperrtHrs + globalVorgemerktHrs;
-  const globalOverflowHrs = machineSummaries.reduce((sum, m) => sum + m.overflowPlannedHrs, 0);
-  const globalUtilizationPct = globalTotalCapHrs > 0 ? (globalTotalPlannedHrs / globalTotalCapHrs) * 100 : 0;
+  const { globalTotalCapHrs, globalFreigegebenHrs, globalGesperrtHrs, globalVorgemerktHrs, globalTotalPlannedHrs, globalOverflowHrs, globalUtilizationPct } = useMemo(() => {
+    const totalCap = machineSummaries.reduce((sum, m) => sum + m.totalCapHrs, 0);
+    const freigegeben = machineSummaries.reduce((sum, m) => sum + m.windowFreigegebenHrs, 0);
+    const gesperrt = machineSummaries.reduce((sum, m) => sum + m.windowGesperrtHrs, 0);
+    const vorgemerkt = machineSummaries.reduce((sum, m) => sum + m.windowVorgemerktHrs, 0);
+    const totalPlanned = freigegeben + gesperrt + vorgemerkt;
+    const overflow = machineSummaries.reduce((sum, m) => sum + m.overflowPlannedHrs, 0);
+    const utilization = totalCap > 0 ? (totalPlanned / totalCap) * 100 : 0;
+    return {
+      globalTotalCapHrs: totalCap,
+      globalFreigegebenHrs: freigegeben,
+      globalGesperrtHrs: gesperrt,
+      globalVorgemerktHrs: vorgemerkt,
+      globalTotalPlannedHrs: totalPlanned,
+      globalOverflowHrs: overflow,
+      globalUtilizationPct: utilization
+    };
+  }, [machineSummaries]);
 
   // Chart data: Timeline per Day FILTERED STRICTLY BY SELECTED MACHINES AND STATUSES
-  const chartData = planningDays.map(day => {
-    let dayCapMin = 0;
-    let dayFreigegebenMin = 0;
-    let dayGesperrtMin = 0;
-    let dayVorgemerktMin = 0;
-    let dayRuestMin = 0;
-    let dayLaufMin = 0;
+  const { chartData, chartDataWithTrend, totalChartPoints, slopePerWeek } = useMemo(() => {
+    const data = planningDays.map(day => {
+      let dayCapMin = 0;
+      let dayFreigegebenMin = 0;
+      let dayGesperrtMin = 0;
+      let dayVorgemerktMin = 0;
+      let dayRuestMin = 0;
+      let dayLaufMin = 0;
 
-    filteredMachines.forEach(mName => {
-      dayCapMin += (dailyCapacities[mName]?.[day] || 0);
-      const daySteps = boardData[mName]?.[day] || [];
-      daySteps.forEach(s => {
-        const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
-        const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
+      filteredMachines.forEach(mName => {
+        dayCapMin += (dailyCapacities[mName]?.[day] || 0);
+        const daySteps = boardData[mName]?.[day] || [];
+        daySteps.forEach(s => {
+          const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
+          const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
 
-        if (!isFreigegeben && !includeVorgemerkte) return;
-        if (isFreigegeben && isGesperrt && !includeGesperrte) return;
+          if (!isFreigegeben && !includeVorgemerkte) return;
+          if (isFreigegeben && isGesperrt && !includeGesperrte) return;
 
-        let setupMin = showRuestFilter ? (s.setupTime || s.SetupTime || 0) : 0;
-        let prodMin = showProdFilter ? (s.prodTime || s.ProdTime || (s.scheduledMin || s.ScheduledMin || 0) - setupMin) : 0;
-        if (prodMin < 0) prodMin = 0;
+          let setupMin = showRuestFilter ? (s.setupTime || s.SetupTime || 0) : 0;
+          let prodMin = showProdFilter ? (s.prodTime || s.ProdTime || (s.scheduledMin || s.ScheduledMin || 0) - setupMin) : 0;
+          if (prodMin < 0) prodMin = 0;
 
-        let stepTime = setupMin + prodMin;
-        if (stepTime === 0 && (s.scheduledMin || s.ScheduledMin) > 0) {
-          stepTime = s.scheduledMin || s.ScheduledMin;
-        }
-        dayRuestMin += setupMin;
-        dayLaufMin += prodMin;
+          let stepTime = setupMin + prodMin;
+          if (stepTime === 0 && (s.scheduledMin || s.ScheduledMin) > 0) {
+            stepTime = s.scheduledMin || s.ScheduledMin;
+          }
+          dayRuestMin += setupMin;
+          dayLaufMin += prodMin;
 
-        if (!isFreigegeben) {
-          dayVorgemerktMin += stepTime;
-        } else if (isGesperrt) {
-          dayGesperrtMin += stepTime;
-        } else {
-          dayFreigegebenMin += stepTime;
-        }
+          if (!isFreigegeben) {
+            dayVorgemerktMin += stepTime;
+          } else if (isGesperrt) {
+            dayGesperrtMin += stepTime;
+          } else {
+            dayFreigegebenMin += stepTime;
+          }
+        });
       });
+
+      const dObj = new Date(day);
+      const dayLabel = !isNaN(dObj.getTime()) ? (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.') : day;
+
+      return {
+        day,
+        dayLabel,
+        Kapazität: Math.round((dayCapMin / 60) * 10) / 10,
+        Freigegeben: Math.round((dayFreigegebenMin / 60) * 10) / 10,
+        Gesperrt: Math.round((dayGesperrtMin / 60) * 10) / 10,
+        Vorgemerkt: Math.round((dayVorgemerktMin / 60) * 10) / 10,
+        Rüstzeit: Math.round((dayRuestMin / 60) * 10) / 10,
+        Laufzeit: Math.round((dayLaufMin / 60) * 10) / 10,
+        GesamtGeplant: Math.round(((dayFreigegebenMin + dayGesperrtMin + dayVorgemerktMin) / 60) * 10) / 10
+      };
     });
 
-    const dObj = new Date(day);
-    const dayLabel = !isNaN(dObj.getTime()) ? (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.') : day;
+    const nPoints = data.length;
+    let trendSlope = 0;
+    let trendIntercept = 0;
+
+    if (nPoints > 1) {
+      let sumX = 0;
+      let sumY = 0;
+      let sumXY = 0;
+      let sumXX = 0;
+
+      data.forEach((item, idx) => {
+        const x = idx;
+        const y = item.GesamtGeplant;
+        sumX += x;
+        sumY += y;
+        sumXY += x * y;
+        sumXX += x * x;
+      });
+
+      const meanX = sumX / nPoints;
+      const meanY = sumY / nPoints;
+      const denom = sumXX - nPoints * meanX * meanX;
+
+      if (denom !== 0) {
+        trendSlope = (sumXY - nPoints * meanX * meanY) / denom;
+        trendIntercept = meanY - trendSlope * meanX;
+      } else {
+        trendIntercept = meanY;
+      }
+    } else if (nPoints === 1) {
+      trendIntercept = data[0]?.GesamtGeplant || 0;
+    }
+
+    const slopeW = trendSlope * 7;
+    const withTrend = data.map((item, idx) => ({
+      ...item,
+      Trend: Math.max(0, Math.round((trendSlope * idx + trendIntercept) * 10) / 10)
+    }));
 
     return {
-      day,
-      dayLabel,
-      Kapazität: Math.round((dayCapMin / 60) * 10) / 10,
-      Freigegeben: Math.round((dayFreigegebenMin / 60) * 10) / 10,
-      Gesperrt: Math.round((dayGesperrtMin / 60) * 10) / 10,
-      Vorgemerkt: Math.round((dayVorgemerktMin / 60) * 10) / 10,
-      Rüstzeit: Math.round((dayRuestMin / 60) * 10) / 10,
-      Laufzeit: Math.round((dayLaufMin / 60) * 10) / 10,
-      GesamtGeplant: Math.round(((dayFreigegebenMin + dayGesperrtMin + dayVorgemerktMin) / 60) * 10) / 10
+      chartData: data,
+      chartDataWithTrend: withTrend,
+      totalChartPoints: withTrend.length,
+      slopePerWeek: slopeW
     };
-  });
+  }, [planningDays, filteredMachines, dailyCapacities, boardData, includeVorgemerkte, includeGesperrte, showRuestFilter, showProdFilter]);
 
-  // Calculate linear trend line for GesamtGeplant (total planned workload)
-  const nPoints = chartData.length;
-  let trendSlope = 0;
-  let trendIntercept = 0;
+  // Complete List of all Calendar Weeks in planningDays
+  const allKWList = useMemo(() => {
+    const list = [];
+    let curKW = '';
+    let startIdx = 0;
+    let daysInKW = 0;
+    let startDate = '';
 
-  if (nPoints > 1) {
-    let sumX = 0;
-    let sumY = 0;
-    let sumXY = 0;
-    let sumXX = 0;
-
-    chartData.forEach((item, idx) => {
-      const x = idx;
-      const y = item.GesamtGeplant;
-      sumX += x;
-      sumY += y;
-      sumXY += x * y;
-      sumXX += x * x;
+    planningDays.forEach((day, idx) => {
+      const kw = getISOWeekNumber(day);
+      if (kw !== curKW) {
+        if (curKW) {
+          list.push({
+            kw: curKW,
+            startIndex: startIdx,
+            endIndex: idx - 1,
+            daysCount: daysInKW,
+            startDate,
+            endDate: planningDays[idx - 1]
+          });
+        }
+        curKW = kw;
+        startIdx = idx;
+        daysInKW = 1;
+        startDate = day;
+      } else {
+        daysInKW++;
+      }
     });
 
-    const meanX = sumX / nPoints;
-    const meanY = sumY / nPoints;
-    const denom = sumXX - nPoints * meanX * meanX;
-
-    if (denom !== 0) {
-      trendSlope = (sumXY - nPoints * meanX * meanY) / denom;
-      trendIntercept = meanY - trendSlope * meanX;
-    } else {
-      trendIntercept = meanY;
+    if (curKW && planningDays.length > 0) {
+      list.push({
+        kw: curKW,
+        startIndex: startIdx,
+        endIndex: planningDays.length - 1,
+        daysCount: daysInKW,
+        startDate,
+        endDate: planningDays[planningDays.length - 1]
+      });
     }
-  } else if (nPoints === 1) {
-    trendIntercept = chartData[0]?.GesamtGeplant || 0;
-  }
 
-  const slopePerWeek = trendSlope * 7;
+    return list;
+  }, [planningDays]);
 
-  const chartDataWithTrend = chartData.map((item, idx) => ({
-    ...item,
-    Trend: Math.max(0, Math.round((trendSlope * idx + trendIntercept) * 10) / 10)
-  }));
+  const actualEndIndex = useMemo(() => {
+    return (zoomRange.end !== null && zoomRange.end !== undefined && zoomRange.end < totalChartPoints)
+      ? zoomRange.end
+      : Math.max(0, totalChartPoints - 1);
+  }, [zoomRange.end, totalChartPoints]);
+
+  const actualStartIndex = useMemo(() => {
+    return Math.min(Math.max(0, zoomRange.start || 0), actualEndIndex);
+  }, [zoomRange.start, actualEndIndex]);
+
+  const isZoomed = actualStartIndex > 0 || actualEndIndex < (totalChartPoints - 1);
+  const visibleChartData = useMemo(() => {
+    return chartDataWithTrend.slice(actualStartIndex, actualEndIndex + 1);
+  }, [chartDataWithTrend, actualStartIndex, actualEndIndex]);
+
+  const currentStartKW = useMemo(() => {
+    const startDay = planningDays[actualStartIndex];
+    return startDay ? getISOWeekNumber(startDay) : '';
+  }, [planningDays, actualStartIndex]);
+
+  const currentEndKW = useMemo(() => {
+    const endDay = planningDays[actualEndIndex];
+    return endDay ? getISOWeekNumber(endDay) : '';
+  }, [planningDays, actualEndIndex]);
+
+  const handleZoomIn = useCallback(() => {
+    const currentSpan = actualEndIndex - actualStartIndex + 1;
+    if (currentSpan <= 5) return;
+    const delta = Math.max(1, Math.round(currentSpan * 0.2));
+    const newStart = Math.min(actualStartIndex + delta, actualEndIndex - 4);
+    const newEnd = Math.max(actualEndIndex - delta, newStart + 4);
+    setZoomRange({ start: newStart, end: newEnd });
+  }, [actualStartIndex, actualEndIndex]);
+
+  const handleZoomOut = useCallback(() => {
+    const currentSpan = actualEndIndex - actualStartIndex + 1;
+    const delta = Math.max(1, Math.round(currentSpan * 0.25));
+    const newStart = Math.max(0, actualStartIndex - delta);
+    const newEnd = Math.min(totalChartPoints - 1, actualEndIndex + delta);
+    if (newStart === 0 && newEnd === totalChartPoints - 1) {
+      setZoomRange({ start: 0, end: null });
+    } else {
+      setZoomRange({ start: newStart, end: newEnd });
+    }
+  }, [actualStartIndex, actualEndIndex, totalChartPoints]);
+
+  const handlePan = useCallback((direction) => {
+    const currentSpan = actualEndIndex - actualStartIndex + 1;
+    const shift = Math.max(1, Math.min(5, Math.round(currentSpan * 0.25)));
+    if (direction === 'left') {
+      const newStart = Math.max(0, actualStartIndex - shift);
+      const newEnd = Math.min(totalChartPoints - 1, newStart + currentSpan - 1);
+      setZoomRange({ start: newStart, end: newEnd });
+    } else {
+      const newEnd = Math.min(totalChartPoints - 1, actualEndIndex + shift);
+      const newStart = Math.max(0, newEnd - currentSpan + 1);
+      setZoomRange({ start: newStart, end: newEnd });
+    }
+  }, [actualStartIndex, actualEndIndex, totalChartPoints]);
+
+  const handleQuickZoomWeeks = useCallback((weeks) => {
+    const days = weeks * 5;
+    if (days >= totalChartPoints) {
+      setZoomRange({ start: 0, end: null });
+    } else {
+      setZoomRange({ start: 0, end: days - 1 });
+    }
+  }, [totalChartPoints]);
+
+  const handleResetZoom = useCallback(() => {
+    setZoomRange({ start: 0, end: null });
+  }, []);
+
+  const handleToggleKW = useCallback((kwItem) => {
+    if (actualStartIndex === kwItem.startIndex && actualEndIndex === kwItem.endIndex) {
+      setZoomRange({ start: 0, end: null });
+    } else {
+      setZoomRange({ start: kwItem.startIndex, end: kwItem.endIndex });
+    }
+  }, [actualStartIndex, actualEndIndex]);
+
+  const handleSelectStartKW = useCallback((kwStr) => {
+    const found = allKWList.find(x => x.kw === kwStr);
+    if (found) {
+      setZoomRange(prev => {
+        const curEnd = (prev.end !== null && prev.end !== undefined) ? prev.end : (totalChartPoints - 1);
+        const newEnd = Math.max(found.endIndex, curEnd);
+        return { start: found.startIndex, end: newEnd === totalChartPoints - 1 ? null : newEnd };
+      });
+    }
+  }, [allKWList, totalChartPoints]);
+
+  const handleSelectEndKW = useCallback((kwStr) => {
+    const found = allKWList.find(x => x.kw === kwStr);
+    if (found) {
+      setZoomRange(prev => {
+        const curStart = prev.start || 0;
+        const newStart = Math.min(curStart, found.startIndex);
+        return { start: newStart, end: found.endIndex === totalChartPoints - 1 ? null : found.endIndex };
+      });
+    }
+  }, [allKWList, totalChartPoints]);
+
+  // Keep sliderRange in sync with zoomRange when not actively dragging the slider
+  useEffect(() => {
+    if (!isDraggingSlider) {
+      setSliderRange({ start: actualStartIndex, end: actualEndIndex });
+    }
+  }, [actualStartIndex, actualEndIndex, isDraggingSlider]);
+
+  const handleCommitSliderRange = useCallback((customRange) => {
+    setIsDraggingSlider(false);
+    const target = customRange || sliderRange;
+    const targetStart = Math.max(0, target.start ?? 0);
+    const targetEnd = (target.end !== null && target.end !== undefined && target.end < totalChartPoints)
+      ? target.end
+      : Math.max(0, totalChartPoints - 1);
+
+    if (targetStart !== actualStartIndex || targetEnd !== actualEndIndex) {
+      setZoomRange({
+        start: targetStart,
+        end: targetEnd === totalChartPoints - 1 ? null : targetEnd
+      });
+    }
+  }, [sliderRange, actualStartIndex, actualEndIndex, totalChartPoints]);
+
+  // Global release listener for Recharts Brush to only apply zoom filter on mouseup/touchend
+  useEffect(() => {
+    const handleGlobalBrushRelease = () => {
+      if (brushPendingRangeRef.current) {
+        const { startIndex, endIndex } = brushPendingRangeRef.current;
+        brushPendingRangeRef.current = null;
+        if (typeof startIndex === 'number' && typeof endIndex === 'number') {
+          setZoomRange(prev => {
+            const curStart = prev.start || 0;
+            const curEnd = (prev.end !== null && prev.end !== undefined) ? prev.end : (totalChartPoints - 1);
+            if (startIndex !== curStart || endIndex !== curEnd) {
+              return {
+                start: startIndex,
+                end: endIndex === totalChartPoints - 1 ? null : endIndex
+              };
+            }
+            return prev;
+          });
+        }
+      }
+    };
+
+    window.addEventListener('mouseup', handleGlobalBrushRelease);
+    window.addEventListener('pointerup', handleGlobalBrushRelease);
+    window.addEventListener('touchend', handleGlobalBrushRelease);
+
+    return () => {
+      window.removeEventListener('mouseup', handleGlobalBrushRelease);
+      window.removeEventListener('pointerup', handleGlobalBrushRelease);
+      window.removeEventListener('touchend', handleGlobalBrushRelease);
+    };
+  }, [totalChartPoints]);
 
   if (loading) {
     return (
@@ -11398,7 +11638,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <RefreshCw size={28} className="spinning" style={{ color: '#3b82f6' }} />
           <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-main)' }}>
-            Berechne Maschinenauslastung für die nächsten {weeksCount} Wochen ({weeksCount * 7} Tage)
+            Berechne Maschinenauslastung für {weeksCount === 52 ? 'das nächste Jahr (52 Wochen / 365 Tage)' : `die nächsten ${weeksCount} Wochen (${weeksCount * 7} Tage)`}
           </div>
         </div>
 
@@ -11426,7 +11666,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         {/* Day-by-Day Counter Badge */}
         <div style={{ fontSize: '0.8rem', color: '#94a3b8', background: 'rgba(0, 0, 0, 0.25)', padding: '0.4rem 0.85rem', borderRadius: '20px', border: '1px solid var(--border-dim)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Calendar size={14} style={{ color: '#38bdf8' }} />
-          <span>Verarbeitete Planungstage: <strong>{currentDayLoaded} / {weeksCount * 7} Tage</strong></span>
+          <span>Verarbeitete Planungstage: <strong>{currentDayLoaded} / {weeksCount * 5} Arbeitstage ({weeksCount === 52 ? '1 Jahr / 365 Tage' : `${weeksCount * 7} Kalendertage`})</strong></span>
         </div>
       </div>
     );
@@ -11546,21 +11786,21 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               ))}
             </div>
 
-            {/* Interactive Range Slider (1 to 26 Weeks in 1-week steps) */}
+            {/* Interactive Range Slider (1 to 52 Weeks in 1-week steps) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', background: 'rgba(15, 23, 42, 0.6)', padding: '0.45rem 0.95rem', borderRadius: '10px', border: '1px solid rgba(59, 130, 246, 0.35)', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                 <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-main)' }}>
                   📅 Zeitraum:
                 </span>
                 <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', padding: '0.2rem 0.6rem', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
-                  {tempWeeksCount} {tempWeeksCount === 1 ? 'Woche' : 'Wochen'} ({tempWeeksCount * 7} Tage)
+                  {tempWeeksCount === 52 ? '1 Jahr (52 Wochen / 365 Tage)' : `${tempWeeksCount} ${tempWeeksCount === 1 ? 'Woche' : 'Wochen'} (${tempWeeksCount * 7} Tage)`}
                 </span>
               </div>
 
               <input
                 type="range"
                 min="1"
-                max="26"
+                max="52"
                 step="1"
                 value={tempWeeksCount}
                 onChange={(e) => {
@@ -11568,7 +11808,10 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                   setTempWeeksCount(val);
                 }}
                 onMouseUp={() => setWeeksCount(tempWeeksCount)}
+                onPointerUp={() => setWeeksCount(tempWeeksCount)}
                 onTouchEnd={() => setWeeksCount(tempWeeksCount)}
+                onKeyUp={() => setWeeksCount(tempWeeksCount)}
+                onBlur={() => setWeeksCount(tempWeeksCount)}
                 style={{
                   width: '150px',
                   accentColor: '#38bdf8',
@@ -11576,9 +11819,9 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                 }}
               />
 
-              {/* Quick Preset Buttons (18 W = 126 Tage) */}
+              {/* Quick Preset Buttons (4W, 8W, 12W, 18W, 24W, 1 Jahr) */}
               <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
-                {[4, 8, 12, 18, 24].map(w => (
+                {[4, 8, 12, 18, 24, 52].map(w => (
                   <button
                     key={w}
                     onClick={() => {
@@ -11596,9 +11839,9 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                       cursor: 'pointer',
                       transition: 'all 0.15s'
                     }}
-                    title={`${w} Wochen (${w * 7} Tage)`}
+                    title={w === 52 ? '1 Jahr (52 Wochen / 365 Tage)' : `${w} Wochen (${w * 7} Tage)`}
                   >
-                    {w}W{w === 18 ? ' (126T)' : ''}
+                    {w === 52 ? '1 Jahr' : `${w}W${w === 18 ? ' (126T)' : ''}`}
                   </button>
                 ))}
               </div>
@@ -11754,7 +11997,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
             {globalUtilizationPct.toFixed(1)}%
           </div>
           <div className="metric-desc">
-            {globalTotalPlannedHrs.toFixed(1)}h Geplant / {globalTotalCapHrs.toFixed(1)}h Kapazität ({weeksCount} {weeksCount === 1 ? 'Woche' : 'Wochen'})
+            {globalTotalPlannedHrs.toFixed(1)}h Geplant / {globalTotalCapHrs.toFixed(1)}h Kapazität ({weeksCount === 52 ? '1 Jahr' : `${weeksCount} ${weeksCount === 1 ? 'Woche' : 'Wochen'}`})
           </div>
         </div>
 
@@ -11796,157 +12039,215 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
         </div>
       </div>
 
-      {/* Chart Section */}
-      <div className="glass-card" style={{ padding: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div>
-            {(() => {
-              const startKW = planningDays.length > 0 ? getISOWeekNumber(planningDays[0]) : '';
-              const endKW = planningDays.length > 0 ? getISOWeekNumber(planningDays[planningDays.length - 1]) : '';
-              const kwRangeStr = startKW && endKW ? (startKW === endKW ? startKW + ', ' : startKW + ' – ' + endKW + ', ') : '';
-              return (
-                <h3 style={{ fontWeight: 700, fontSize: '1.05rem', margin: 0, color: 'var(--text-main)' }}>
-                  Kapazitätsverlauf: {selectedFilterLabel} ({kwRangeStr}{weeksCount} {weeksCount === 1 ? 'Woche' : 'Wochen'})
-                </h3>
-              );
-            })()}
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0 0' }}>
-              💡 <span style={{ color: '#38bdf8', fontWeight: 600 }}>Tipp:</span> Klicke auf einen Tag im Diagramm, um im Gantt-Kalender direkt zu diesem Tag zu springen! | 
-              {chartViewType === 'ruest_lauf' 
-                ? ' Gestapelte Gegenüberstellung von Rüstzeit (Setup) und Laufzeit (Bearbeitung) vs. Kapazität'
-                : ' Gestapelte Gegenüberstellung der Belegungsstunden nach Auftragsstatus vs. Kapazität'}
-            </p>
-          </div>
+      {/* Chart Section with Intuitive, High-Performance Interactive Zooming */}
+      {(() => {
+        const startDayStr = visibleChartData[0]?.day;
+        const endDayStr = visibleChartData[visibleChartData.length - 1]?.day;
+        const startKW = startDayStr ? getISOWeekNumber(startDayStr) : '';
+        const endKW = endDayStr ? getISOWeekNumber(endDayStr) : '';
+        const kwRangeStr = startKW && endKW ? (startKW === endKW ? startKW : `${startKW} – ${endKW}`) : '';
+        const visibleDaysCount = visibleChartData.length;
+        const visibleWeeksCount = Math.round((visibleDaysCount / 5) * 10) / 10;
 
-          {/* Chart Display Mode Selector & Trendline Toggle */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => setShowTrendline(!showTrendline)}
-              style={{
-                background: showTrendline ? 'rgba(236, 72, 153, 0.2)' : 'rgba(255,255,255,0.05)',
-                color: showTrendline ? '#ec4899' : 'var(--text-muted)',
-                border: showTrendline ? '1px solid #ec4899' : '1px solid var(--border-dim)',
-                padding: '0.35rem 0.75rem',
-                borderRadius: '6px',
-                fontSize: '0.8rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}
-            >
-              📈 Linearer Trend {showTrendline ? '✓' : '✕'}
-            </button>
-            {showTrendline && (
-              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: slopePerWeek >= 0 ? '#10b981' : '#f59e0b', background: 'rgba(0,0,0,0.3)', padding: '0.35rem 0.65rem', borderRadius: '6px', border: '1px solid var(--border-glow)' }}>
-                {slopePerWeek >= 0 ? '📈 Trend: +' : '📉 Trend: '} {slopePerWeek.toFixed(1)}h / Woche
-              </span>
-            )}
+        const formatShortDateStr = (dateStr) => {
+          if (!dateStr) return '';
+          const d = new Date(dateStr);
+          return !isNaN(d.getTime()) ? (String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.') : dateStr;
+        };
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', background: 'rgba(0,0,0,0.3)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-glow)' }}>
-              <button
-                onClick={() => setChartViewType('ruest_lauf')}
-                style={{
-                  background: chartViewType === 'ruest_lauf' ? 'linear-gradient(135deg, #0284c7, #0369a1)' : 'transparent',
-                  color: chartViewType === 'ruest_lauf' ? '#ffffff' : 'var(--text-muted)',
-                  border: 'none',
-                  padding: '0.35rem 0.75rem',
-                  borderRadius: '6px',
-                  fontSize: '0.8rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s'
-                }}
-              >
-                ⚙️ Rüsten & Laufzeit (Stacked)
-              </button>
-              <button
-                onClick={() => setChartViewType('status')}
-                style={{
-                  background: chartViewType === 'status' ? 'linear-gradient(135deg, #3b82f6, #1d4ed8)' : 'transparent',
-                  color: chartViewType === 'status' ? '#ffffff' : 'var(--text-muted)',
-                  border: 'none',
-                  padding: '0.35rem 0.75rem',
-                  borderRadius: '6px',
-                  fontSize: '0.8rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s'
-                }}
-              >
-                📊 Nach Status (Stacked)
-              </button>
+        const formatFullDateStr = (dateStr) => {
+          if (!dateStr) return '';
+          const d = new Date(dateStr);
+          return !isNaN(d.getTime()) ? (String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear()) : dateStr;
+        };
+
+        return (
+          <div className="glass-card" style={{ padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            {/* Header Row: Title, Scope Info & Reset */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                  <h3 style={{ fontWeight: 700, fontSize: '1.05rem', margin: 0, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <Activity size={18} style={{ color: '#38bdf8' }} />
+                    Kapazitätsverlauf: {selectedFilterLabel}
+                  </h3>
+
+                  <span style={{
+                    background: isZoomed ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.06)',
+                    color: isZoomed ? '#38bdf8' : 'var(--text-main)',
+                    border: isZoomed ? '1px solid #38bdf8' : '1px solid var(--border-dim)',
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: '12px',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px'
+                  }}>
+                    📅 {kwRangeStr} ({formatShortDateStr(startDayStr)} – {formatShortDateStr(endDayStr)}) • {visibleWeeksCount}W ({visibleDaysCount} Tage)
+                  </span>
+
+                  {isZoomed && (
+                    <button
+                      onClick={handleResetZoom}
+                      title="Zoom zurücksetzen auf den gesamten Zeithorizont"
+                      style={{
+                        background: 'rgba(239, 68, 68, 0.15)',
+                        color: '#ef4444',
+                        border: '1px solid rgba(239, 68, 68, 0.4)',
+                        padding: '0.2rem 0.55rem',
+                        borderRadius: '12px',
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        transition: 'all 0.15s'
+                      }}
+                    >
+                      🔄 Reset (Gesamtansicht)
+                    </button>
+                  )}
+                </div>
+
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0.25rem 0 0 0' }}>
+                  💡 <span style={{ color: '#38bdf8', fontWeight: 600 }}>Tipp:</span> Kalenderwochen-Pills oben anklicken zum direkten Fokussieren | Mausrad über Diagramm zum Zoomen | Schieberegler unten nutzen.
+                </p>
+              </div>
+
+              {/* View Type & Additional Toggles */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                {/* Timeline Mini-Map Brush Toggle */}
+                <button
+                  onClick={() => setShowBrush(!showBrush)}
+                  title="Mini-Map Zeitleistenschieberegler unten ein-/ausblenden"
+                  style={{
+                    background: showBrush ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255,255,255,0.05)',
+                    color: showBrush ? '#38bdf8' : 'var(--text-muted)',
+                    border: showBrush ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid var(--border-dim)',
+                    padding: '0.3rem 0.6rem',
+                    borderRadius: '6px',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  🗺️ Mini-Map {showBrush ? '✓' : '✕'}
+                </button>
+
+                {/* Linear Trendline Toggle */}
+                <button
+                  onClick={() => setShowTrendline(!showTrendline)}
+                  style={{
+                    background: showTrendline ? 'rgba(236, 72, 153, 0.2)' : 'rgba(255,255,255,0.05)',
+                    color: showTrendline ? '#ec4899' : 'var(--text-muted)',
+                    border: showTrendline ? '1px solid #ec4899' : '1px solid var(--border-dim)',
+                    padding: '0.3rem 0.6rem',
+                    borderRadius: '6px',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  📈 Trend {showTrendline ? '✓' : '✕'}
+                </button>
+                {showTrendline && (
+                  <span style={{ fontSize: '0.75rem', fontWeight: 800, color: slopePerWeek >= 0 ? '#10b981' : '#f59e0b', background: 'rgba(0,0,0,0.3)', padding: '0.3rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border-glow)' }}>
+                    {slopePerWeek >= 0 ? '+' : ''}{slopePerWeek.toFixed(1)}h/W
+                  </span>
+                )}
+
+                {/* View Mode Selector */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', background: 'rgba(0,0,0,0.3)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-glow)' }}>
+                  <button
+                    onClick={() => setChartViewType('ruest_lauf')}
+                    style={{
+                      background: chartViewType === 'ruest_lauf' ? 'linear-gradient(135deg, #0284c7, #0369a1)' : 'transparent',
+                      color: chartViewType === 'ruest_lauf' ? '#ffffff' : 'var(--text-muted)',
+                      border: 'none',
+                      padding: '0.3rem 0.55rem',
+                      borderRadius: '5px',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    ⚙️ Rüsten/Lauf
+                  </button>
+                  <button
+                    onClick={() => setChartViewType('status')}
+                    style={{
+                      background: chartViewType === 'status' ? 'linear-gradient(135deg, #3b82f6, #1d4ed8)' : 'transparent',
+                      color: chartViewType === 'status' ? '#ffffff' : 'var(--text-muted)',
+                      border: 'none',
+                      padding: '0.3rem 0.55rem',
+                      borderRadius: '5px',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    📊 Status
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        <div
-          id="capacity-chart-container"
-          ref={chartContainerRef}
-          style={{ width: '100%', height: 320, cursor: 'pointer', position: 'relative' }}
-        >
-          <ResponsiveContainer width="100%" height={320} minWidth={0} minHeight={0}>
-            {(() => {
-              const kwBoundaries = [];
-              let lastKW = '';
-              chartDataWithTrend.forEach((item, idx) => {
-                const kw = getISOWeekNumber(item.day);
-                if (kw && kw !== lastKW) {
-                  kwBoundaries.push({ kw, dayLabel: item.dayLabel, startIndex: idx });
-                  lastKW = kw;
+            {/* Capacity BarChart Container with Wheel Zoom */}
+            <div
+              id="capacity-chart-container"
+              ref={chartContainerRef}
+              onWheel={(e) => {
+                e.preventDefault();
+                if (e.deltaY < 0) {
+                  handleZoomIn();
+                } else if (e.deltaY > 0) {
+                  handleZoomOut();
                 }
-              });
-
-              return (
+              }}
+              style={{ width: '100%', height: showBrush ? 365 : 320, position: 'relative', userSelect: 'none' }}
+            >
+              <ResponsiveContainer width="100%" height={showBrush ? 365 : 320} minWidth={0} minHeight={0}>
                 <BarChart
-                  data={chartDataWithTrend}
-                  margin={{ top: 25, right: 30, left: 0, bottom: 25 }}
-                  style={{ cursor: 'pointer' }}
+                  data={showBrush ? chartDataWithTrend : visibleChartData}
+                  margin={{ top: 15, right: 30, left: 0, bottom: showBrush ? 5 : 25 }}
                   onClick={(e) => {
-                    if (e && typeof e.activeTooltipIndex === 'number') {
-                      handleChartDayClick(e.activeTooltipIndex);
+                    const currentData = showBrush ? chartDataWithTrend : visibleChartData;
+                    let clickedDay = null;
+                    if (e && typeof e.activeTooltipIndex === 'number' && currentData[e.activeTooltipIndex]) {
+                      clickedDay = currentData[e.activeTooltipIndex]?.day;
                     } else if (e && e.activePayload && e.activePayload.length > 0) {
-                      const idx = chartDataWithTrend.findIndex(item => item.day === e.activePayload[0].payload?.day);
-                      if (idx >= 0) handleChartDayClick(idx);
+                      clickedDay = e.activePayload[0].payload?.day;
+                    }
+                    if (clickedDay) {
+                      const originalIdx = planningDays.indexOf(clickedDay);
+                      if (originalIdx >= 0) handleChartDayClick(originalIdx);
                     }
                   }}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  {kwBoundaries.map((b, bIdx) => {
-                    const nextB = kwBoundaries[bIdx + 1];
-                    const endLabel = nextB ? nextB.dayLabel : chartDataWithTrend[chartDataWithTrend.length - 1]?.dayLabel;
-                    const isEven = bIdx % 2 === 0;
-
-                    return (
-                      <React.Fragment key={b.kw}>
-                        {isEven && endLabel && (
-                          <ReferenceArea
-                            x1={b.dayLabel}
-                            x2={endLabel}
-                            fill="rgba(56, 189, 248, 0.03)"
-                            stroke="none"
-                          />
-                        )}
-                        <ReferenceLine
-                          x={b.dayLabel}
-                          stroke="rgba(56, 189, 248, 0.45)"
-                          strokeDasharray="4 4"
-                          strokeWidth={1.5}
-                          label={{
-                            value: '📅 ' + b.kw,
-                            fill: '#38bdf8',
-                            position: 'top',
-                            fontSize: 11,
-                            fontWeight: 800,
-                            offset: 8
-                          }}
-                        />
-                      </React.Fragment>
-                    );
-                  })}
-                  <XAxis dataKey="dayLabel" stroke="var(--text-muted)" fontSize={11} interval={Math.floor(planningDays.length / 14)} />
+                  <XAxis
+                    dataKey="day"
+                    stroke="var(--text-muted)"
+                    fontSize={11}
+                    interval={Math.max(0, Math.floor(visibleChartData.length / 14))}
+                    tickFormatter={(val) => {
+                      const d = new Date(val);
+                      return !isNaN(d.getTime()) ? (String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.') : val;
+                    }}
+                  />
                   <YAxis stroke="var(--text-muted)" fontSize={11} unit="h" />
                   <Tooltip
-                    labelFormatter={(label) => '📅 ' + label}
+                    labelFormatter={(val) => {
+                      const d = new Date(val);
+                      const dayFormatted = !isNaN(d.getTime()) ? (String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear()) : val;
+                      const kw = getISOWeekNumber(val);
+                      return `📅 ${kw} (${dayFormatted})`;
+                    }}
                     contentStyle={{
                       background: 'rgba(15, 23, 42, 0.95)',
                       border: '1px solid var(--border-glow)',
@@ -11959,8 +12260,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
                   {chartViewType === 'ruest_lauf' ? (
                     <>
-                      <Bar dataKey="Rüstzeit" stackId="rl" fill="#0284c7" name="Rüstzeit (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
-                      <Bar dataKey="Laufzeit" stackId="rl" fill="#10b981" name="Laufzeit (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                      <Bar dataKey="Rüstzeit" stackId="rl" fill="#0284c7" name="Rüstzeit (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
+                      <Bar dataKey="Laufzeit" stackId="rl" fill="#10b981" name="Laufzeit (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
                       <Line type="monotone" dataKey="Kapazität" stroke="#f59e0b" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
                       {showTrendline && (
                         <Line type="monotone" dataKey="Trend" stroke="#ec4899" strokeWidth={3} strokeDasharray="4 4" dot={false} name="📈 Trend (Gleitender Mittelwert h)" />
@@ -11968,12 +12269,12 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                     </>
                   ) : (
                     <>
-                      <Bar dataKey="Freigegeben" stackId="st" fill="#3b82f6" name="Freigegeben (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                      <Bar dataKey="Freigegeben" stackId="st" fill="#3b82f6" name="Freigegeben (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
                       {includeGesperrte && (
-                        <Bar dataKey="Gesperrt" stackId="st" fill="#ef4444" name="Gesperrt (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                        <Bar dataKey="Gesperrt" stackId="st" fill="#ef4444" name="Gesperrt (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
                       )}
                       {includeVorgemerkte && (
-                        <Bar dataKey="Vorgemerkt" stackId="st" fill="#f59e0b" name="Vorgemerkt (h)" onClick={(entry, idx) => handleChartDayClick(typeof idx === 'number' ? idx : chartDataWithTrend.findIndex(item => item.day === (entry?.day || entry?.payload?.day)))} cursor="pointer" />
+                        <Bar dataKey="Vorgemerkt" stackId="st" fill="#f59e0b" name="Vorgemerkt (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
                       )}
                       <Line type="monotone" dataKey="Kapazität" stroke="#10b981" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
                       {showTrendline && (
@@ -11981,269 +12282,381 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                       )}
                     </>
                   )}
+
+                  {showBrush && totalChartPoints > 10 && (
+                    <Brush
+                      dataKey="day"
+                      height={28}
+                      stroke="#38bdf8"
+                      fill="#0f172a"
+                      startIndex={actualStartIndex}
+                      endIndex={actualEndIndex}
+                      onChange={(range) => {
+                        if (range && typeof range.startIndex === 'number' && typeof range.endIndex === 'number') {
+                          brushPendingRangeRef.current = range;
+                        }
+                      }}
+                      tickFormatter={(val) => {
+                        const d = new Date(val);
+                        return !isNaN(d.getTime()) ? (String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.') : val;
+                      }}
+                    />
+                  )}
                 </BarChart>
-              );
-            })()}
-          </ResponsiveContainer>
-        </div>
-      </div>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* GANTT TAGESFÜLLUNGS-ANSICHT (WER / WO / WIE LANGE GEPLANT IST) */}
-      {activeViewMode === 'gantt' && (
-        <div id="gantt-section" className="glass-card" style={{ padding: '1.25rem', overflowX: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Calendar size={18} style={{ color: '#38bdf8' }} />
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
-                Gantt Tagesfüllung – Kalenderansicht ({weeksCount} {weeksCount === 1 ? 'Woche' : 'Wochen'})
-              </h3>
+      {activeViewMode === 'gantt' && (() => {
+        const displayedGanttDays = (syncGanttWithZoom && isZoomed && visibleChartData.length > 0)
+          ? visibleChartData.map(x => x.day)
+          : planningDays;
+
+        const ganttStartDay = displayedGanttDays[0];
+        const ganttEndDay = displayedGanttDays[displayedGanttDays.length - 1];
+        const startKWFull = ganttStartDay ? getISOWeekNumber(ganttStartDay) : '';
+        const endKWFull = ganttEndDay ? getISOWeekNumber(ganttEndDay) : '';
+        const startDObj = ganttStartDay ? new Date(ganttStartDay) : null;
+        const endDObj = ganttEndDay ? new Date(ganttEndDay) : null;
+        const startYearStr = startDObj && !isNaN(startDObj.getTime()) ? "'" + String(startDObj.getFullYear()).slice(-2) : '';
+        const endYearStr = endDObj && !isNaN(endDObj.getTime()) ? "'" + String(endDObj.getFullYear()).slice(-2) : '';
+        const startFormatted = startDObj && !isNaN(startDObj.getTime()) ? (String(startDObj.getDate()).padStart(2, '0') + '.' + String(startDObj.getMonth() + 1).padStart(2, '0') + '.' + startDObj.getFullYear()) : ganttStartDay;
+        const endFormatted = endDObj && !isNaN(endDObj.getTime()) ? (String(endDObj.getDate()).padStart(2, '0') + '.' + String(endDObj.getMonth() + 1).padStart(2, '0') + '.' + endDObj.getFullYear()) : ganttEndDay;
+        const kwRangeDisplay = startKWFull && endKWFull ? (startKWFull === endKWFull ? `${startKWFull} ${startYearStr}` : `${startKWFull} ${startYearStr} – ${endKWFull} ${endYearStr}`) : '';
+        const visibleGanttWeeks = Math.round((displayedGanttDays.length / 5) * 10) / 10;
+
+        return (
+          <div id="gantt-section" className="glass-card" style={{ padding: '1.25rem', overflowX: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-dim)', paddingBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Calendar size={18} style={{ color: '#38bdf8' }} />
+                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
+                    Gantt Tagesfüllung – Kalenderansicht: {kwRangeDisplay} ({startFormatted} – {endFormatted})
+                  </h3>
+                </div>
+                {syncGanttWithZoom && isZoomed ? (
+                  <span style={{
+                    background: 'rgba(56, 189, 248, 0.15)',
+                    color: '#38bdf8',
+                    border: '1px solid rgba(56, 189, 248, 0.4)',
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: '12px',
+                    fontSize: '0.75rem',
+                    fontWeight: 700
+                  }}>
+                    🔍 Gezoomt: {visibleGanttWeeks}W ({displayedGanttDays.length} Arbeitstage)
+                  </span>
+                ) : (
+                  <span style={{
+                    background: 'rgba(16, 185, 129, 0.15)',
+                    color: '#10b981',
+                    border: '1px solid rgba(16, 185, 129, 0.4)',
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: '12px',
+                    fontSize: '0.75rem',
+                    fontWeight: 700
+                  }}>
+                    {weeksCount === 52 ? '1 Jahr (52 Wochen / 260 Arbeitstage)' : `${weeksCount} Wochen (${displayedGanttDays.length} Arbeitstage)`}
+                  </span>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                {/* Status Legend */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#3b82f6' }}></span> Freigegeben
+                  </span>
+                  {includeGesperrte && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#ef4444' }}></span> Gesperrt
+                    </span>
+                  )}
+                  {includeVorgemerkte && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#f59e0b' }}></span> Vorgemerkt
+                    </span>
+                  )}
+                </div>
+
+                {/* Zoom Sync Toggle Button */}
+                <button
+                  onClick={() => setSyncGanttWithZoom(!syncGanttWithZoom)}
+                  title={syncGanttWithZoom ? "Gantt ist mit dem Diagramm-Zoom synchronisiert (Klicken für dauerhafte 1-Jahr-Vollansicht)" : "Gantt zeigt die gesamte Horizontlänge (Klicken um an Diagramm-Zoom zu koppeln)"}
+                  style={{
+                    background: syncGanttWithZoom ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255,255,255,0.05)',
+                    color: syncGanttWithZoom ? '#38bdf8' : 'var(--text-muted)',
+                    border: syncGanttWithZoom ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid var(--border-dim)',
+                    padding: '0.3rem 0.65rem',
+                    borderRadius: '6px',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  🔗 Zoom koppeln {syncGanttWithZoom ? '✓' : '✕'}
+                </button>
+
+                {isZoomed && syncGanttWithZoom && (
+                  <button
+                    onClick={handleResetZoom}
+                    title="Zoom aufheben und volles Jahr im Gantt anzeigen"
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.15)',
+                      color: '#ef4444',
+                      border: '1px solid rgba(239, 68, 68, 0.4)',
+                      padding: '0.3rem 0.65rem',
+                      borderRadius: '6px',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    🔄 1 Jahr
+                  </button>
+                )}
+              </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#3b82f6' }}></span> Freigegeben
-              </span>
-              {includeGesperrte && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#ef4444' }}></span> Gesperrt
-                </span>
-              )}
-              {includeVorgemerkte && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <span style={{ width: 10, height: 10, borderRadius: '2px', background: '#f59e0b' }}></span> Vorgemerkt
-                </span>
-              )}
-            </div>
-          </div>
 
-          {/* Matrix Table Timeline Container with Sticky Header & Sticky Machine Column */}
-          <div ref={ganttContainerRef} style={{ maxHeight: '78vh', overflow: 'auto', borderRadius: '8px', border: '1px solid var(--border-glow)', position: 'relative' }}>
-            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.74rem', minWidth: (planningDays.length * 85 + 140) + 'px' }}>
-              {(() => {
-                const weekGroups = [];
-                planningDays.forEach(day => {
-                  const kw = getISOWeekNumber(day);
-                  const lastGroup = weekGroups[weekGroups.length - 1];
-                  if (lastGroup && lastGroup.kw === kw) {
-                    lastGroup.span += 1;
-                  } else {
-                    weekGroups.push({ kw, span: 1 });
-                  }
-                });
-
-                return (
-                  <thead style={{ position: 'sticky', top: 0, zIndex: 30, background: '#0f172a' }}>
-                    <tr style={{ background: '#1e293b', borderBottom: '1px solid var(--border-glow)' }}>
-                      <th style={{ padding: '0.4rem 1rem', textAlign: 'left', position: 'sticky', top: 0, left: 0, background: '#1e293b', zIndex: 40, borderRight: '2px solid var(--border-glow)', fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8' }}>
-                        📅 Kalenderwochen (KW)
-                      </th>
-                      {weekGroups.map((group, gIdx) => (
-                        <th key={gIdx} colSpan={group.span} style={{ padding: '0.4rem 0.5rem', textAlign: 'center', background: 'rgba(56, 189, 248, 0.08)', color: '#38bdf8', fontSize: '0.78rem', fontWeight: 800, borderRight: '1px solid var(--border-glow)', borderBottom: '1px solid var(--border-glow)', letterSpacing: '0.5px' }}>
-                          📅 {group.kw}
-                        </th>
-                      ))}
-                    </tr>
-                    <tr style={{ background: '#0f172a', borderBottom: '2px solid var(--border-glow)' }}>
-                      <th style={{ padding: '0.75rem 1rem', textAlign: 'left', minWidth: '180px', position: 'sticky', top: 0, left: 0, background: '#0f172a', zIndex: 40, borderRight: '2px solid var(--border-glow)', borderBottom: '2px solid var(--border-glow)' }}>
-                        Maschine / Anlage
-                      </th>
-                      {planningDays.map((day, dIdx) => {
-                        const dObj = new Date(day);
-                        const dayOfWeek = isNaN(dObj.getTime()) ? '' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][dObj.getDay()];
-                        const dayFormatted = isNaN(dObj.getTime()) ? day : (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.');
-                        const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
-
-                        return (
-                          <th
-                            key={day}
-                            id={'gantt-col-idx-' + dIdx}
-                            style={{
-                              padding: '0.4rem 0.15rem',
-                              textAlign: 'center',
-                              minWidth: '85px',
-                              position: 'sticky',
-                              top: 0,
-                              zIndex: 30,
-                              background: highlightedDayIndex === dIdx ? 'rgba(56, 189, 248, 0.35)' : (isWeekend ? '#1e293b' : '#0f172a'),
-                              color: highlightedDayIndex === dIdx ? '#38bdf8' : 'inherit',
-                              boxShadow: highlightedDayIndex === dIdx ? 'inset 0 0 15px rgba(56, 189, 248, 0.8)' : 'none',
-                              transition: 'all 0.3s ease',
-                              borderRight: '1px solid var(--border-dim)',
-                              borderBottom: '2px solid var(--border-glow)'
-                            }}
-                          >
-                            <div style={{ fontWeight: 700, color: isWeekend ? '#94a3b8' : '#f8fafc', fontSize: '0.85rem' }}>
-                              {dayOfWeek} {dayFormatted}
-                            </div>
-                          </th>
-                        );
-                      })}
-                    </tr>
-                  </thead>
-                );
-              })()}
-              <tbody>
-                {filteredMachines.map(mName => {
-                  const mSummary = machineSummaries.find(x => x.machineName === mName);
-                  const mBoard = boardData[mName] || {};
+            {/* Matrix Table Timeline Container with Sticky Header & Sticky Machine Column */}
+            <div ref={ganttContainerRef} style={{ maxHeight: '78vh', overflow: 'auto', borderRadius: '8px', border: '1px solid var(--border-glow)', position: 'relative' }}>
+              <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.74rem', minWidth: (displayedGanttDays.length * 85 + 140) + 'px' }}>
+                {(() => {
+                  const weekGroups = [];
+                  displayedGanttDays.forEach(day => {
+                    const kw = getISOWeekNumber(day);
+                    const dObj = new Date(day);
+                    const yearShort = !isNaN(dObj.getTime()) ? "'" + String(dObj.getFullYear()).slice(-2) : '';
+                    const groupKey = `${kw} ${yearShort}`;
+                    const lastGroup = weekGroups[weekGroups.length - 1];
+                    if (lastGroup && lastGroup.groupKey === groupKey) {
+                      lastGroup.span += 1;
+                    } else {
+                      weekGroups.push({ groupKey, kw, yearShort, span: 1 });
+                    }
+                  });
 
                   return (
-                    <tr key={mName} style={{ borderBottom: '1px solid var(--border-dim)', background: 'rgba(255,255,255,0.01)' }}>
-                      {/* Sticky Machine Name Column */}
-                      <td style={{ padding: '0.75rem 1rem', fontWeight: 700, position: 'sticky', left: 0, background: '#0f172a', zIndex: 20, borderRight: '2px solid var(--border-glow)', borderBottom: '1px solid var(--border-dim)' }}>
-                        <div style={{ color: 'var(--text-main)', fontSize: '0.9rem' }}>{mName}</div>
-                        {mSummary && (
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px', fontWeight: 500 }}>
-                            {mSummary.windowPlannedHrs.toFixed(1)}h / {mSummary.totalCapHrs.toFixed(1)}h ({mSummary.windowUtilizationPct.toFixed(0)}%)
-                          </div>
-                        )}
-                      </td>
+                    <thead style={{ position: 'sticky', top: 0, zIndex: 30, background: '#0f172a' }}>
+                      <tr style={{ background: '#1e293b', borderBottom: '1px solid var(--border-glow)' }}>
+                        <th style={{ padding: '0.4rem 1rem', textAlign: 'left', position: 'sticky', top: 0, left: 0, background: '#1e293b', zIndex: 40, borderRight: '2px solid var(--border-glow)', fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8' }}>
+                          📅 Kalenderwochen (KW)
+                        </th>
+                        {weekGroups.map((group, gIdx) => (
+                          <th key={gIdx} colSpan={group.span} style={{ padding: '0.4rem 0.5rem', textAlign: 'center', background: 'rgba(56, 189, 248, 0.08)', color: '#38bdf8', fontSize: '0.78rem', fontWeight: 800, borderRight: '1px solid var(--border-glow)', borderBottom: '1px solid var(--border-glow)', letterSpacing: '0.5px' }}>
+                            📅 {group.kw} {group.yearShort}
+                          </th>
+                        ))}
+                      </tr>
+                      <tr style={{ background: '#0f172a', borderBottom: '2px solid var(--border-glow)' }}>
+                        <th style={{ padding: '0.75rem 1rem', textAlign: 'left', minWidth: '180px', position: 'sticky', top: 0, left: 0, background: '#0f172a', zIndex: 40, borderRight: '2px solid var(--border-glow)', borderBottom: '2px solid var(--border-glow)' }}>
+                          Maschine / Anlage
+                        </th>
+                        {displayedGanttDays.map((day, dIdx) => {
+                          const dObj = new Date(day);
+                          const dayOfWeek = isNaN(dObj.getTime()) ? '' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][dObj.getDay()];
+                          const dayFormatted = isNaN(dObj.getTime()) ? day : (String(dObj.getDate()).padStart(2, '0') + '.' + String(dObj.getMonth() + 1).padStart(2, '0') + '.');
+                          const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
+                          const originalDayIdx = planningDays.indexOf(day);
 
-                      {/* Calendar Day Cells */}
-                      {planningDays.map(day => {
-                        const dayCapMin = dailyCapacities[mName]?.[day] || 360;
-                        const dayCapHrs = dayCapMin / 60;
-                        const daySteps = (mBoard[day] || []).filter(s => {
-                          const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
-                          const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
-
-                          if (!isFreigegeben && !includeVorgemerkte) return false;
-                          if (isFreigegeben && isGesperrt && !includeGesperrte) return false;
-
-                          if (searchQuery.trim()) {
-                            const q = searchQuery.toLowerCase();
-                            return String(s.contractNumber || '').toLowerCase().includes(q) ||
-                                   String(s.orderPos || '').toLowerCase().includes(q) ||
-                                   String(s.orderDesc || '').toLowerCase().includes(q) ||
-                                   String(s.stepDesc || '').toLowerCase().includes(q);
-                          }
-                          return true;
-                        });
-
-                        let totalDayMin = 0;
-                        daySteps.forEach(s => {
-                          if (showRuestFilter) totalDayMin += (s.setupTime || 0);
-                          if (showProdFilter) totalDayMin += (s.prodTime || 0);
-                        });
-                        const totalDayHrs = totalDayMin / 60;
-                        const fillPct = dayCapMin > 0 ? Math.min(100, (totalDayMin / dayCapMin) * 100) : 0;
-                        const isOverCapacity = totalDayMin > dayCapMin;
-
-                        return (
-                          <td
-                            key={day}
-                            style={{
-                              padding: '0.25rem 0.15rem',
-                              verticalAlign: 'top',
-                              borderRight: '1px solid var(--border-dim)',
-                              background: isOverCapacity ? 'rgba(239, 68, 68, 0.04)' : 'transparent'
-                            }}
-                          >
-                            {/* Ultra-compact Day Capacity Bar inside cell */}
-                            <div style={{ marginBottom: '0.25rem', background: 'rgba(0,0,0,0.35)', padding: '0.15rem 0.25rem', borderRadius: '3px', border: '1px solid var(--border-dim)', textAlign: 'center' }}>
-                              <div style={{ fontSize: '0.62rem', fontWeight: 700, color: isOverCapacity ? '#ef4444' : fillPct > 80 ? '#f59e0b' : '#38bdf8' }}>
-                                {totalDayHrs.toFixed(1)}h
+                          return (
+                            <th
+                              key={day}
+                              id={'gantt-col-idx-' + originalDayIdx}
+                              style={{
+                                padding: '0.4rem 0.15rem',
+                                textAlign: 'center',
+                                minWidth: '85px',
+                                position: 'sticky',
+                                top: 0,
+                                zIndex: 30,
+                                background: highlightedDayIndex === originalDayIdx ? 'rgba(56, 189, 248, 0.35)' : (isWeekend ? '#1e293b' : '#0f172a'),
+                                color: highlightedDayIndex === originalDayIdx ? '#38bdf8' : 'inherit',
+                                boxShadow: highlightedDayIndex === originalDayIdx ? 'inset 0 0 15px rgba(56, 189, 248, 0.8)' : 'none',
+                                transition: 'all 0.3s ease',
+                                borderRight: '1px solid var(--border-dim)',
+                                borderBottom: '2px solid var(--border-glow)'
+                              }}
+                            >
+                              <div style={{ fontWeight: 700, color: isWeekend ? '#94a3b8' : '#f8fafc', fontSize: '0.85rem' }}>
+                                {dayOfWeek} {dayFormatted}
                               </div>
-                              <div style={{ height: '3px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '1px', overflow: 'hidden' }}>
-                                <div
-                                  style={{
-                                    height: '100%',
-                                    width: fillPct + '%',
-                                    background: isOverCapacity ? '#ef4444' : fillPct > 80 ? '#f59e0b' : '#3b82f6',
-                                    transition: 'width 0.3s'
-                                  }}
-                                />
-                              </div>
-                            </div>
-
-                            {/* Stacked Compact Order Step Cards with Distinct Order Colors */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                              {daySteps.length === 0 ? (
-                                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.15)', textAlign: 'center', padding: '0.35rem 0' }}>
-                                  —
-                                </div>
-                              ) : (
-                                daySteps.map((step, sIdx) => {
-                                  const isFreigegeben = step.isFreigegeben !== undefined ? step.isFreigegeben : (step.belegArt === 1);
-                                  const isGesperrt = !!(step.isGesperrt || step.typSperre > 0);
-
-                                  const setupH = ((step.setupTime || 0) / 60).toFixed(1);
-                                  const prodH = ((step.prodTime || 0) / 60).toFixed(1);
-                                  const totalH = (((step.setupTime || 0) + (step.prodTime || 0)) / 60).toFixed(1);
-
-                                  // Get unique vibrant color palette per contract number
-                                  const orderColor = getContractColor(step.contractNumber);
-
-                                  const statusDot = !isFreigegeben ? '🟡' : isGesperrt ? '🔴' : '🟢';
-
-                                  const displayTitle = (step.contractNumber || 'Auftrag') + ' / Pos ' + (step.orderPos || '10');
-                                  const articleLabel = step.orderDesc || step.stepDesc || 'Artikel';
-
-                                  const isSameContract = hoveredContractNumber && step.contractNumber === hoveredContractNumber;
-                                  const isOtherContract = hoveredContractNumber && step.contractNumber !== hoveredContractNumber;
-
-                                  return (
-                                    <div
-                                      key={sIdx}
-                                      onClick={() => setActiveModalStep(step)}
-                                      onMouseEnter={() => setHoveredContractNumber(step.contractNumber)}
-                                      onMouseLeave={() => setHoveredContractNumber(null)}
-                                      style={{
-                                        background: isSameContract ? orderColor.border : (step.positionCategoryHex ? `${step.positionCategoryHex}20` : orderColor.bg),
-                                        borderLeft: '4px solid ' + (step.positionCategoryHex || step.orderCategoryHex || (isGesperrt ? '#ef4444' : !isFreigegeben ? '#f59e0b' : orderColor.border)),
-                                        borderTop: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
-                                        borderRight: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
-                                        borderBottom: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
-                                        borderRadius: '4px',
-                                        padding: '0.2rem 0.25rem',
-                                        cursor: 'pointer',
-                                        opacity: isOtherContract ? 0.35 : 1,
-                                        transform: isSameContract ? 'scale(1.08)' : 'scale(1)',
-                                        zIndex: isSameContract ? 50 : 1,
-                                        boxShadow: isSameContract ? ('0 0 14px ' + (step.positionCategoryHex || orderColor.border) + ', 0 2px 8px rgba(0,0,0,0.5)') : '0 1px 3px rgba(0,0,0,0.3)',
-                                        transition: 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s, boxShadow 0.15s, background 0.15s',
-                                        overflow: 'hidden'
-                                      }}
-                                      title={(step.orderCategoryName ? `D4 Auftrags-Kategorie: ${step.orderCategoryName}\n` : '') + (step.positionCategoryName ? `D4 Pos-Kategorie: ${step.positionCategoryName}\n` : '') + step.contractNumber + ' Pos ' + step.orderPos + ' - AS ' + step.stepPos + '\nArtikel: ' + articleLabel + '\nRüst: ' + setupH + 'h | Lauf: ' + prodH + 'h | Gesamt: ' + totalH + 'h'}
-                                    >
-                                      {/* Micro 1-Line: P-Nummer / Pos */}
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {step.orderCategoryHex ? (
-                                          <span style={{ width: 7, height: 7, borderRadius: '50%', background: step.orderCategoryHex, boxShadow: `0 0 6px ${step.orderCategoryHex}`, flexShrink: 0 }} title={step.orderCategoryName ? `D4 Auftrags-Kategorie: ${step.orderCategoryName}` : 'D4 Auftrags-Kategorie'} />
-                                        ) : (
-                                          <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{statusDot}</span>
-                                        )}
-                                        <span style={{ fontWeight: 800, color: step.positionCategoryHex || orderColor.text, fontSize: '0.68rem', letterSpacing: '-0.2px' }}>
-                                          {displayTitle}
-                                        </span>
-                                      </div>
-
-                                      {/* Micro 2-Line: Artikel / Duration Pill */}
-                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.62rem', color: '#ffffff', opacity: 0.9, marginTop: '1px' }}>
-                                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '45px' }} title={articleLabel}>
-                                          {articleLabel}
-                                        </span>
-                                        <span style={{ fontWeight: 700, color: '#38bdf8', background: 'rgba(0,0,0,0.4)', padding: '0px 3px', borderRadius: '2px' }}>
-                                          {totalH}h
-                                        </span>
-                                      </div>
-                                    </div>
-                                  );
-                                })
-                              )}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
                   );
-                })}
-              </tbody>
-            </table>
+                })()}
+                <tbody>
+                  {filteredMachines.map(mName => {
+                    const mSummary = machineSummaries.find(x => x.machineName === mName);
+                    const mBoard = boardData[mName] || {};
+
+                    return (
+                      <tr key={mName} style={{ borderBottom: '1px solid var(--border-dim)', background: 'rgba(255,255,255,0.01)' }}>
+                        {/* Sticky Machine Name Column */}
+                        <td style={{ padding: '0.75rem 1rem', fontWeight: 700, position: 'sticky', left: 0, background: '#0f172a', zIndex: 20, borderRight: '2px solid var(--border-glow)', borderBottom: '1px solid var(--border-dim)' }}>
+                          <div style={{ color: 'var(--text-main)', fontSize: '0.9rem' }}>{mName}</div>
+                          {mSummary && (
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px', fontWeight: 500 }}>
+                              {mSummary.windowPlannedHrs.toFixed(1)}h / {mSummary.totalCapHrs.toFixed(1)}h ({mSummary.windowUtilizationPct.toFixed(0)}%)
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Calendar Day Cells */}
+                        {displayedGanttDays.map(day => {
+                          const dayCapMin = dailyCapacities[mName]?.[day] || 360;
+                          const dayCapHrs = dayCapMin / 60;
+                          const daySteps = (mBoard[day] || []).filter(s => {
+                            const isFreigegeben = s.isFreigegeben !== undefined ? s.isFreigegeben : (s.zustandPlanung !== undefined ? s.zustandPlanung === 0 : true);
+                            const isGesperrt = !!(s.isGesperrt || s.typSperre > 0);
+
+                            if (!isFreigegeben && !includeVorgemerkte) return false;
+                            if (isFreigegeben && isGesperrt && !includeGesperrte) return false;
+
+                            if (searchQuery.trim()) {
+                              const q = searchQuery.toLowerCase();
+                              return String(s.contractNumber || '').toLowerCase().includes(q) ||
+                                     String(s.orderPos || '').toLowerCase().includes(q) ||
+                                     String(s.orderDesc || '').toLowerCase().includes(q) ||
+                                     String(s.stepDesc || '').toLowerCase().includes(q);
+                            }
+                            return true;
+                          });
+
+                          let totalDayMin = 0;
+                          daySteps.forEach(s => {
+                            if (showRuestFilter) totalDayMin += (s.setupTime || 0);
+                            if (showProdFilter) totalDayMin += (s.prodTime || 0);
+                          });
+                          const totalDayHrs = totalDayMin / 60;
+                          const fillPct = dayCapMin > 0 ? Math.min(100, (totalDayMin / dayCapMin) * 100) : 0;
+                          const isOverCapacity = totalDayMin > dayCapMin;
+
+                          return (
+                            <td
+                              key={day}
+                              style={{
+                                padding: '0.25rem 0.15rem',
+                                verticalAlign: 'top',
+                                borderRight: '1px solid var(--border-dim)',
+                                background: isOverCapacity ? 'rgba(239, 68, 68, 0.04)' : 'transparent'
+                              }}
+                            >
+                              {/* Ultra-compact Day Capacity Bar inside cell */}
+                              <div style={{ marginBottom: '0.25rem', background: 'rgba(0,0,0,0.35)', padding: '0.15rem 0.25rem', borderRadius: '3px', border: '1px solid var(--border-dim)', textAlign: 'center' }}>
+                                <div style={{ fontSize: '0.62rem', fontWeight: 700, color: isOverCapacity ? '#ef4444' : fillPct > 80 ? '#f59e0b' : '#38bdf8' }}>
+                                  {totalDayHrs.toFixed(1)}h
+                                </div>
+                                <div style={{ height: '3px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '1px', overflow: 'hidden' }}>
+                                  <div
+                                    style={{
+                                      height: '100%',
+                                      width: fillPct + '%',
+                                      background: isOverCapacity ? '#ef4444' : fillPct > 80 ? '#f59e0b' : '#3b82f6',
+                                      transition: 'width 0.3s'
+                                    }}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Stacked Compact Order Step Cards with Distinct Order Colors */}
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                {daySteps.length === 0 ? (
+                                  <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.15)', textAlign: 'center', padding: '0.35rem 0' }}>
+                                    —
+                                  </div>
+                                ) : (
+                                  daySteps.map((step, sIdx) => {
+                                    const isFreigegeben = step.isFreigegeben !== undefined ? step.isFreigegeben : (step.belegArt === 1);
+                                    const isGesperrt = !!(step.isGesperrt || step.typSperre > 0);
+
+                                    const setupH = ((step.setupTime || 0) / 60).toFixed(1);
+                                    const prodH = ((step.prodTime || 0) / 60).toFixed(1);
+                                    const totalH = (((step.setupTime || 0) + (step.prodTime || 0)) / 60).toFixed(1);
+
+                                    // Get unique vibrant color palette per contract number
+                                    const orderColor = getContractColor(step.contractNumber);
+
+                                    const statusDot = !isFreigegeben ? '🟡' : isGesperrt ? '🔴' : '🟢';
+
+                                    const displayTitle = (step.contractNumber || 'Auftrag') + ' / Pos ' + (step.orderPos || '10');
+                                    const articleLabel = step.orderDesc || step.stepDesc || 'Artikel';
+
+                                    const isSameContract = hoveredContractNumber && step.contractNumber === hoveredContractNumber;
+                                    const isOtherContract = hoveredContractNumber && step.contractNumber !== hoveredContractNumber;
+
+                                    return (
+                                      <div
+                                        key={sIdx}
+                                        onClick={() => setActiveModalStep(step)}
+                                        onMouseEnter={() => setHoveredContractNumber(step.contractNumber)}
+                                        onMouseLeave={() => setHoveredContractNumber(null)}
+                                        style={{
+                                          background: isSameContract ? orderColor.border : (step.positionCategoryHex ? `${step.positionCategoryHex}20` : orderColor.bg),
+                                          borderLeft: '4px solid ' + (step.positionCategoryHex || step.orderCategoryHex || (isGesperrt ? '#ef4444' : !isFreigegeben ? '#f59e0b' : orderColor.border)),
+                                          borderTop: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
+                                          borderRight: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
+                                          borderBottom: '1px solid ' + (step.positionCategoryHex ? `${step.positionCategoryHex}60` : orderColor.border),
+                                          borderRadius: '4px',
+                                          padding: '0.2rem 0.25rem',
+                                          cursor: 'pointer',
+                                          opacity: isOtherContract ? 0.35 : 1,
+                                          transform: isSameContract ? 'scale(1.08)' : 'scale(1)',
+                                          zIndex: isSameContract ? 50 : 1,
+                                          boxShadow: isSameContract ? ('0 0 14px ' + (step.positionCategoryHex || orderColor.border) + ', 0 2px 8px rgba(0,0,0,0.5)') : '0 1px 3px rgba(0,0,0,0.3)',
+                                          transition: 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s, boxShadow 0.15s, background 0.15s',
+                                          overflow: 'hidden'
+                                        }}
+                                        title={(step.orderCategoryName ? `D4 Auftrags-Kategorie: ${step.orderCategoryName}\n` : '') + (step.positionCategoryName ? `D4 Pos-Kategorie: ${step.positionCategoryName}\n` : '') + step.contractNumber + ' Pos ' + step.orderPos + ' - AS ' + step.stepPos + '\nArtikel: ' + articleLabel + '\nRüst: ' + setupH + 'h | Lauf: ' + prodH + 'h | Gesamt: ' + totalH + 'h'}
+                                      >
+                                        {/* Micro 1-Line: P-Nummer / Pos */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          {step.orderCategoryHex ? (
+                                            <span style={{ width: 7, height: 7, borderRadius: '50%', background: step.orderCategoryHex, boxShadow: `0 0 6px ${step.orderCategoryHex}`, flexShrink: 0 }} title={step.orderCategoryName ? `D4 Auftrags-Kategorie: ${step.orderCategoryName}` : 'D4 Auftrags-Kategorie'} />
+                                          ) : (
+                                            <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{statusDot}</span>
+                                          )}
+                                          <span style={{ fontWeight: 800, color: step.positionCategoryHex || orderColor.text, fontSize: '0.68rem', letterSpacing: '-0.2px' }}>
+                                            {displayTitle}
+                                          </span>
+                                        </div>
+
+                                        {/* Micro 2-Line: Artikel / Duration Pill */}
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.62rem', color: '#ffffff', opacity: 0.9, marginTop: '1px' }}>
+                                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '45px' }} title={articleLabel}>
+                                            {articleLabel}
+                                          </span>
+                                          <span style={{ fontWeight: 700, color: '#38bdf8', background: 'rgba(0,0,0,0.4)', padding: '0px 3px', borderRadius: '2px' }}>
+                                            {totalH}h
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
-
-
+        );
+      })()}
 
       {/* Machine Utilization Cards Grid */}
       {activeViewMode === 'cards' && (
@@ -12285,7 +12698,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                     borderRadius: '20px',
                     fontWeight: 700,
                     fontSize: '0.85rem'
-                  }} title={"Auslastung im " + weeksCount + "-Wochen-Fenster (ohne Überlauf)"}>
+                  }} title={"Auslastung im " + (weeksCount === 52 ? "1-Jahr" : weeksCount + "-Wochen") + "-Fenster (ohne Überlauf)"}>
                     {m.windowUtilizationPct.toFixed(1)}%
                   </div>
                 </div>
@@ -12294,7 +12707,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
               {/* Triple Progress Bar */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                  <span>Planung ({weeksCount} {weeksCount === 1 ? 'Woche' : 'Wochen'}) / Kapazität</span>
+                  <span>Planung ({weeksCount === 52 ? '1 Jahr' : `${weeksCount} ${weeksCount === 1 ? 'Woche' : 'Wochen'}`}) / Kapazität</span>
                   <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>
                     {m.windowPlannedHrs.toFixed(1)}h / {m.totalCapHrs.toFixed(1)}h
                     {m.overflowPlannedHrs > 0 && <span style={{ color: '#f59e0b', fontSize: '0.7rem', marginLeft: '4px' }}>(+{m.overflowPlannedHrs.toFixed(1)}h Überlauf)</span>}

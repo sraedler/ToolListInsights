@@ -20,7 +20,7 @@ export function GanttHeader({ weeksCount, onWeeksCountChange, adherencePercent }
       <div>
         <h3 style={{ margin: '0 0 6px 0', color: '#f472b6' }}>📈 Auswertung Planung & Mehrwochen-Gantt</h3>
         <div style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'flex', gap: '16px' }}>
-          <span>Planungs-Horizont: <strong>{weeksCount} Wochen</strong></span>
+          <span>Planungs-Horizont: <strong>{weeksCount === 52 ? '1 Jahr (52 Wochen)' : `${weeksCount} ${weeksCount === 1 ? 'Woche' : 'Wochen'}`}</strong></span>
           <span>Termintreue: <strong style={{ color: adherencePercent >= 90 ? '#10b981' : '#f59e0b' }}>{adherencePercent}%</strong></span>
         </div>
       </div>
@@ -30,12 +30,12 @@ export function GanttHeader({ weeksCount, onWeeksCountChange, adherencePercent }
         <input
           type="range"
           min="1"
-          max="20"
+          max="52"
           value={weeksCount}
           onChange={(e) => onWeeksCountChange && onWeeksCountChange(parseInt(e.target.value, 10))}
           style={{ cursor: 'pointer' }}
         />
-        <span style={{ fontWeight: 'bold', minWidth: '30px' }}>{weeksCount}W</span>
+        <span style={{ fontWeight: 'bold', minWidth: '35px' }}>{weeksCount === 52 ? '1J' : `${weeksCount}W`}</span>
       </div>
     </div>
   );

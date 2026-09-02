@@ -26,12 +26,15 @@ function buildConfig(serverEnv, databaseEnv, userEnv, passwordEnv, portEnv, encr
       user: userEnv,
       password: passwordEnv,
       port: portEnv ? parseInt(portEnv) : undefined,
+      requestTimeout: 180000,
+      connectionTimeout: 60000,
       options: {
         encrypt: encryptEnv === 'true',
         trustServerCertificate: true,
-        instanceName: instance
+        instanceName: instance,
+        requestTimeout: 180000
       },
-      pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
+      pool: { max: 15, min: 0, idleTimeoutMillis: 60000 }
     };
   }
 
@@ -41,7 +44,12 @@ function buildConfig(serverEnv, databaseEnv, userEnv, passwordEnv, portEnv, encr
     return {
       driver: 'msnodesqlv8',
       connectionString: defaultConnStr,
-      pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
+      requestTimeout: 180000,
+      connectionTimeout: 60000,
+      options: {
+        requestTimeout: 180000
+      },
+      pool: { max: 15, min: 0, idleTimeoutMillis: 60000 }
     };
   }
 
@@ -75,12 +83,15 @@ function buildConfig(serverEnv, databaseEnv, userEnv, passwordEnv, portEnv, encr
     database: parsed.database || databaseEnv,
     user: parsed.user || userEnv || defaultUser,
     password: parsed.password || passwordEnv || defaultPassword,
+    requestTimeout: 180000,
+    connectionTimeout: 60000,
     options: {
       encrypt: parsed.encrypt || false,
       trustServerCertificate: true,
-      instanceName: parsed.instanceName || undefined
+      instanceName: parsed.instanceName || undefined,
+      requestTimeout: 180000
     },
-    pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
+    pool: { max: 15, min: 0, idleTimeoutMillis: 60000 }
   };
 }
 
