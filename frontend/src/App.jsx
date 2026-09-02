@@ -11576,61 +11576,87 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     }
   }, [allKWList, totalChartPoints]);
 
-  // Keep sliderRange in sync with zoomRange when not actively dragging the slider
-  useEffect(() => {
-    if (!isDraggingSlider) {
-      setSliderRange({ start: actualStartIndex, end: actualEndIndex });
+  const handleChartMouseDown = useCallback((e) => {
+    if (e && e.activeLabel) {
+      setRefAreaLeft(e.activeLabel);
+      setRefAreaRight(e.activeLabel);
+      setIsSelectingZoom(true);
     }
-  }, [actualStartIndex, actualEndIndex, isDraggingSlider]);
+  }, []);
 
-  const handleCommitSliderRange = useCallback((customRange) => {
-    setIsDraggingSlider(false);
-    const target = customRange || sliderRange;
-    const targetStart = Math.max(0, target.start ?? 0);
-    const targetEnd = (target.end !== null && target.end !== undefined && target.end < totalChartPoints)
-      ? target.end
-      : Math.max(0, totalChartPoints - 1);
-
-    if (targetStart !== actualStartIndex || targetEnd !== actualEndIndex) {
-      setZoomRange({
-        start: targetStart,
-        end: targetEnd === totalChartPoints - 1 ? null : targetEnd
-      });
+  const handleChartMouseMove = useCallback((e) => {
+    if (isSelectingZoom && e && e.activeLabel) {
+      setRefAreaRight(e.activeLabel);
     }
-  }, [sliderRange, actualStartIndex, actualEndIndex, totalChartPoints]);
+  }, [isSelectingZoom]);
 
-  // Global release listener for Recharts Brush to only apply zoom filter on mouseup/touchend
-  useEffect(() => {
-    const handleGlobalBrushRelease = () => {
-      if (brushPendingRangeRef.current) {
-        const { startIndex, endIndex } = brushPendingRangeRef.current;
-        brushPendingRangeRef.current = null;
-        if (typeof startIndex === 'number' && typeof endIndex === 'number') {
-          setZoomRange(prev => {
-            const curStart = prev.start || 0;
-            const curEnd = (prev.end !== null && prev.end !== undefined) ? prev.end : (totalChartPoints - 1);
-            if (startIndex !== curStart || endIndex !== curEnd) {
-              return {
-                start: startIndex,
-                end: endIndex === totalChartPoints - 1 ? null : endIndex
-              };
-            }
-            return prev;
+  const handleChartMouseUp = useCallback(() => {
+    if (!isSelectingZoom) return;
+    setIsSelectingZoom(false);
+
+    if (refAreaLeft && refAreaRight && refAreaLeft !== refAreaRight) {
+      const idx1 = planningDays.indexOf(refAreaLeft);
+      const idx2 = planningDays.indexOf(refAreaRight);
+      if (idx1 >= 0 && idx2 >= 0) {
+        const start = Math.min(idx1, idx2);
+        const end = Math.max(idx1, idx2);
+        if (end > start) {
+          setZoomRange({
+            start,
+            end: end === totalChartPoints - 1 ? null : end
           });
+        }
+      }
+    } else if (refAreaLeft) {
+      const idx = planningDays.indexOf(refAreaLeft);
+      if (idx >= 0) {
+        handleChartDayClick(idx);
+      }
+    }
+
+    setRefAreaLeft(null);
+    setRefAreaRight(null);
+  }, [isSelectingZoom, refAreaLeft, refAreaRight, planningDays, totalChartPoints]);
+
+  const brushRangeRef = useRef(null);
+  const isDraggingBrushRef = useRef(false);
+
+  const handleBrushChange = useCallback((range) => {
+    if (range && typeof range.startIndex === 'number' && typeof range.endIndex === 'number') {
+      isDraggingBrushRef.current = true;
+      brushRangeRef.current = range;
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleRelease = () => {
+      if (isDraggingBrushRef.current && brushRangeRef.current) {
+        const { startIndex, endIndex } = brushRangeRef.current;
+        isDraggingBrushRef.current = false;
+        brushRangeRef.current = null;
+        if (typeof startIndex === 'number' && typeof endIndex === 'number') {
+          const newStart = Math.max(0, startIndex);
+          const newEnd = Math.min(totalChartPoints - 1, endIndex);
+          if (newStart !== actualStartIndex || newEnd !== actualEndIndex) {
+            setZoomRange({
+              start: newStart,
+              end: newEnd === totalChartPoints - 1 ? null : newEnd
+            });
+          }
         }
       }
     };
 
-    window.addEventListener('mouseup', handleGlobalBrushRelease);
-    window.addEventListener('pointerup', handleGlobalBrushRelease);
-    window.addEventListener('touchend', handleGlobalBrushRelease);
+    window.addEventListener('mouseup', handleRelease);
+    window.addEventListener('pointerup', handleRelease);
+    window.addEventListener('touchend', handleRelease);
 
     return () => {
-      window.removeEventListener('mouseup', handleGlobalBrushRelease);
-      window.removeEventListener('pointerup', handleGlobalBrushRelease);
-      window.removeEventListener('touchend', handleGlobalBrushRelease);
+      window.removeEventListener('mouseup', handleRelease);
+      window.removeEventListener('pointerup', handleRelease);
+      window.removeEventListener('touchend', handleRelease);
     };
-  }, [totalChartPoints]);
+  }, [actualStartIndex, actualEndIndex, totalChartPoints]);
 
   if (loading) {
     return (
@@ -12215,18 +12241,11 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                 <BarChart
                   data={showBrush ? chartDataWithTrend : visibleChartData}
                   margin={{ top: 15, right: 30, left: 0, bottom: showBrush ? 5 : 25 }}
-                  onClick={(e) => {
-                    const currentData = showBrush ? chartDataWithTrend : visibleChartData;
-                    let clickedDay = null;
-                    if (e && typeof e.activeTooltipIndex === 'number' && currentData[e.activeTooltipIndex]) {
-                      clickedDay = currentData[e.activeTooltipIndex]?.day;
-                    } else if (e && e.activePayload && e.activePayload.length > 0) {
-                      clickedDay = e.activePayload[0].payload?.day;
-                    }
-                    if (clickedDay) {
-                      const originalIdx = planningDays.indexOf(clickedDay);
-                      if (originalIdx >= 0) handleChartDayClick(originalIdx);
-                    }
+                  onMouseDown={handleChartMouseDown}
+                  onMouseMove={handleChartMouseMove}
+                  onMouseUp={handleChartMouseUp}
+                  onMouseLeave={() => {
+                    if (isSelectingZoom) handleChartMouseUp();
                   }}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
@@ -12260,8 +12279,8 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
 
                   {chartViewType === 'ruest_lauf' ? (
                     <>
-                      <Bar dataKey="Rüstzeit" stackId="rl" fill="#0284c7" name="Rüstzeit (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
-                      <Bar dataKey="Laufzeit" stackId="rl" fill="#10b981" name="Laufzeit (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
+                      <Bar dataKey="Rüstzeit" stackId="rl" fill="#0284c7" name="Rüstzeit (h)" />
+                      <Bar dataKey="Laufzeit" stackId="rl" fill="#10b981" name="Laufzeit (h)" />
                       <Line type="monotone" dataKey="Kapazität" stroke="#f59e0b" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
                       {showTrendline && (
                         <Line type="monotone" dataKey="Trend" stroke="#ec4899" strokeWidth={3} strokeDasharray="4 4" dot={false} name="📈 Trend (Gleitender Mittelwert h)" />
@@ -12269,18 +12288,31 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                     </>
                   ) : (
                     <>
-                      <Bar dataKey="Freigegeben" stackId="st" fill="#3b82f6" name="Freigegeben (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
+                      <Bar dataKey="Freigegeben" stackId="st" fill="#3b82f6" name="Freigegeben (h)" />
                       {includeGesperrte && (
-                        <Bar dataKey="Gesperrt" stackId="st" fill="#ef4444" name="Gesperrt (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
+                        <Bar dataKey="Gesperrt" stackId="st" fill="#ef4444" name="Gesperrt (h)" />
                       )}
                       {includeVorgemerkte && (
-                        <Bar dataKey="Vorgemerkt" stackId="st" fill="#f59e0b" name="Vorgemerkt (h)" cursor="pointer" onClick={(entry) => { const d = entry?.day || entry?.payload?.day; if (d) handleChartDayClick(planningDays.indexOf(d)); }} />
+                        <Bar dataKey="Vorgemerkt" stackId="st" fill="#f59e0b" name="Vorgemerkt (h)" />
                       )}
                       <Line type="monotone" dataKey="Kapazität" stroke="#10b981" strokeWidth={2.5} dot={false} name="Max. Kapazität (h)" />
                       {showTrendline && (
                         <Line type="monotone" dataKey="Trend" stroke="#ec4899" strokeWidth={3} strokeDasharray="4 4" dot={false} name="📈 Trend (Gleitender Mittelwert h)" />
                       )}
                     </>
+                  )}
+
+                  {/* Drag-to-zoom selection highlight box */}
+                  {refAreaLeft && refAreaRight && refAreaLeft !== refAreaRight && (
+                    <ReferenceArea
+                      x1={refAreaLeft}
+                      x2={refAreaRight}
+                      stroke="#38bdf8"
+                      strokeOpacity={0.8}
+                      fill="#38bdf8"
+                      fillOpacity={0.25}
+                      ifOverflow="visible"
+                    />
                   )}
 
                   {showBrush && totalChartPoints > 10 && (
@@ -12291,11 +12323,7 @@ function PlanningEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                       fill="#0f172a"
                       startIndex={actualStartIndex}
                       endIndex={actualEndIndex}
-                      onChange={(range) => {
-                        if (range && typeof range.startIndex === 'number' && typeof range.endIndex === 'number') {
-                          brushPendingRangeRef.current = range;
-                        }
-                      }}
+                      onChange={handleBrushChange}
                       tickFormatter={(val) => {
                         const d = new Date(val);
                         return !isNaN(d.getTime()) ? (String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.') : val;
