@@ -6417,7 +6417,7 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
       simLastUsedIndex[tNr] = -1;
     });
 
-    const isChiron = name.toUpperCase().includes('CHIRON') || mapping.machineIds.includes(21);
+    const isChironOrC400 = name.toUpperCase().includes('CHIRON') || name.toUpperCase().includes('C400') || mapping.machineIds.includes(21) || mapping.machineIds.includes(2);
 
     // Simulate loading preloaded programs before sequence optimization
     preloadedToolNrs.forEach(tNr => {
@@ -6426,7 +6426,7 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
           const candidates = currentSimMagazine.filter(mNr => !preloadedToolNrs.includes(mNr));
           if (candidates.length === 0) break;
           const victim = findOptimalVictim(candidates, remainingSteps, listToToolsMap, simLastUsedIndex, staticParkToolNrs);
-          if (isChiron) {
+          if (isChironOrC400) {
             const victimListNr = Object.keys(listToToolsMap).find(lNr => (listToToolsMap[lNr] || []).includes(victim));
             if (victimListNr) {
               const listTools = listToToolsMap[victimListNr] || [];
@@ -6483,7 +6483,7 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
           if (candidates.length === 0) break;
           
           const victim = findOptimalVictim(candidates, remainingSteps, listToToolsMap, simLastUsedIndex, staticParkToolNrs);
-          if (isChiron) {
+          if (isChironOrC400) {
             const victimListNr = Object.keys(listToToolsMap).find(lNr => (listToToolsMap[lNr] || []).includes(victim));
             if (victimListNr) {
               const listTools = listToToolsMap[victimListNr] || [];
@@ -6519,7 +6519,7 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
     lastUsedIndex[tNr] = -1;
   });
 
-  const isChiron = name.toUpperCase().includes('CHIRON') || mapping.machineIds.includes(21);
+  const isChironOrC400 = name.toUpperCase().includes('CHIRON') || name.toUpperCase().includes('C400') || mapping.machineIds.includes(21) || mapping.machineIds.includes(2);
 
   // Simulate loading of preloaded programs BEFORE the timeline starts
   const preloadedUnloads = [];
@@ -6530,7 +6530,7 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
         if (candidates.length === 0) break;
         const remaining = machineSteps;
         const victim = findOptimalVictim(candidates, remaining, listToToolsMap, lastUsedIndex, staticParkToolNrs);
-        if (isChiron) {
+        if (isChironOrC400) {
           const victimListNr = Object.keys(listToToolsMap).find(lNr => (listToToolsMap[lNr] || []).includes(victim));
           if (victimListNr) {
             const listTools = listToToolsMap[victimListNr] || [];
@@ -6599,7 +6599,7 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
           const remaining = machineSteps.slice(idx + 1);
           const victim = findOptimalVictim(candidates, remaining, listToToolsMap, lastUsedIndex, staticParkToolNrs);
           
-          if (isChiron) {
+          if (isChironOrC400) {
             const victimListNr = Object.keys(listToToolsMap).find(lNr => (listToToolsMap[lNr] || []).includes(victim));
             if (victimListNr) {
               const listTools = listToToolsMap[victimListNr] || [];
@@ -6626,14 +6626,14 @@ async function runSimulationForMachine(name, unloadPrograms, loadPrograms, targe
       });
     }
     
-    // Determine unload tools for completed step (for Chiron: completed order's entire list except park tools & future needed tools)
+    // Determine unload tools for completed step (for Chiron & C400: completed order's entire list except park tools & future needed tools)
     const completedListNr = resolveSpeakingListName(step.MatchedListNr, step);
     const completedTools = listToToolsMap[completedListNr] || stepToolNrs;
     const futureNeededSet = new Set();
     const remainingFutureSteps = machineSteps.slice(idx + 1);
     remainingFutureSteps.forEach(rem => (listToToolsMap[rem.MatchedListNr] || []).forEach(t => futureNeededSet.add(t)));
     
-    const stepUnloads = isChiron 
+    const stepUnloads = isChironOrC400 
       ? completedTools.filter(tNr => !staticParkToolNrs.includes(tNr) && !futureNeededSet.has(tNr))
       : (step.unloadTools || []).map(t => (typeof t === 'object' ? t.nr : t)).filter(tNr => !staticParkToolNrs.includes(tNr));
 

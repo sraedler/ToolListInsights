@@ -114,21 +114,27 @@ console.log('--- Executing Unit & Contract Tests: 01 - Planung Maschinen ---');
   console.log('✓ Test 6: Static Park Tools Protection Assertion passed');
 }
 
-// Test 7: Chiron Entire Tool List Unloading Unit Assertion (Completed Order Rule)
+// Test 7: Chiron & Hermle C400 Entire Tool List Unloading Unit Assertion (Completed Order Rule)
 {
-  const isChironMachine = (mName) => (mName || '').toUpperCase().includes('CHIRON');
-  assert.strictEqual(isChironMachine('Chiron'), true, 'Chiron machine name must be matched');
+  const isWholeListUnloadMachine = (mName) => {
+    const upper = (mName || '').toUpperCase();
+    return upper.includes('CHIRON') || upper.includes('C400');
+  };
+  assert.strictEqual(isWholeListUnloadMachine('Chiron'), true, 'Chiron machine name must be matched');
+  assert.strictEqual(isWholeListUnloadMachine('C400'), true, 'C400 machine name must be matched');
+  assert.strictEqual(isWholeListUnloadMachine('Hermle C400'), true, 'Hermle C400 machine name must be matched');
+  assert.strictEqual(isWholeListUnloadMachine('RS2_1'), false, 'RS2_1 must not be whole-list unload machine');
 
   const completedOrderListNr = '2537-0301-SP1';
   const completedOrderTools = [101, 102, 103, 104, 105];
-  const staticParkToolsSet = new Set([101]); // Tool 101 is in Park list
+  const staticParkToolsSet = new Set([101]); // Tool 101 is in Park list (e.g. C400 geparkt or Chiron Parkplatz)
   const futureNeededToolsSet = new Set([102]); // Tool 102 is needed by upcoming step
 
   // All tools of completed list except park tools & future needed tools
   const unloadTools = completedOrderTools.filter(t => !staticParkToolsSet.has(t) && !futureNeededToolsSet.has(t));
 
-  assert.deepStrictEqual(unloadTools, [103, 104, 105], 'Completed order entire tool list [103, 104, 105] must be proposed for unloading, excluding park tool 101 and future tool 102');
-  console.log('✓ Test 7: Chiron Entire Tool List Unloading Unit Assertion passed');
+  assert.deepStrictEqual(unloadTools, [103, 104, 105], 'Completed order entire tool list [103, 104, 105] must be proposed for unloading on Chiron and C400, excluding park tool 101 and future tool 102');
+  console.log('✓ Test 7: Chiron & Hermle C400 Entire Tool List Unloading Unit Assertion passed');
 }
 
 // Test 8: Overdue Delivery Date Prioritization Assertion (FR-011)

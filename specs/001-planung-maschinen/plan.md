@@ -8,9 +8,9 @@
 
 ## Summary
 
-Implement the visual Kanban machine scheduling board for CNC machining centers (`01_Planung_Maschinen`) **and build its automated test suite from scratch**. The technical architecture leverages a React 19 frontend built with Vite 8, Recharts 3, Lucide React icons, and custom CSS variables (`[data-theme='dark']` / `[data-theme='light']`). The backend runs on Node.js with Express 5, connecting to MS SQL Server databases (`D4` ERP, `WTData` WinTool, `Toollist`) using dual-driver support (`msnodesqlv8` for Windows Trusted Authentication and `mssql`/`tedious` for Linux/Docker fallback). Manual overrides are persisted in `backend/planning_overrides.json`, while construction drawings stream via d.velop DMS PDF proxy endpoints.
+Implement and maintain the visual Kanban machine scheduling board for CNC machining centers (`01_Planung_Maschinen`) with automated test coverage. The technical architecture leverages a React 19 frontend built with Vite 8, Recharts 3, Lucide React icons, and custom CSS variables (`[data-theme='dark']` / `[data-theme='light']`). The backend runs on Node.js with Express 5, connecting to MS SQL Server databases (`D4` ERP, `WTData` WinTool, `Toollist`) using dual-driver support (`msnodesqlv8` for Windows Trusted Authentication and `mssql`/`tedious` for Linux/Docker fallback).
 
-**Test Suite Re-implementation**: Since `Features/01_Planung_Maschinen/test.js` and `Features/run_tests.js` do not currently exist in the codebase, building a lightweight `node:assert`-based test runner and contract verification test suite is a mandatory deliverable of Phase 2 tasks.
+**C400 & Chiron Tool List Unloading**: When a job/order completes on either Chiron or Hermle C400, the system proposes unloading its entire Tool List (`MatchedListNr` / `NCProgram`) as a complete unit (excluding static park tools and future needed tools), displaying the list identifier and unload badge in the step detail modal (`📦 Chiron / C400 WinTool-Liste: ... entladen (-X Werkzeuge)`).
 
 ---
 
@@ -94,15 +94,16 @@ Dockerfile               # Backend Node.js container build
 
 ---
 
-## Technical Design: Chiron Completed Order Tool List Unloading (`FR-009`) & Static Park Tools (`FR-010`)
+## Technical Design: Chiron & Hermle C400 Completed Order Tool List Unloading (`FR-009`) & Static Park Tools (`FR-010`)
 
-1. **Chiron Completed Order Tool List Unloading (`FR-009`)**:
-   - Target Machine: `Chiron` (`mName === 'Chiron'` / `MachineId === 21`).
-   - Unloading Logic: When a job/order (e.g. `2537-0301-SP1`) finishes execution in the schedule, the system proposes unloading its **entire Tool List** (`MatchedListNr` / `NCProgram`) as a complete unit.
+1. **Chiron & Hermle C400 Completed Order Tool List Unloading (`FR-009`)**:
+   - Target Machines: `Chiron` (`mName === 'Chiron'` / `MachineId === 21`) and `Hermle C400` (`mName === 'C400'` / `MachineId === 2`).
+   - Unloading Logic: When a job/order (e.g. `2537-0301-SP1`) finishes execution in the schedule on Chiron or C400, the system proposes unloading its **entire Tool List** (`MatchedListNr` / `NCProgram`) as a complete unit.
    - Exclusion Exceptions:
-     a) Tools contained in any static `"park"` list (`staticParkToolsSet`) are NEVER unloaded.
+     a) Tools contained in any static `"park"` list (`staticParkToolsSet`, e.g. `C400 geparkt`, `Chiron Parkplatz`) are NEVER unloaded.
      b) Tools still required by upcoming/subsequent steps in the remaining schedule are retained in the machine.
    - All remaining non-park tools of that completed order's tool list are proposed for unloading (`unloadTools` / `Auswechseln (Raus)`).
+   - UI Representation: In swimlane card details and the Step Detail Modal (`activeModalStep`), display the list unload banner (`📦 Chiron / C400 WinTool-Liste: ... entladen (-X Werkzeuge)`) and populate `step.unloadListNames` and `step.unloadTools` accordingly.
 
 2. **Static Park Tools Protection (`FR-010`)**:
    - Target Database: `ToolList` database (`MachineToProgram` & `ProgramToTool` tables).

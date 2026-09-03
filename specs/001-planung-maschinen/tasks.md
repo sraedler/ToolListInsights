@@ -3,14 +3,14 @@
 **Input**: Design documents from [`specs/001-planung-maschinen/`](file:///C:/git_repos/ToolListInsights/specs/001-planung-maschinen/)  
 **Prerequisites**: [`plan.md`](file:///C:/git_repos/ToolListInsights/specs/001-planung-maschinen/plan.md), [`spec.md`](file:///C:/git_repos/ToolListInsights/specs/001-planung-maschinen/spec.md), [`research.md`](file:///C:/git_repos/ToolListInsights/specs/001-planung-maschinen/research.md), [`data-model.md`](file:///C:/git_repos/ToolListInsights/specs/001-planung-maschinen/data-model.md), [`contracts/planning-api.json`](file:///C:/git_repos/ToolListInsights/specs/001-planung-maschinen/contracts/planning-api.json)
 
-**Tests Requirement**: **MANDATORY** — Re-implement the missing test suite (`Features/01_Planung_Maschinen/test.js` & `Features/run_tests.js`) as foundational and story-specific tasks.
+**Tests Requirement**: **MANDATORY** — Automated unit, contract, and regression test suites in `Features/01_Planung_Maschinen/test.js` and `Features/run_tests.js`.
 
 ---
 
 ## Format: `- [ ] [TaskID] [P?] [Story?] Description with file path`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: User story label (US1, US2, US3, US4, US5, US6, US7)
+- **[Story]**: User story label (US1, US2, US3, US4, US5, US6, US7, US8)
 - Includes exact file paths for every task
 
 ---
@@ -27,15 +27,15 @@
 
 ## Phase 2: Foundational (Blocking Prerequisites & Test Suite Re-implementation)
 
-**Purpose**: Core database connections, persistent override storage, and re-creation of the missing test runner framework before user story implementation
+**Purpose**: Core database connections, persistent override storage, and test runner framework
 
-- [x] T004 [P] Re-implement master test runner script `Features/run_tests.js` using native `node:assert`
-- [x] T005 [P] Implement dynamic MS SQL Server database pool builder (`msnodesqlv8` / `tedious`) in `backend/db.js`
-- [x] T006 Re-implement feature unit & contract test suite harness in `Features/01_Planung_Maschinen/test.js`
-- [x] T007 Implement database mode toggle (`live` vs `dev`) endpoints in `backend/server.js`
+- [x] T004 [P] Master test runner script `Features/run_tests.js` using native `node:assert`
+- [x] T005 [P] Dynamic MS SQL Server database pool builder (`msnodesqlv8` / `tedious`) in `backend/db.js`
+- [x] T006 Feature unit & contract test suite harness in `Features/01_Planung_Maschinen/test.js`
+- [x] T007 Database mode toggle (`live` vs `dev`) endpoints in `backend/server.js`
 - [x] T008 [P] Initialize persistent JSON override file in `backend/planning_overrides.json`
 
-**Checkpoint**: Foundation & test harness ready — user story implementation can now begin.
+**Checkpoint**: Foundation & test harness ready — user story implementation can proceed.
 
 ---
 
@@ -120,21 +120,7 @@
 
 ---
 
-## Phase 8: User Story 5 - Chiron Entire Tool List Unloading & Static Park Tools Protection (Priority: P1)
-
-**Goal**: Enforce entire tool list unloading for Chiron machine operations (`FR-009`) and protect static park tool lists (`LOWER(ProgramName) LIKE '%park%'` from `ToolList` DB) so they are NEVER unloaded or evicted (`FR-010`).
-
-**Independent Test**: Run `node Features/run_tests.js` to verify Chiron tool list unloading unit rules and static park tool protection.
-
-### Implementation for User Story 5
-
-- [x] T031 [US5] Query static park tool lists (`LOWER(ProgramName) LIKE '%park%'`) from `MachineToProgram` and `ProgramToTool` in `backend/server.js` and cache protected `staticParkToolsSet`
-- [x] T032 [US5] Implement complete tool list unloading unit logic for Chiron (`mName === 'Chiron'`) in tool delta and setup optimization in `backend/server.js` and `frontend/src/App.jsx`
-- [x] T033 [US5] Protect static park tools (`staticParkToolsSet`) in magazine simulation, LRU victim eviction (`findOptimalVictim`), and scenario unloading in `backend/server.js` and `frontend/src/App.jsx` so park tools are NEVER unloaded
-
----
-
-## Phase 9: User Story 5 - Priorisierung überfälliger & naher Liefertermine in der Rüstoptimierung (FR-011)
+## Phase 8: User Story 5 - Priorisierung überfälliger & naher Liefertermine in der Rüstoptimierung (FR-011)
 
 **Goal**: Prioritize jobs with overdue or imminent delivery dates (`DeliveryDate <= today` or near deadline) during setup sequence optimization (Greedy, Local Search, Simulated Annealing), ensuring late D4 customer orders are scheduled earlier in the sequence.
 
@@ -142,35 +128,77 @@
 
 ### Implementation for User Story 5
 
-- [x] T034 [US5] Implement delivery date urgency score calculation (`overdueDays` / `DeliveryDate` weighting) in candidate selection in `backend/server.js`
-- [x] T035 [US5] Integrate delivery date urgency weighting into Greedy, Local Search, and Simulated Annealing setup optimization algorithms in `backend/server.js`
-- [x] T036 [US5] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying overdue jobs are scheduled before far-future jobs during setup optimization
+- [x] T031 [US5] Implement delivery date urgency score calculation (`overdueDays` / `DeliveryDate` weighting) in candidate selection in `backend/server.js`
+- [x] T032 [US5] Integrate delivery date urgency weighting into Greedy, Local Search, and Simulated Annealing setup optimization algorithms in `backend/server.js`
+- [x] T033 [US5] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying overdue jobs are scheduled before far-future jobs during setup optimization
 
 ---
 
-## Phase 10: User Story 6 - Pool Machine Night Run Capacity Optimization & 24h Ceiling (FR-012)
+## Phase 9: User Story 6 - Werkzeugentladung ganzer Listen für Chiron & C400 (FR-009 & FR-010)
+
+**Goal**: Enforce entire tool list unloading for both Chiron and Hermle C400 machine operations (`FR-009`) while protecting static park tool lists (`LOWER(ProgramName) LIKE '%park%'`, e.g. `C400 geparkt`, `Chiron Parkplatz` from `ToolList` DB) so they are NEVER unloaded or evicted (`FR-010`).
+
+**Independent Test**: Run `node Features/run_tests.js` to verify that for completed orders on both Chiron and Hermle C400, their entire tool list is proposed in `unloadTools` (excluding static park tools and future needed tools) and displayed in the UI.
+
+### Implementation for User Story 6
+
+- [x] T034 [P] [US6] Add unit & contract test assertions in `Features/01_Planung_Maschinen/test.js` verifying that completed orders on Hermle C400 (`mName === 'C400'` / `MachineId === 2`) propose their entire tool list for unloading, excluding static park tools and future needed tools, matching Chiron behavior
+- [x] T035 [US6] Update `runSimulationForMachine` and schedule calculation in `backend/server.js` to treat Hermle C400 (`name === 'C400'` / `machineId === 2`) as a whole-list unloading machine alongside Chiron, populating `stepUnloads`, `unloadListNames`, and `unloadTools` with completed list tools
+- [x] T036 [P] [US6] Update `frontend/src/App.jsx` step detail modal (`isChironOrC400Modal`) and transitional card details (`Auswechseln: ...`) to display the tool list unload badge (`📦 C400 WinTool-Liste: ... entladen (-X Werkzeuge)`) and speaking list names for Hermle C400
+
+---
+
+## Phase 10: User Story 7 - Pool Machine Night Run Capacity Optimization & 24h Ceiling (FR-012)
 
 **Goal**: Enable unmanned night run capacity optimization for pool machines (`MachinePoolId` for RS2 Pool `9`/`12` and C40/C42 Pool `13`) in the Kanban Planung Maschinen view. Calculate $\text{MaxNightCapacity} = \text{MaxPiecesPerNight} \times \text{AvgPieceTime}$, enforce Day Window limit (`DayCapacity`), and cap total daily workload at 24 hours (1,440 minutes).
 
 **Independent Test**: Run `npm run test:features` to verify pool machine night capacity calculations and 24h ceiling assertions.
 
-### Implementation for User Story 6
+### Implementation for User Story 7
 
-- [x] T037 [P] [US6] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying pool machine night capacity calculation ($\text{MaxPiecesPerNight} \times \text{AvgPieceTime}$), Day Window cap, and 24h ceiling
-- [x] T038 [US6] Integrate `calculateNightRunAllocation` into Kanban Machine Column daily workload calculation in `backend/server.js` and `backend/models/ganttAnalysis.js`
-- [x] T039 [P] [US6] Update `frontend/src/App.jsx` and `frontend/src/components/MachineHeader.jsx` to render Day Shift vs. Night Run hours and 24h capacity indicator for pool machines
+- [x] T037 [P] [US7] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying pool machine night capacity calculation ($\text{MaxPiecesPerNight} \times \text{AvgPieceTime}$), Day Window cap, and 24h ceiling
+- [x] T038 [US7] Integrate `calculateNightRunAllocation` into Kanban Machine Column daily workload calculation in `backend/server.js` and `backend/models/ganttAnalysis.js`
+- [x] T039 [P] [US7] Update `frontend/src/App.jsx` and `frontend/src/components/MachineHeader.jsx` to render Day Shift vs. Night Run hours and 24h capacity indicator for pool machines
 
 ---
 
-## Phase 11: User Story 7 - Order/Contract Search Filtering & Overflow Lookahead (FR-013 & FR-006)
+## Phase 11: User Story 8 - Order/Contract Search Filtering & Overflow Lookahead (FR-013 & FR-006)
 
 **Goal**: Filter job cards in `Planung Maschinen` and `Planung Maschinen blockiert` based on an interactive order/contract search input (`searchQuery`), hiding all non-matching cards (e.g. searching `P2026` hides `P2025`). Route matching future steps beyond `daysCount` into the `Überlauf` (Overflow) column.
 
 **Independent Test**: Run `npm run test:features` to verify order search filtering predicate and out-of-range future order routing into the `Überlauf` column.
 
-### Implementation for User Story 7
+### Implementation for User Story 8
 
-- [x] T040 [P] [US7] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying order search filtering predicate and out-of-range future order routing into the `Überlauf` (Overflow) column
-- [x] T041 [US7] Update `GET /api/planning` endpoint in `backend/server.js` to accept `searchQuery`, filter out non-matching steps, and route matching future steps beyond `daysCount` to `board[mName]['Überlauf']`
-- [x] T042 [P] [US7] Add interactive order search input field in `frontend/src/components/ControlBar.jsx` / `frontend/src/App.jsx` for both `Planung Maschinen` and `Planung Maschinen blockiert` tabs
+- [x] T040 [P] [US8] Add unit test assertions in `Features/01_Planung_Maschinen/test.js` verifying order search filtering predicate and out-of-range future order routing into the `Überlauf` (Overflow) column
+- [x] T041 [US8] Update `GET /api/planning` endpoint in `backend/server.js` to accept `searchQuery`, filter out non-matching steps, and route matching future steps beyond `daysCount` to `board[mName]['Überlauf']`
+- [x] T042 [P] [US8] Add interactive order search input field in `frontend/src/components/ControlBar.jsx` / `frontend/src/App.jsx` for both `Planung Maschinen` and `Planung Maschinen blockiert` tabs
 
+---
+
+## Dependencies & Execution Order
+
+### Phase Dependencies
+
+- **Setup (Phase 1)**: No dependencies — verified.
+- **Foundational (Phase 2)**: Depends on Setup completion — verified.
+- **User Story 1–5, 7–8 (Phases 3–8, 10–11)**: Core functionality completed and verified by automated tests.
+- **User Story 6 (Phase 9 - Chiron & C400 Tool List Unloading)**:
+  - `T034` (Test assertions in `Features/01_Planung_Maschinen/test.js`) can run in parallel with frontend inspection.
+  - `T035` (Backend simulation update in `backend/server.js`) enables full list tool unloads for C400.
+  - `T036` (Frontend badge & modal update in `frontend/src/App.jsx`) renders C400 list unload UI.
+- **Polish (Phase 7)**: Continuous verification via test runner.
+
+### Parallel Opportunities
+
+- `T034` (Test assertions in `Features/01_Planung_Maschinen/test.js`) and `T036` (Frontend UI update in `frontend/src/App.jsx`) can run in parallel.
+- `T035` (Backend logic in `backend/server.js`) can be implemented directly following test assertion design.
+
+---
+
+## Implementation Strategy for User Story 6 (C400 Tool List Unloading)
+
+1. **Step 1: Test-Driven Assertion**: Add test assertion in `Features/01_Planung_Maschinen/test.js` asserting that C400 (`mName === 'C400'`) proposes all non-park, non-future-needed tools of a completed order's tool list for unloading, matching Chiron.
+2. **Step 2: Backend Simulation Engine**: In `backend/server.js`, expand `isChiron` condition to `isChironOrC400` in `runSimulationForMachine` and `/api/planning` payload mapping.
+3. **Step 3: Frontend Modal & Badging**: In `frontend/src/App.jsx`, update `isChironModal` to include C400, dynamically displaying `📦 C400 WinTool-Liste: <ListNr> entladen (-<Count> Werkzeuge)` and speaking list name in transitional details.
+4. **Step 4: Verification**: Execute `node Features/run_tests.js` to ensure all 8 feature test suites pass with zero regressions.

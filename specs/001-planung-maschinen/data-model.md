@@ -24,6 +24,10 @@ interface JobStep {
   ncProgram: string | null;       // Associated NC file name (e.g. "O9842_10.NC")
   fixture: string | null;         // Assigned fixture ID (e.g. "V-1029")
   toolListNr: string | null;      // Associated WinTool list ID (e.g. "TL-4491")
+  unloadListNames?: string;       // Name of tool list proposed for unloading on Chiron / C400
+  unloadLists?: string[];         // Array of tool list identifiers for completed order
+  unloadTools?: Array<{ nr: number; desc?: string; dia?: number | string | null; len?: number | string | null }>; // Proposed unload tools (entire list for Chiron/C400)
+  loadTools?: Array<{ nr: number; desc?: string; dia?: number | string | null; len?: number | string | null }>;   // Tools to be loaded into magazine
   isNightRunCapable: boolean;     // Can run unmanned overnight
   posQuantity: number;            // Total pieces in P-Auftrag position
   avgPieceTime: number;           // Calculated avg piece time (runTimeMin / posQuantity)

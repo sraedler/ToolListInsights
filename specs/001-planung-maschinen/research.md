@@ -1,22 +1,23 @@
-## Decision 1: Entire Tool List Unloading Unit for Completed Chiron Orders
+## Decision 1: Entire Tool List Unloading Unit for Completed Chiron and C400 Orders
 
 ### Problem Statement
-On Chiron machining centers, physical tool management requires that when an order (e.g. `2537-0301-SP1`) finishes execution according to schedule, its **entire Tool List** (`Werkzeugliste` / `ZzIdent`) is proposed for unloading as a complete unit.
+On Chiron and Hermle C400 machining centers, physical tool management and shopfloor setup procedures require that when an order (e.g. `2537-0301-SP1`) finishes execution according to schedule, its **entire Tool List** (`Werkzeugliste` / `ZzIdent`) is proposed for unloading as a complete unit.
 
 ### Decision
-For Chiron machine operations (`mName === 'Chiron'` or `MachineId === 21`):
+For Chiron and Hermle C400 machine operations (`mName === 'Chiron' || mName === 'C400'` or `MachineId === 21 || MachineId === 2`):
 1. When an order finishes, identify its tool list (`MatchedListNr` / `NCProgram`).
 2. Propose unloading ALL tools belonging to that completed Tool List, EXCEPT:
-   - Tools in any static `"park"` list (which remain locked in the machine).
+   - Tools in any static `"park"` list (e.g. `Chiron Parkplatz`, `C400 geparkt`, which remain locked in the machine).
    - Tools needed by future/upcoming steps in the schedule.
-3. Show the completed order's Tool List Name clearly in `Auswechseln (Raus)` in the UI.
+3. Show the completed order's Tool List Name and unload count clearly in `Auswechseln (Raus)` in the UI modal (`📦 Chiron / C400 WinTool-Liste: ... entladen (-X Werkzeuge)`).
 
 ### Rationale
-- Aligns ToolListInsights setup simulation with Chiron physical shop-floor procedures.
-- Prevents partial list pre-setting errors on Chiron machines.
+- Aligns ToolListInsights setup simulation with physical shop-floor procedures on both Chiron and C400 machines.
+- Prevents partial list pre-setting and teardown discrepancies on C400 machines, making its behavior 100% consistent with Chiron.
 
 ### Alternatives Considered
 - **Universal tool list unloading across all machines**: Rejected because automated palleted centers (e.g. RS2_1, RS2_2, C40, C42) support individual tool retention in large magazines.
+- **Keep C400 on individual LRU eviction**: Rejected per user directive, as operators on C400 work with entire list changeovers similar to Chiron.
 
 ---
 

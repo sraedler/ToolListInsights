@@ -8892,7 +8892,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                                         Einwechseln: {step.loadTools.map(t => `T${t.nr}`).join(', ') || 'Keine'}
                                       </div>
                                       <div style={{ fontSize: '0.58rem', color: '#8b9bb4' }}>
-                                        Auswechseln: {(selectedMachine === 'Chiron' || (step.machineName || '').includes('Chiron')) ? (step.unloadListNames ? `Werkzeugliste ${step.unloadListNames} (${step.unloadTools.length} Werkzeuge)` : 'Keine') : (step.unloadTools.map(t => `T${t.nr}`).join(', ') || 'Keine')}
+                                        Auswechseln: {(selectedMachine === 'Chiron' || selectedMachine === 'C400' || (step.machineName || '').includes('Chiron') || (step.machineName || '').includes('C400')) ? (step.unloadListNames ? `Werkzeugliste ${step.unloadListNames} (${step.unloadTools.length} Werkzeuge)` : 'Keine') : (step.unloadTools.map(t => `T${t.nr}`).join(', ') || 'Keine')}
                                       </div>
                                     </div>
                                   )}
@@ -9876,7 +9876,11 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
 
                     {/* Auswechseln */}
                     {(() => {
-                      const isChironModal = (activeModalStep.machineName || activeModalStep.machine || selectedMachine || '').toUpperCase().includes('CHIRON');
+                      const machineUpper = (activeModalStep.machineName || activeModalStep.machine || selectedMachine || '').toUpperCase();
+                      const isChironModal = machineUpper.includes('CHIRON');
+                      const isC400Modal = machineUpper.includes('C400');
+                      const isFullListUnloadModal = isChironModal || isC400Modal;
+                      const machineBadgeLabel = isC400Modal ? 'C400' : 'Chiron';
                       const cleanListName = (() => {
                         const candidates = [
                           activeModalStep.MatchedListIdent,
@@ -9912,7 +9916,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                               -{unloadCount}
                             </span>
                           </div>
-                          {isChironModal && (
+                          {isFullListUnloadModal && (
                             <div style={{
                               background: 'rgba(239, 68, 68, 0.08)',
                               border: '1px solid rgba(239, 68, 68, 0.3)',
@@ -9924,7 +9928,7 @@ function PlanningTab({ mode = 'machining', isListMode = false, isConflictMode = 
                               gap: '0.15rem'
                             }}>
                               <div style={{ fontSize: '0.78rem', color: '#fff', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                <span>📦 Chiron WinTool-Liste:</span>
+                                <span>📦 {machineBadgeLabel} WinTool-Liste:</span>
                                 <span style={{ color: '#fca5a5', fontFamily: 'monospace' }}>{cleanListName}</span>
                                 <span>entladen (-{unloadCount} Werkzeuge)</span>
                               </div>

@@ -1,9 +1,9 @@
-# Quickstart Validation Guide: Chiron Tool List Unloading (`01-planung-maschinen`)
+# Quickstart Validation Guide: Chiron & C400 Tool List Unloading (`01-planung-maschinen`)
 
-## Scenario: Chiron Entire Tool List Unloading Validation
+## Scenario 1: Chiron & C400 Entire Tool List Unloading Validation
 
 ### Goal
-Verify that when unloading tools on Chiron (`mName === 'Chiron'`), the entire tool list is unloaded as a complete unit instead of individual tools.
+Verify that when unloading tools on Chiron (`mName === 'Chiron'`) or Hermle C400 (`mName === 'C400'`), the entire tool list of a completed order is unloaded as a complete unit (excluding static park tools and future needed tools).
 
 ### Prerequisites
 - Backend running on `http://localhost:5001` or `https://localhost:5000`
@@ -18,6 +18,9 @@ Verify that when unloading tools on Chiron (`mName === 'Chiron'`), the entire to
    ```bash
    node Features/01_Planung_Maschinen/test.js
    ```
+3. Open **Planung Maschinen** (Kanban board) and filter by "Hermle C400" or "Chiron".
+4. Open the step details modal for a scheduled job card and inspect the **Auswechseln (Raus)** section.
+5. Verify that the whole WinTool list identifier and unload tool count badge (`📦 C400 WinTool-Liste: ... entladen (-X Werkzeuge)`) are displayed.
 ## Scenario 2: Overdue & Imminent Delivery Date Prioritization in Optimization Validation
 
 ### Goal

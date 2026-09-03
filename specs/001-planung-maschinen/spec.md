@@ -76,6 +76,19 @@ As a production planner, I want setup optimization algorithms (Greedy, Local Sea
 1. **Given** a set of jobs where job A has an overdue `DeliveryDate` (or D4 date in the past) and job B has a far-future delivery date with matching tools, **When** setup optimization is triggered, **Then** job A is scheduled before job B.
 2. **Given** multiple jobs with varying delivery dates, **When** setup sequence optimization evaluates candidates, **Then** delivery urgency score (`overdueDays` / earliest `DeliveryDate`) is weighted into candidate selection alongside tool list similarity and fixture matching.
 
+### User Story 6 - Werkzeugentladung ganzer Listen für Chiron & C400 (Priority: P2)
+
+As a machine setup operator on Chiron and Hermle C400 machines, I want the step detail modal and timeline to propose unloading the entire tool list of a completed job as a full unit (excluding static park tools and future needed tools), so that tool setup and teardown workflows on C400 match the Chiron shopfloor procedure.
+
+**Why this priority**: Ensures consistent tool pre-setting and list-based teardown on both Chiron and C400 machining centers.
+
+**Independent Test**: Can be tested by verifying that for a completed order on C400 or Chiron, all tools from that order's tool list are proposed in `unloadTools` / `Auswechseln (Raus)`, excluding static park tools and tools required by subsequent steps.
+
+**Acceptance Scenarios**:
+1. **Given** a completed order step on Hermle C400 (`mName === 'C400'` / `MachineId === 2`), **When** viewing the step details modal (`Auswechseln (Raus)`), **Then** the entire tool list of the completed order is proposed for unloading, with the list identifier and count displayed in the UI badge (`📦 C400 WinTool-Liste: ... entladen (-X Werkzeuge)`).
+2. **Given** a tool belonging to a completed C400 order that is also in a `"park"` program (e.g. `C400 geparkt`), **When** evaluating unloads, **Then** that static park tool is NEVER included in the unload list.
+3. **Given** a tool belonging to a completed C400 order that is needed by a future scheduled step on C400, **When** evaluating unloads, **Then** that tool remains in the machine and is excluded from unloads.
+
 ---
 
 ### Edge Cases
@@ -98,7 +111,7 @@ As a production planner, I want setup optimization algorithms (Greedy, Local Sea
 - **FR-006**: System MUST persist manual drag-and-drop machine/date overrides to `backend/planning_overrides.json`.
 - **FR-007**: System MUST provide an inline d.velop DMS PDF viewer with proxy streaming, zoom, and rotation.
 - **FR-008**: System MUST display deterministic contract colors (`getContractColor`) per order.
-- **FR-009**: System MUST propose entire tool list unloading for Chiron machine operations (`mName === 'Chiron'`). When an order (e.g. `2537-0301-SP1`) is completed according to planning, the system MUST propose to unload its entire Tool List as a complete unit (all tools belonging to that completed list), EXCEPT tools that are also in any `"park"` list (which remain static in the machine) and tools that are still required by upcoming/subsequent steps in the schedule.
+- **FR-009**: System MUST propose entire tool list unloading for both Chiron and Hermle C400 machine operations (`mName === 'Chiron' || mName === 'C400'` or `MachineId === 21 || MachineId === 2`). When an order (e.g. `2537-0301-SP1`) is completed according to planning on Chiron or C400, the system MUST propose to unload its entire Tool List as a complete unit (all tools belonging to that completed list), EXCEPT tools that are also in any `"park"` list (which remain static in the machine) and tools that are still required by upcoming/subsequent steps in the schedule.
 - **FR-010**: System MUST classify all tools contained in ToolLists whose name contains `"park"` (case-insensitive, retrieved from `MachineToProgram` / `ProgramToTool` in the `ToolList` database) as **Static Park Tools**. Static Park Tools MUST NEVER be unloaded or evicted from machine magazines during simulation, sequence optimization, LRU victim eviction, or manual scenario configuration.
 - **FR-011**: System MUST prioritize jobs with overdue or imminent delivery dates (`DeliveryDate <= today` or near deadline) during setup sequence optimization (Greedy, Local Search, Simulated Annealing), ensuring overdue and urgent D4 orders are scheduled earlier in the sequence rather than being deferred behind far-future jobs purely for tool changeover savings.
 - **FR-012**: System MUST support Pool Machine Night Run Capacity Optimization (Nachtlaufzeit-Optimierung) for Pool Machines (`MachinePoolId` for RS2 Pool `9`/`12` and C40/C42 Pool `13`) in the Kanban Planung Maschinen view. Maximum night capacity ($\text{MaxNightCapacity}$) MUST be calculated as $\text{MaxPiecesPerNight} \times \text{AvgPieceTime}$, where $\text{AvgPieceTime} = \frac{\text{TotalStepProdTime}}{\text{PosQuantity}}$. Day window runtime MUST NOT exceed standard Day Window limits (`DayCapacity`). Night shift runtime MUST be maximized up to $\min(\text{MaxNightCapacity}, 24\text{h} - \text{DayShiftPlannedTime})$, ensuring total combined daily machine load (Day shift + Night run) NEVER exceeds 24 hours (1,440 minutes).
