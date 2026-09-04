@@ -3855,74 +3855,6 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
     return localTime.toISOString().substring(0, 10);
   };
 
-  const getWeekendReferenceAreas = () => {
-    if (!timelineData || timelineData.length === 0 || !dates || dates.length === 0) {
-      return [];
-    }
-    const minTimestamp = timelineData[0]?.timestamp;
-    const maxTimestamp = timelineData[timelineData.length - 1]?.timestamp;
-    if (typeof minTimestamp !== 'number' || typeof maxTimestamp !== 'number' || isNaN(minTimestamp) || isNaN(maxTimestamp)) {
-      return [];
-    }
-
-    const areas = [];
-    let startMs = null;
-    
-    dates.forEach((dateStr) => {
-      const d = new Date(dateStr + 'T00:00:00');
-      const day = d.getDay(); // 0 = Sun, 5 = Fri, 6 = Sat
-      const timeMs = d.getTime();
-      if (isNaN(timeMs)) return;
-      
-      if (day === 5) {
-        // Start block at Friday 12:00:00
-        startMs = timeMs + 12 * 60 * 60 * 1000;
-      } else if (day === 6) {
-        if (startMs === null) {
-          // If we didn't start on Friday, start here at Saturday 00:00
-          startMs = timeMs;
-        }
-      } else if (day === 0) {
-        const endMs = timeMs + 24 * 60 * 60 * 1000 - 1000;
-        const validStart = startMs !== null ? startMs : timeMs;
-        if (validStart >= minTimestamp && endMs <= maxTimestamp + 86400000 && validStart < endMs) {
-          areas.push({
-            x1: Math.max(minTimestamp, validStart),
-            x2: Math.min(maxTimestamp, endMs),
-            label: 'Wochenende'
-          });
-        }
-        startMs = null;
-      } else {
-        if (startMs !== null) {
-          const prevDayEnd = timeMs - 1000;
-          if (startMs >= minTimestamp && prevDayEnd <= maxTimestamp + 86400000 && startMs < prevDayEnd) {
-            areas.push({
-              x1: Math.max(minTimestamp, startMs),
-              x2: Math.min(maxTimestamp, prevDayEnd),
-              label: 'Wochenende'
-            });
-          }
-          startMs = null;
-        }
-      }
-    });
-    
-    if (startMs !== null) {
-      const lastDate = dates[dates.length - 1];
-      const lastDayEnd = new Date(lastDate + 'T23:59:59').getTime();
-      if (!isNaN(lastDayEnd) && startMs >= minTimestamp && startMs < lastDayEnd) {
-        areas.push({
-          x1: Math.max(minTimestamp, startMs),
-          x2: Math.min(maxTimestamp, lastDayEnd),
-          label: 'Wochenende'
-        });
-      }
-    }
-    
-    return areas;
-  };
-
   const fetchEvaluation = async () => {
     if (!startDate || startDate.length !== 10 || !endDate || endDate.length !== 10) {
       return;
@@ -4173,6 +4105,74 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
       "Ist-Zeit": parseFloat((dailyActual / 60).toFixed(1))
     };
   });
+
+  const getWeekendReferenceAreas = () => {
+    if (!dailyChartData || dailyChartData.length === 0 || !dates || dates.length === 0) {
+      return [];
+    }
+    const minTimestamp = dailyChartData[0]?.timestamp;
+    const maxTimestamp = dailyChartData[dailyChartData.length - 1]?.timestamp;
+    if (typeof minTimestamp !== 'number' || typeof maxTimestamp !== 'number' || isNaN(minTimestamp) || isNaN(maxTimestamp)) {
+      return [];
+    }
+
+    const areas = [];
+    let startMs = null;
+    
+    dates.forEach((dateStr) => {
+      const d = new Date(dateStr + 'T00:00:00');
+      const day = d.getDay(); // 0 = Sun, 5 = Fri, 6 = Sat
+      const timeMs = d.getTime();
+      if (isNaN(timeMs)) return;
+      
+      if (day === 5) {
+        // Start block at Friday 12:00:00
+        startMs = timeMs + 12 * 60 * 60 * 1000;
+      } else if (day === 6) {
+        if (startMs === null) {
+          // If we didn't start on Friday, start here at Saturday 00:00
+          startMs = timeMs;
+        }
+      } else if (day === 0) {
+        const endMs = timeMs + 24 * 60 * 60 * 1000 - 1000;
+        const validStart = startMs !== null ? startMs : timeMs;
+        if (validStart >= minTimestamp && endMs <= maxTimestamp + 86400000 && validStart < endMs) {
+          areas.push({
+            x1: Math.max(minTimestamp, validStart),
+            x2: Math.min(maxTimestamp, endMs),
+            label: 'Wochenende'
+          });
+        }
+        startMs = null;
+      } else {
+        if (startMs !== null) {
+          const prevDayEnd = timeMs - 1000;
+          if (startMs >= minTimestamp && prevDayEnd <= maxTimestamp + 86400000 && startMs < prevDayEnd) {
+            areas.push({
+              x1: Math.max(minTimestamp, startMs),
+              x2: Math.min(maxTimestamp, prevDayEnd),
+              label: 'Wochenende'
+            });
+          }
+          startMs = null;
+        }
+      }
+    });
+    
+    if (startMs !== null) {
+      const lastDate = dates[dates.length - 1];
+      const lastDayEnd = new Date(lastDate + 'T23:59:59').getTime();
+      if (!isNaN(lastDayEnd) && startMs >= minTimestamp && startMs < lastDayEnd) {
+        areas.push({
+          x1: Math.max(minTimestamp, startMs),
+          x2: Math.min(maxTimestamp, lastDayEnd),
+          label: 'Wochenende'
+        });
+      }
+    }
+    
+    return areas;
+  };
 
   const getHourlyChartData = () => {
     const hourlyMins = [];
@@ -4519,7 +4519,7 @@ function TimeEvaluationTab({ theme, selectedMachine, setSelectedMachine }) {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={theme === 'light' ? "rgba(15,23,42,0.06)" : "rgba(255,255,255,0.04)"} />
-                    {timelineData.length > 0 && getWeekendReferenceAreas().map((area, idx) => (
+                    {dailyChartData.length > 0 && getWeekendReferenceAreas().map((area, idx) => (
                       <ReferenceArea 
                         key={`weekend-${idx}`}
                         x1={area.x1} 
